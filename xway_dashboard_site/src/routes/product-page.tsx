@@ -3,7 +3,7 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, Check, ChevronDown, ExternalL
 import Marquee from "react-fast-marquee";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigate, useNavigation, useRevalidator } from "react-router";
+import { redirect, useLoaderData, useNavigate, useNavigation, useRevalidator } from "react-router";
 import {
   buildCampaignStatusHourSlots,
   buildCampaignIssueSummaries,
@@ -53,22 +53,24 @@ import type {
   CampaignScheduleConfig,
   CampaignSpendLimitItem,
   CampaignSummary,
+  ClusterDailyRow,
   ClusterItem,
   DailyStat,
+  ProductStocksRule,
   ProductSummary,
   ProductsResponse,
   ScheduleAggregate,
 } from "../lib/types";
 
-type ProductTab = "overview" | "daily" | "campaign-status" | "clusters" | "hours" | "campaign-heatmap" | "bids";
+type ProductTab = "overview" | "daily" | "campaign-status" | "clusters" | "campaign-heatmap" | "bids";
 
 interface ProductLoaderData {
   payload: ProductsResponse;
   comparePayload: ProductsResponse | null;
   trackedArticles: string[];
-  selectedArticle: string;
   start?: string | null;
   end?: string | null;
+  payloadIsCached?: boolean;
 }
 
 const PANEL_CLASS = "rounded-[30px] border border-[var(--color-line)] bg-white shadow-[0_24px_60px_rgba(44,35,66,0.08)]";
@@ -79,6 +81,7 @@ const CHART_PRELOAD_DAYS = 30;
 const CLUSTER_POSITION_TIMELINE_DAYS = 7;
 const COMPARE_ENABLED_STORAGE_KEY = "xway-product-compare-enabled";
 const CAMPAIGN_STATUS_SECTION_VIEW_STORAGE_KEY = "xway-campaign-status-section-view";
+const PRODUCT_PAGE_CACHE_STORAGE_KEY = "xway-product-page-cache-v1";
 const HOURS_SECTION_WINDOWS = [
   { value: "today", label: "сегодня" },
   { value: "yesterday", label: "вчера" },
@@ -90,15 +93,38 @@ const HOURS_SECTION_WINDOWS = [
 
 type HoursSectionWindowPreset = (typeof HOURS_SECTION_WINDOWS)[number]["value"];
 
+declare global {
+  interface Window {
+    __xwayProductAppReady?: boolean;
+  }
+}
+
+function readCachedProductLoaderData() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(PRODUCT_PAGE_CACHE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as ProductLoaderData | null;
+    if (!parsed?.payload?.products?.length) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function buildProductSearch(options: {
-  articles: string[];
-  selected: string;
+  article: string;
   start?: string | null;
   end?: string | null;
 }) {
   const params = new URLSearchParams();
-  params.set("articles", options.articles.join(","));
-  params.set("selected", options.selected);
+  params.set("articles", options.article);
   if (options.start) {
     params.set("start", options.start);
   }
@@ -192,12 +218,44 @@ function resolveHoursSectionPreset(spanDays: number | null | undefined): HoursSe
   return "30";
 }
 
-export async function productLoader({ request }: LoaderFunctionArgs): Promise<ProductLoaderData> {
+export async function productLoader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
-  const trackedArticles = parseArticlesParam(url.searchParams.get("articles"));
+  const legacySelectedArticle = url.searchParams.get("selected");
+  const requestedArticles = parseArticlesParam(url.searchParams.get("articles") || legacySelectedArticle);
+  const trackedArticles = requestedArticles.length ? [requestedArticles[0]!] : [];
   const requestedStart = url.searchParams.get("start");
   const requestedEnd = url.searchParams.get("end");
+
+  if (url.searchParams.has("selected")) {
+    const cleanParams = new URLSearchParams(url.searchParams);
+    cleanParams.delete("selected");
+    if (!cleanParams.get("articles") && trackedArticles[0]) {
+      cleanParams.set("articles", trackedArticles[0]);
+    }
+    const nextSearch = cleanParams.toString();
+    return redirect(`${url.pathname}${nextSearch ? `?${nextSearch}` : ""}`);
+  }
+
   const range = resolveLoaderRange(requestedStart, requestedEnd);
+  const shouldUseCachedPayload =
+    typeof window !== "undefined" &&
+    !window.__xwayProductAppReady &&
+    window.location.pathname.startsWith("/product");
+
+  if (shouldUseCachedPayload) {
+    const cached = readCachedProductLoaderData();
+    if (cached) {
+      return {
+        payload: cached.payload,
+        comparePayload: null,
+        trackedArticles,
+        start: range.currentStart,
+        end: range.currentEnd,
+        payloadIsCached: true,
+      };
+    }
+  }
+
   const payload = await fetchProducts({
     request,
     articles: trackedArticles,
@@ -206,21 +264,14 @@ export async function productLoader({ request }: LoaderFunctionArgs): Promise<Pr
     campaignMode: "full",
   });
 
-  const selectedQuery = url.searchParams.get("selected");
-  const selectedArticle = payload.products.find((product) => product.article === selectedQuery)?.article ?? payload.products[0]?.article ?? trackedArticles[0] ?? "";
-
   return {
     payload,
     comparePayload: null,
     trackedArticles,
-    selectedArticle,
     start: range.currentStart,
     end: range.currentEnd,
+    payloadIsCached: false,
   };
-}
-
-function updateArticles(currentArticles: string[], nextArticle: string) {
-  return Array.from(new Set([...currentArticles, nextArticle]));
 }
 
 function dailyRowsNewestFirst(rows: DailyStat[]) {
@@ -335,6 +386,48 @@ function computeDrrAtbs(
   return (cost / (averageOrderValue * baskets)) * 100;
 }
 
+function accumulateClusterOrdersDrrTotals(daily: Record<string, ClusterDailyRow> | null | undefined) {
+  let spend = 0;
+  let orders = 0;
+  let hasOrders = false;
+
+  Object.values(daily || {}).forEach((row) => {
+    const rowSpend = toNumber(row.expense);
+    const rowOrders = toNumber(row.orders);
+    if (rowSpend !== null) {
+      spend += rowSpend;
+    }
+    if (rowOrders !== null && rowOrders > 0) {
+      orders += rowOrders;
+      hasOrders = true;
+    }
+  });
+
+  return hasOrders ? { spend, orders } : null;
+}
+
+function computeClusterOrdersDrrValue(
+  spend: number | string | null | undefined,
+  orders: number | string | null | undefined,
+  averageCheck: number | string | null | undefined,
+) {
+  const cost = toNumber(spend);
+  const clusterOrders = toNumber(orders);
+  const productAverageCheck = toNumber(averageCheck);
+  if (cost === null || clusterOrders === null || clusterOrders <= 0 || productAverageCheck === null || productAverageCheck <= 0) {
+    return null;
+  }
+  return computeDrr(cost, productAverageCheck * clusterOrders);
+}
+
+function computeClusterOrdersDrr(
+  daily: Record<string, ClusterDailyRow> | null | undefined,
+  averageCheck: number | string | null | undefined,
+) {
+  const totals = accumulateClusterOrdersDrrTotals(daily);
+  return totals ? computeClusterOrdersDrrValue(totals.spend, totals.orders, averageCheck) : null;
+}
+
 function formatBoardCount(value: number | string | null | undefined, compact = false) {
   const numeric = toNumber(value);
   if (numeric === null) {
@@ -412,6 +505,103 @@ function diffValue(current: number | string | null | undefined, previous: number
     return null;
   }
   return currentValue - (previousValue ?? 0);
+}
+
+const STOCKS_RULE_MODE_KEYS = ["type", "condition", "metric", "kind", "rule_type", "mode", "field"] as const;
+const STOCKS_RULE_DAYS_KEYS = ["days", "days_gap", "days_left", "days_threshold", "turnover_days", "coverage_days", "days_to_stockout"] as const;
+const STOCKS_RULE_STOCK_KEYS = ["stock", "stocks_limit", "stock_threshold", "min_stock", "remain_stock", "quantity", "qty"] as const;
+const STOCKS_RULE_GENERIC_VALUE_KEYS = ["threshold", "value"] as const;
+
+function pickStocksRuleNumeric(rule: ProductStocksRule | null | undefined, keys: readonly string[]) {
+  if (!rule) {
+    return null;
+  }
+  for (const key of keys) {
+    const numeric = toNumber(rule[key] as string | number | null | undefined);
+    if (numeric !== null) {
+      return numeric;
+    }
+  }
+  return null;
+}
+
+function pickStocksRuleText(rule: ProductStocksRule | null | undefined, keys: readonly string[]) {
+  if (!rule) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = rule[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function formatStocksRuleThreshold(value: number | null) {
+  if (value === null) {
+    return null;
+  }
+  return formatNumber(value, Number.isInteger(value) ? 0 : 1);
+}
+
+function inferStocksRuleMode(rule: ProductStocksRule | null | undefined) {
+  const modeText = pickStocksRuleText(rule, STOCKS_RULE_MODE_KEYS);
+  if (!modeText) {
+    return null;
+  }
+  if (/(day|days|turnover|coverage|stockout|predict|дн|дни|дней|оборач|законч)/i.test(modeText)) {
+    return "days" as const;
+  }
+  if (/(stock|limit|qty|quantity|remain|остат|шт)/i.test(modeText)) {
+    return "stock" as const;
+  }
+  return null;
+}
+
+function resolveStocksRuleHint(rule: ProductStocksRule | null | undefined) {
+  const daysValue = pickStocksRuleNumeric(rule, STOCKS_RULE_DAYS_KEYS);
+  if (daysValue !== null) {
+    return `Остаток закончится через ${formatStocksRuleThreshold(daysValue)} дн`;
+  }
+
+  const stockValue = pickStocksRuleNumeric(rule, STOCKS_RULE_STOCK_KEYS);
+  if (stockValue !== null) {
+    return `Остаток ≤ ${formatStocksRuleThreshold(stockValue)} шт`;
+  }
+
+  const genericThreshold = pickStocksRuleNumeric(rule, STOCKS_RULE_GENERIC_VALUE_KEYS);
+  const inferredMode = inferStocksRuleMode(rule);
+  if (genericThreshold !== null && inferredMode === "days") {
+    return `Остаток закончится через ${formatStocksRuleThreshold(genericThreshold)} дн`;
+  }
+  if (genericThreshold !== null && inferredMode === "stock") {
+    return `Остаток ≤ ${formatStocksRuleThreshold(genericThreshold)} шт`;
+  }
+  return null;
+}
+
+function resolveStocksRuleSummary(product: ProductSummary) {
+  const rule = product.operations?.stocks_rule ?? null;
+  const isActive = Boolean(rule?.active);
+  const hasError = Boolean(rule?.has_error);
+  const hint = resolveStocksRuleHint(rule);
+
+  if (hasError) {
+    return {
+      value: "Ошибка",
+      valueClassName: "text-rose-500",
+      hint: hint ? `${hint} · ошибка правила` : "Ошибка правила",
+      hintClassName: "text-rose-500",
+    };
+  }
+
+  return {
+    value: isActive ? "Включена" : "Выключена",
+    valueClassName: isActive ? "text-emerald-600" : "text-[var(--color-muted)]",
+    hint: hint ?? (isActive ? "Порог не указан" : null),
+    hintClassName: undefined,
+  };
 }
 
 interface MetricSeriesPoint {
@@ -546,7 +736,7 @@ function ClusterPositionDayValueCell({
 }) {
   const hasValue = point?.value !== null && point?.value !== undefined;
   if (!hasValue) {
-    return <div className="h-[34px] w-[48px] min-w-[48px]" aria-hidden="true" />;
+    return <div className="h-[28px] w-[48px] min-w-[48px]" aria-hidden="true" />;
   }
   const currentValue = toNumber(point?.value);
   const compareValue = toNumber(comparePoint?.value);
@@ -566,7 +756,7 @@ function ClusterPositionDayValueCell({
     <div className="flex justify-center">
       <div
         className={cn(
-          "flex h-[34px] w-[48px] min-w-[48px] flex-col items-center justify-center rounded-[9px] border px-0 py-0 text-center transition",
+          "flex h-[28px] w-[48px] min-w-[48px] flex-col items-center justify-center rounded-[9px] border px-0 py-0 text-center transition",
           toneClassName,
         )}
         title={title}
@@ -783,6 +973,46 @@ function buildCampaignAccentStyle(campaignId?: number | null): CSSProperties | u
     return undefined;
   }
   const palette = buildCampaignAccentPalette(campaignId);
+  return {
+    ["--campaign-accent" as string]: palette.solid,
+    ["--campaign-accent-soft" as string]: palette.soft,
+    ["--campaign-accent-border" as string]: palette.border,
+    ["--campaign-accent-text" as string]: palette.text,
+    ["--campaign-accent-track" as string]: palette.track,
+  };
+}
+
+function buildCampaignStatusAccentStyle(campaign?: CampaignSummary | null): CSSProperties | undefined {
+  if (!campaign) {
+    return undefined;
+  }
+
+  const statusKey = resolveCampaignDisplayStatus(campaign).key;
+  const palette =
+    statusKey === "freeze"
+      ? {
+          solid: "rgba(47, 111, 255, 0.96)",
+          soft: "rgba(239, 244, 255, 0.96)",
+          border: "rgba(47, 111, 255, 0.26)",
+          text: "#3559c7",
+          track: "rgba(194, 212, 255, 0.58)",
+        }
+      : statusKey === "paused"
+        ? {
+            solid: "rgba(139, 100, 246, 0.96)",
+            soft: "rgba(245, 239, 255, 0.96)",
+            border: "rgba(139, 100, 246, 0.26)",
+            text: "#6d52b4",
+            track: "rgba(219, 206, 255, 0.58)",
+          }
+        : {
+            solid: "rgba(52, 168, 102, 0.96)",
+            soft: "rgba(236, 250, 242, 0.96)",
+            border: "rgba(52, 168, 102, 0.26)",
+            text: "#2f7f53",
+            track: "rgba(190, 235, 206, 0.58)",
+          };
+
   return {
     ["--campaign-accent" as string]: palette.solid,
     ["--campaign-accent-soft" as string]: palette.soft,
@@ -1017,7 +1247,19 @@ interface ProductOverviewErrorSummary {
   value: string;
   meta: string;
   note: string | null;
+  recommendation: string;
   days: CampaignIssueBreakdownDay[];
+}
+
+interface ProductOverviewYesterdayIssue {
+  id: string;
+  kind: ProductOverviewErrorSummary["kind"];
+  title: string;
+  value: string;
+  meta: string;
+  note: string | null;
+  recommendation: string;
+  day: CampaignIssueBreakdownDay;
 }
 
 type ProductOverviewDowntimeKind = "schedule" | "paused";
@@ -1042,6 +1284,41 @@ function resolveProductOverviewDowntimeTitle(kind: ProductOverviewDowntimeKind) 
     return "Пауза по расписанию";
   }
   return "Приостановлена";
+}
+
+function shiftIsoDateString(value: string | null | undefined, deltaDays: number) {
+  if (!value) {
+    return null;
+  }
+  const parts = value.split("-");
+  if (parts.length !== 3) {
+    return null;
+  }
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  return date.toISOString().slice(0, 10);
+}
+
+function resolveOverviewIssueRecommendation(kind: ProductOverviewErrorSummary["kind"]) {
+  if (kind === "budget") {
+    return "Проверьте бюджет РК: увеличьте его или перераспределите трафик на более эффективные часы и кампании.";
+  }
+  if (kind === "limit") {
+    return "Проверьте тепловую карту и уменьшите ставку РК или ставку кластера, если лимита не хватает до конца дня.";
+  }
+  if (kind === "schedule") {
+    return "Проверьте расписание показов и расширьте активные часы, если спрос смещён в недоступные интервалы.";
+  }
+  if (kind === "paused") {
+    return "Проверьте ручные остановки и правило автостопа по остатку или оборачиваемости.";
+  }
+  return "Согласуйте общий лимит дня и лимиты отдельных РК, чтобы они не конфликтовали между собой.";
 }
 
 const OVERVIEW_ISSUE_STATUS_VARIANT_PRIORITY = [
@@ -1317,6 +1594,7 @@ function buildProductOverviewErrorSummaries(
           item.estimatedGapTotal !== null
             ? `≈ не хватило ${formatMoney(Math.round(item.estimatedGapTotal), true)}${campaignPreview ? ` · ${campaignPreview}` : ""}`
             : campaignPreview || null,
+        recommendation: resolveOverviewIssueRecommendation(item.kind),
         days: [...item.days.values()]
           .sort((left, right) => right.day.localeCompare(left.day))
           .map(buildOverviewIssueBreakdownDay),
@@ -1338,6 +1616,7 @@ function buildProductOverviewErrorSummaries(
         value: `${formatNumber(item.hours, 1)} ч`,
         meta: `${formatIssueCampaignCount(item.campaignNames.size)} · ${formatIssueStopCountLabel(item.incidents)}`,
         note: campaignPreview || null,
+        recommendation: resolveOverviewIssueRecommendation(item.kind),
         days: [...item.days.values()]
           .sort((left, right) => right.day.localeCompare(left.day))
           .map(buildOverviewIssueBreakdownDay),
@@ -1356,6 +1635,7 @@ function buildProductOverviewErrorSummaries(
       value: formatNumber(dailySpendSummary.conflicts.length),
       meta: "общий лимит дня конфликтует с лимитами РК",
       note: conflictPreview || null,
+      recommendation: resolveOverviewIssueRecommendation("conflict"),
       days: [],
     });
   }
@@ -2780,12 +3060,12 @@ function ClusterPositionSparkline({
 
   return (
     <div className="flex min-w-[80px] items-center">
-      <div className="h-[24px] min-w-[72px] flex-1">
+      <div className="h-[18px] min-w-[64px] flex-1">
         <Sparkline
           points={points}
           stroke="#8b64f6"
           fill="#8b64f6"
-          height={24}
+          height={18}
           responsive
           invertY
           className="h-full w-full"
@@ -2881,11 +3161,11 @@ function ClusterStateIcon({ cluster }: { cluster: ClusterItem }) {
 
   return (
     <span
-      className={cn("inline-flex size-7 items-center justify-center rounded-full border shadow-[0_6px_16px_rgba(44,35,66,0.05)]", state.className)}
+      className={cn("inline-flex size-6 items-center justify-center rounded-full border shadow-[0_6px_16px_rgba(44,35,66,0.05)]", state.className)}
       title={state.label}
       aria-label={state.label}
     >
-      <Icon className="size-3.5" />
+      <Icon className="size-3" />
     </span>
   );
 }
@@ -2903,31 +3183,21 @@ function resolveClusterStrategyTone(isActive: boolean) {
 function ClusterStrategyValueBox({
   current,
   target,
-  currentLabel,
-  targetLabel,
   title,
   muted = false,
 }: {
   current: string;
   target: string;
-  currentLabel: string;
-  targetLabel: string;
   title: string;
   muted?: boolean;
 }) {
   return (
     <div className={cn("cluster-strategy-value-stack", muted && "is-muted")} title={title}>
-      <div className="cluster-strategy-value-box">
-        <span className="cluster-strategy-value-box-label">{currentLabel}</span>
-        <span className="cluster-strategy-value-box-value">{current}</span>
-      </div>
+      <span className="cluster-strategy-value-box-value">{current}</span>
       <span className="cluster-strategy-value-arrow" aria-hidden="true">
         →
       </span>
-      <div className="cluster-strategy-value-box">
-        <span className="cluster-strategy-value-box-label">{targetLabel}</span>
-        <span className="cluster-strategy-value-box-value">{target}</span>
-      </div>
+      <span className="cluster-strategy-value-box-value">{target}</span>
     </div>
   );
 }
@@ -2939,10 +3209,10 @@ function ClusterStrategyStatusCell({ cluster }: { cluster: ClusterItem }) {
   return (
     <div className="flex justify-center" title={isActive ? "Стратегия включена" : "Стратегия выключена"}>
       <span
-        className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-full border", tone.icon)}
+        className={cn("inline-flex size-4.5 shrink-0 items-center justify-center rounded-full border", tone.icon)}
         aria-label={isActive ? "Стратегия включена" : "Стратегия выключена"}
       >
-        {isActive ? <Check className="size-2.5" /> : <Pause className="size-2.5" />}
+        {isActive ? <Check className="size-2.25" /> : <Pause className="size-2.25" />}
       </span>
     </div>
   );
@@ -2959,8 +3229,6 @@ function ClusterStrategyBidCell({ cluster }: { cluster: ClusterItem }) {
     <ClusterStrategyValueBox
       current={currentText}
       target={targetText}
-      currentLabel="Текущая"
-      targetLabel="Таргет"
       muted={!isActive}
       title={`Текущая ставка ${currentBid !== null ? formatMoney(currentBid, true) : "—"} · Ставка стратегии ${maxCpm !== null ? formatMoney(maxCpm, true) : "—"}`}
     />
@@ -2978,8 +3246,6 @@ function ClusterStrategyPositionCell({ cluster }: { cluster: ClusterItem }) {
     <ClusterStrategyValueBox
       current={currentText}
       target={targetText}
-      currentLabel="Текущая"
-      targetLabel="Таргет"
       muted={!isActive}
       title={`Текущая позиция ${currentPosition !== null ? formatNumber(currentPosition) : "—"} · Позиция таргет ${targetPlace !== null ? formatNumber(targetPlace) : "—"}`}
     />
@@ -3593,12 +3859,18 @@ function ProductSignalCard({
   label,
   value,
   delta,
+  valueClassName,
+  hint,
+  hintClassName,
   deltaClassName,
   className,
 }: {
   label: string;
   value: ReactNode;
   delta?: string | null;
+  valueClassName?: string;
+  hint?: ReactNode;
+  hintClassName?: string;
   deltaClassName?: string;
   className?: string;
 }) {
@@ -3610,9 +3882,10 @@ function ProductSignalCard({
       <div className="signal-copy gap-1.5">
         <span className="block text-xs leading-tight text-[var(--color-muted)]">{label}</span>
         <div className="flex flex-wrap items-baseline gap-1.5">
-          <b className="font-display text-[1.2rem] font-semibold leading-none text-[var(--color-ink)]">{value}</b>
+          <b className={cn("font-display text-[1.2rem] font-semibold leading-none text-[var(--color-ink)]", valueClassName)}>{value}</b>
           {delta ? <span className={cn("text-[0.88rem] font-semibold leading-none", deltaClassName)}>{`(${delta})`}</span> : null}
         </div>
+        {hint ? <span className={cn("block text-[11px] leading-tight text-[var(--color-muted)]", hintClassName)}>{hint}</span> : null}
       </div>
     </div>
   );
@@ -3620,14 +3893,40 @@ function ProductSignalCard({
 
 function ProductOverviewIssuesCard({
   items,
+  referenceEndDay,
 }: {
   items: ProductOverviewErrorSummary[];
+  referenceEndDay?: string | null;
 }) {
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
   const itemsResetKey = useMemo(
     () => items.map((item) => `${item.id}:${item.days.map((day) => `${day.day}:${day.incidents}`).join("|")}`).join("||"),
     [items],
   );
+  const yesterdayIssues = useMemo<ProductOverviewYesterdayIssue[]>(() => {
+    const yesterday = shiftIsoDateString(referenceEndDay, -1);
+    if (!yesterday) {
+      return [];
+    }
+    return items
+      .map((item) => {
+        const day = item.days.find((entry) => entry.day === yesterday);
+        if (!day) {
+          return null;
+        }
+        return {
+          id: `${item.id}-yesterday`,
+          kind: item.kind,
+          title: item.title,
+          value: `${formatNumber(day.hours, 1)} ч`,
+          meta: formatIssueStopCountLabel(day.incidents),
+          note: day.estimatedGap !== null ? `≈ не хватило ${formatMoney(Math.round(day.estimatedGap), true)}` : day.note ?? null,
+          recommendation: item.recommendation,
+          day,
+        };
+      })
+      .filter((item): item is ProductOverviewYesterdayIssue => Boolean(item));
+  }, [items, referenceEndDay]);
 
   useEffect(() => {
     setExpandedItems({});
@@ -3645,6 +3944,7 @@ function ProductOverviewIssuesCard({
               </div>
               <div className="product-overview-issue-meta">{item.meta}</div>
               {item.note ? <div className="product-overview-issue-note">{item.note}</div> : null}
+              <div className="product-overview-issue-recommendation">{item.recommendation}</div>
               {item.days.length ? (
                 <button
                   type="button"
@@ -3667,6 +3967,30 @@ function ProductOverviewIssuesCard({
       ) : (
         <div className="product-overview-issue-empty">В выбранном окне нет простоев, бюджетных ошибок, лимитных остановок и конфликтов лимитов.</div>
       )}
+      <div className="product-overview-yesterday">
+        <div className="product-overview-yesterday-head">
+          <span>Ошибки за вчера</span>
+          <small>{shiftIsoDateString(referenceEndDay, -1) ?? "дата не определена"}</small>
+        </div>
+        {yesterdayIssues.length ? (
+          <div className="product-overview-issues-grid">
+            {yesterdayIssues.map((item) => (
+              <div key={item.id} className={cn("product-overview-issue-card", `is-${item.kind}`)}>
+                <div className="product-overview-issue-top">
+                  <span className="product-overview-issue-label">{item.title}</span>
+                  <strong className="product-overview-issue-value">{item.value}</strong>
+                </div>
+                <div className="product-overview-issue-meta">{item.meta}</div>
+                {item.note ? <div className="product-overview-issue-note">{item.note}</div> : null}
+                <div className="product-overview-issue-recommendation">{item.recommendation}</div>
+                {item.day.statusSlots?.length ? <CampaignIssueDayBreakdownList days={[item.day]} className="product-overview-yesterday-breakdown" /> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="product-overview-issue-empty">За вчера ошибок не найдено.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -4290,8 +4614,6 @@ function CampaignOverviewCard({
   const campaignSpendToday = toNumber(campaign.spend?.DAY) ?? budgetSpentToday;
   const limitSpent = toNumber(spendLimit?.spent);
   const limitTotal = toNumber(spendLimit?.limit);
-  const budgetPercent = budgetSpentToday !== null && budgetLimit !== null && budgetLimit > 0 ? (budgetSpentToday / budgetLimit) * 100 : null;
-  const limitPercent = limitSpent !== null && limitTotal !== null && limitTotal > 0 ? (limitSpent / limitTotal) * 100 : null;
   const displayStatus = resolveCampaignDisplayStatus(campaign);
   const isBudgetRuleConfigured = Boolean(
     budgetRule &&
@@ -4303,6 +4625,12 @@ function CampaignOverviewCard({
         budgetRule.error),
   );
   const isBudgetRuleEnabled = Boolean(budgetRule?.active);
+  const isSpendLimitEnabled = Boolean(spendLimit?.active);
+  const limitCardCurrent = isSpendLimitEnabled ? limitSpent ?? campaignSpendToday : campaignSpendToday;
+  const limitCardTotal = isSpendLimitEnabled ? limitTotal : isBudgetRuleEnabled ? budgetLimit : limitTotal;
+  const limitCardPercent =
+    limitCardCurrent !== null && limitCardTotal !== null && limitCardTotal > 0 ? (limitCardCurrent / limitCardTotal) * 100 : null;
+  const budgetPercent = budgetSpentToday !== null && budgetLimit !== null && budgetLimit > 0 ? (budgetSpentToday / budgetLimit) * 100 : null;
   const budgetTooltipDetails = [
     budgetValue !== null ? `Текущий бюджет: ${formatMoney(budgetValue, true)}` : null,
     budgetDeposit !== null ? `Пополнение: ${formatMoney(budgetDeposit, true)}` : null,
@@ -4313,14 +4641,15 @@ function CampaignOverviewCard({
       ? "правило активно"
       : "правило выключено"
     : "не задано";
-  const isSpendLimitEnabled = Boolean(spendLimit?.active);
   const spendLimitStatus = spendLimit
     ? isSpendLimitEnabled
       ? `включён · ${formatSpendLimitPeriodLabel(spendLimit.period)}`
       : `выключен · ${formatSpendLimitPeriodLabel(spendLimit.period)}`
-    : "не задан";
+    : isBudgetRuleEnabled
+      ? "по бюджету"
+      : "не задан";
   const limitForecastHours =
-    isSpendLimitEnabled && displayStatus.key !== "freeze" ? buildCampaignRemainingActivityForecastHours(campaign, limitSpent ?? 0, limitTotal) : null;
+    displayStatus.key !== "freeze" ? buildCampaignRemainingActivityForecastHours(campaign, limitCardCurrent ?? 0, limitCardTotal) : null;
   const limitForecastLabel = formatCampaignRemainingActivityForecast(limitForecastHours);
   const statusClass = resolveCampaignStatusOutline(displayStatus.key);
   const bidKind = resolveBidKind(campaign);
@@ -4562,11 +4891,11 @@ function CampaignOverviewCard({
           />
           <CampaignBudgetProgressCard
             label="Лимит трат"
-            current={isSpendLimitEnabled ? limitSpent : campaignSpendToday}
-            total={limitTotal}
-            tone={resolveUsageTone(limitPercent)}
+            current={limitCardCurrent}
+            total={limitCardTotal}
+            tone={resolveUsageTone(limitCardPercent)}
             statusText={spendLimitStatus}
-            disabled={!isSpendLimitEnabled}
+            disabled={!isSpendLimitEnabled && !isBudgetRuleEnabled}
             details={
               limitForecastLabel ? (
                 <div className="campaign-budget-progress-meta-row">
@@ -4714,7 +5043,7 @@ function renderOverview(
         note={overviewErrorSummaries.length ? "простои, остановки и конфликтующие ограничения" : "в текущем окне ошибок не найдено"}
         actions={<ChartWindowSwitch activeWindow={overviewErrorsWindow} onChange={onOverviewErrorsWindowChange} />}
       >
-        <ProductOverviewIssuesCard items={overviewErrorSummaries} />
+        <ProductOverviewIssuesCard items={overviewErrorSummaries} referenceEndDay={product.period.current_end} />
       </LegacySection>
 
       <LegacySection
@@ -4789,22 +5118,135 @@ function renderOverview(
 }
 
 type DailyTableView = "daily" | "analytics";
+type AnalyticsSectionView = "daily" | "hours";
 
 function ProductDailyPanel({ product }: { product: ProductSummary }) {
+  const [sectionView, setSectionView] = useState<AnalyticsSectionView>("daily");
   const [tableView, setTableView] = useState<DailyTableView>("daily");
   const days = dailyRowsNewestFirst(product.daily_stats);
+  const initialPreset = resolveHoursSectionPreset(product.period.span_days);
+  const [windowPreset, setWindowPreset] = useState<HoursSectionWindowPreset>(initialPreset);
+  const [hoursProduct, setHoursProduct] = useState<ProductSummary>(product);
+  const [isHoursLoading, setIsHoursLoading] = useState(false);
+  const hoursContextKey = `${product.article}:${product.period.current_start || ""}:${product.period.current_end || ""}`;
+  const requestedRange = useMemo(
+    () => resolveHoursSectionRange(product.period.current_end, windowPreset),
+    [product.period.current_end, windowPreset],
+  );
+  const baseRangeKey = `${product.article}:${product.period.current_start || ""}:${product.period.current_end || ""}`;
+  const requestedRangeKey = `${product.article}:${requestedRange.start}:${requestedRange.end}`;
+  const hoursCacheRef = useRef<Map<string, ProductSummary>>(new Map());
+  const hoursFetchAbortRef = useRef<AbortController | null>(null);
+  const hoursFetchKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    setSectionView("daily");
     setTableView("daily");
   }, [product.article, product.period.current_start, product.period.current_end]);
 
-  if (!days.length) {
-    return (
-      <LegacySection title="Аналитика по дням" note={formatDateRange(product.period.current_start, product.period.current_end)}>
-        <EmptyState title="Аналитика не найдена" text="За выбранный период API не вернуло дневные аналитические строки." />
-      </LegacySection>
-    );
-  }
+  useEffect(() => {
+    hoursCacheRef.current.set(baseRangeKey, product);
+  }, [baseRangeKey, product]);
+
+  useEffect(() => {
+    hoursFetchAbortRef.current?.abort();
+    hoursFetchAbortRef.current = null;
+    hoursFetchKeyRef.current = null;
+    setWindowPreset(resolveHoursSectionPreset(product.period.span_days));
+    setHoursProduct(product);
+    setIsHoursLoading(false);
+  }, [hoursContextKey, product]);
+
+  useEffect(
+    () => () => {
+      hoursFetchAbortRef.current?.abort();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (requestedRange.start === product.period.current_start && requestedRange.end === product.period.current_end) {
+      hoursFetchAbortRef.current?.abort();
+      hoursFetchAbortRef.current = null;
+      hoursFetchKeyRef.current = null;
+      setHoursProduct(product);
+      setIsHoursLoading(false);
+      return;
+    }
+
+    const cachedProduct = hoursCacheRef.current.get(requestedRangeKey);
+    if (cachedProduct) {
+      hoursFetchAbortRef.current?.abort();
+      hoursFetchAbortRef.current = null;
+      hoursFetchKeyRef.current = null;
+      setHoursProduct(cachedProduct);
+      setIsHoursLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    hoursFetchAbortRef.current?.abort();
+    hoursFetchAbortRef.current = controller;
+    hoursFetchKeyRef.current = requestedRangeKey;
+    setIsHoursLoading(true);
+
+    fetchProducts({
+      articles: [product.article],
+      start: requestedRange.start,
+      end: requestedRange.end,
+      campaignMode: "full",
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const nextProduct = response.products.find((item) => item.article === product.article) ?? null;
+        if (!nextProduct) {
+          return;
+        }
+        hoursCacheRef.current.set(requestedRangeKey, nextProduct);
+        setHoursProduct(nextProduct);
+      })
+      .catch(() => {
+        // Keep the currently visible content on screen if the local fetch fails.
+      })
+      .finally(() => {
+        if (hoursFetchAbortRef.current === controller) {
+          hoursFetchAbortRef.current = null;
+        }
+        if (hoursFetchKeyRef.current === requestedRangeKey) {
+          hoursFetchKeyRef.current = null;
+        }
+        if (!controller.signal.aborted) {
+          setIsHoursLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    product,
+    product.article,
+    product.period.current_end,
+    product.period.current_start,
+    requestedRange.end,
+    requestedRange.start,
+    requestedRangeKey,
+  ]);
+
+  const hoursSourceProduct = hoursProduct.article === product.article ? hoursProduct : product;
+  const ordersByHour = new Map(hoursSourceProduct.orders_heatmap.by_hour.map((row) => [row.hour, row.orders]));
+  const hourlyRows = hoursSourceProduct.heatmap.by_hour.map((row) => ({
+    hour: `${row.hour}:00`,
+    views: row.views,
+    clicks: row.clicks,
+    spent: row.spent,
+    ctr: row.CTR,
+    cpc: row.CPC,
+    orders: ordersByHour.get(row.hour) ?? 0,
+  }));
 
   const analyticsRows: Array<{
     key: string;
@@ -4834,154 +5276,230 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
 
   return (
     <LegacySection
-      title="Аналитика по дням"
-      note={`${formatDateRange(product.period.current_start, product.period.current_end)} · ${formatNumber(days.length)} строк`}
-    >
-      <div className="space-y-4">
-        <div className="rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-3">
-          <DailyPerformanceChart rows={product.daily_stats} />
+      title="Аналитика"
+      note={
+        sectionView === "hours"
+          ? `${formatDateRange(requestedRange.start, requestedRange.end)} · heatmap и расписание`
+          : `${formatDateRange(product.period.current_start, product.period.current_end)} · ${formatNumber(days.length)} строк`
+      }
+      titleActions={
+        <div className="chart-window-switch" aria-label="Вид раздела аналитики">
+          <button
+            type="button"
+            onClick={() => setSectionView("daily")}
+            className={sectionView === "daily" ? "chart-window-chip is-active" : "chart-window-chip"}
+          >
+            По дням
+          </button>
+          <button
+            type="button"
+            onClick={() => setSectionView("hours")}
+            className={sectionView === "hours" ? "chart-window-chip is-active" : "chart-window-chip"}
+          >
+            По часам
+          </button>
         </div>
-        <div className="flex justify-end">
-          <div className="chart-window-switch" aria-label="Вид таблицы аналитики по дням">
-            <button
-              type="button"
-              onClick={() => setTableView("daily")}
-              className={tableView === "daily" ? "chart-window-chip is-active" : "chart-window-chip"}
-            >
-              По дням
-            </button>
-            <button
-              type="button"
-              onClick={() => setTableView("analytics")}
-              className={tableView === "analytics" ? "chart-window-chip is-active" : "chart-window-chip"}
-            >
-              Аналитика
-            </button>
+      }
+      actions={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {sectionView === "hours" ? (
+            <>
+              {isHoursLoading ? <MetaPill tone="accent">Догружаю</MetaPill> : null}
+              <div className="chart-window-switch" aria-label="Окно раздела По часам">
+                {HOURS_SECTION_WINDOWS.map((window) => (
+                  <button
+                    key={window.value}
+                    type="button"
+                    onClick={() => setWindowPreset(window.value)}
+                    className={windowPreset === window.value ? "chart-window-chip is-active" : "chart-window-chip"}
+                  >
+                    {window.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+      }
+    >
+      {sectionView === "daily" ? (
+        days.length ? (
+          <div className="space-y-4">
+            <div className="rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-3">
+              <DailyPerformanceChart rows={product.daily_stats} />
+            </div>
+            <div className="flex justify-end">
+              <div className="chart-window-switch" aria-label="Вид таблицы аналитики по дням">
+                <button
+                  type="button"
+                  onClick={() => setTableView("daily")}
+                  className={tableView === "daily" ? "chart-window-chip is-active" : "chart-window-chip"}
+                >
+                  По дням
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTableView("analytics")}
+                  className={tableView === "analytics" ? "chart-window-chip is-active" : "chart-window-chip"}
+                >
+                  Аналитика
+                </button>
+              </div>
+            </div>
+            {tableView === "daily" ? (
+              <MetricTable
+                rows={days}
+                emptyText="За выбранный период дневных строк не пришло."
+                columns={[
+                  { key: "day", header: "Дата", render: (row) => row.day_label },
+                  { key: "stock", header: "Остаток", align: "right", render: (row) => formatNumber(row.avg_stock) },
+                  {
+                    key: "drrAtbs",
+                    header: (
+                      <span className="inline-flex flex-col leading-[1.05]">
+                        <span>ДРР по</span>
+                        <span>корзинам</span>
+                      </span>
+                    ),
+                    align: "right",
+                    dividerBefore: true,
+                    render: (row) => formatPercent(computeDrrAtbs(row.expense_sum, row.sum_price, row.orders, row.atbs)),
+                  },
+                  {
+                    key: "drrOrders",
+                    header: (
+                      <span className="inline-flex flex-col leading-[1.05]">
+                        <span>ДРР по</span>
+                        <span>заказам</span>
+                      </span>
+                    ),
+                    align: "right",
+                    render: (row) => formatPercent(row.DRR),
+                  },
+                  { key: "spend", header: "Расход", align: "right", render: (row) => formatMoney(row.expense_sum) },
+                  { key: "sum", header: "Выручка", align: "right", render: (row) => formatMoney(row.sum_price) },
+                  { key: "views", header: "Показы", align: "right", dividerBefore: true, render: (row) => formatNumber(row.views) },
+                  { key: "clicks", header: "Клики", align: "right", render: (row) => formatNumber(row.clicks) },
+                  { key: "atbs", header: "Корзины", align: "right", render: (row) => formatNumber(row.atbs) },
+                  {
+                    key: "ordersAds",
+                    header: (
+                      <span className="inline-flex flex-col leading-[1.05]">
+                        <span>Заказы</span>
+                        <span>(РК)</span>
+                      </span>
+                    ),
+                    align: "right",
+                    render: (row) => formatNumber(row.orders),
+                  },
+                  {
+                    key: "ordersTotal",
+                    header: (
+                      <span className="inline-flex flex-col leading-[1.05]">
+                        <span>Заказы</span>
+                        <span>(общие)</span>
+                      </span>
+                    ),
+                    align: "right",
+                    render: (row) => formatNumber(row.ordered_total),
+                  },
+                  { key: "ctr", header: "CTR", align: "right", dividerBefore: true, render: (row) => formatPercent(row.CTR) },
+                  { key: "cr1", header: "CR1", align: "right", render: (row) => formatPercent(computeRate(row.atbs, row.clicks)) },
+                  { key: "cr2", header: "CR2", align: "right", render: (row) => formatPercent(computeRate(row.orders, row.atbs)) },
+                  { key: "cpm", header: "CPM", align: "right", dividerBefore: true, render: (row) => formatMoney(computeCpm(row.expense_sum, row.views), true) },
+                  { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.CPC, true) },
+                  { key: "cpl", header: "CPL", align: "right", render: (row) => formatMoney(computeMoneyPer(row.expense_sum, row.atbs), true) },
+                  {
+                    key: "cpoAds",
+                    header: (
+                      <span className="inline-flex flex-col leading-[1.05]">
+                        <span>CPO</span>
+                        <span>(РК)</span>
+                      </span>
+                    ),
+                    align: "right",
+                    render: (row) => formatMoney(row.CPO, true),
+                  },
+                  {
+                    key: "cpoOverall",
+                    header: (
+                      <span className="inline-flex flex-col leading-[1.05]">
+                        <span>CPO</span>
+                        <span>(всего)</span>
+                      </span>
+                    ),
+                    align: "right",
+                    render: (row) => formatMoney(row.CPO_overall ?? computeMoneyPer(row.expense_sum, row.ordered_total), true),
+                  },
+                ]}
+              />
+            ) : (
+              <MetricTable
+                rows={analyticsRows}
+                emptyText="Дневная аналитика отсутствует."
+                variant="flat"
+                className="overflow-visible rounded-[24px] border border-[var(--color-line)] bg-white"
+                columns={[
+                  {
+                    key: "metric",
+                    header: "Показатель",
+                    stickyLeft: 0,
+                    headerClassName: "min-w-[240px]",
+                    cellClassName: "min-w-[240px] font-medium",
+                    render: (row) => row.label,
+                  },
+                  ...days.map((day) => {
+                    const parts = formatAnalyticsDayParts(day.day);
+                    return {
+                      key: day.day,
+                      header: (
+                        <span className="inline-flex min-w-[112px] flex-col leading-[1.05]">
+                          <span>{parts.weekday}</span>
+                          <span>{parts.date}</span>
+                        </span>
+                      ),
+                      align: "right" as const,
+                      dividerBefore: true,
+                      headerClassName: "min-w-[112px]",
+                      cellClassName: "min-w-[112px] whitespace-nowrap",
+                      render: (row: (typeof analyticsRows)[number]) => row.renderValue(day),
+                    };
+                  }),
+                ]}
+              />
+            )}
+          </div>
+        ) : (
+          <EmptyState title="Аналитика не найдена" text="За выбранный период API не вернуло дневные аналитические строки." />
+        )
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-[0.92fr,1.08fr]">
+          <div className="space-y-4">
+            <div className="rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-4">
+              <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Покрытие по расписанию</p>
+              <ScheduleMatrix schedule={hoursSourceProduct.schedule_aggregate} />
+            </div>
+          </div>
+          <div className="space-y-4">
+            <div className="rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-3">
+              <HourlyPerformanceChart heatmap={hoursSourceProduct.heatmap} ordersHeatmap={hoursSourceProduct.orders_heatmap} />
+            </div>
+            <MetricTable
+              rows={hourlyRows}
+              emptyText="Почасовые данные отсутствуют."
+              columns={[
+                { key: "hour", header: "Час", render: (row) => row.hour },
+                { key: "views", header: "Показы", align: "right", render: (row) => formatNumber(row.views) },
+                { key: "clicks", header: "Клики", align: "right", render: (row) => formatNumber(row.clicks) },
+                { key: "spent", header: "Расход", align: "right", render: (row) => formatMoney(row.spent) },
+                { key: "ctr", header: "CTR", align: "right", render: (row) => formatPercent(row.ctr) },
+                { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.cpc, true) },
+                { key: "orders", header: "Заказы", align: "right", render: (row) => formatNumber(row.orders) },
+              ]}
+            />
           </div>
         </div>
-        {tableView === "daily" ? (
-          <MetricTable
-            rows={days}
-            emptyText="За выбранный период дневных строк не пришло."
-            columns={[
-              { key: "day", header: "Дата", render: (row) => row.day_label },
-              { key: "stock", header: "Остаток", align: "right", render: (row) => formatNumber(row.avg_stock) },
-              {
-                key: "drrAtbs",
-                header: (
-                  <span className="inline-flex flex-col leading-[1.05]">
-                    <span>ДРР по</span>
-                    <span>корзинам</span>
-                  </span>
-                ),
-                align: "right",
-                dividerBefore: true,
-                render: (row) => formatPercent(computeDrrAtbs(row.expense_sum, row.sum_price, row.orders, row.atbs)),
-              },
-              {
-                key: "drrOrders",
-                header: (
-                  <span className="inline-flex flex-col leading-[1.05]">
-                    <span>ДРР по</span>
-                    <span>заказам</span>
-                  </span>
-                ),
-                align: "right",
-                render: (row) => formatPercent(row.DRR),
-              },
-              { key: "spend", header: "Расход", align: "right", render: (row) => formatMoney(row.expense_sum) },
-              { key: "sum", header: "Выручка", align: "right", render: (row) => formatMoney(row.sum_price) },
-              { key: "views", header: "Показы", align: "right", dividerBefore: true, render: (row) => formatNumber(row.views) },
-              { key: "clicks", header: "Клики", align: "right", render: (row) => formatNumber(row.clicks) },
-              { key: "atbs", header: "Корзины", align: "right", render: (row) => formatNumber(row.atbs) },
-              {
-                key: "ordersAds",
-                header: (
-                  <span className="inline-flex flex-col leading-[1.05]">
-                    <span>Заказы</span>
-                    <span>(РК)</span>
-                  </span>
-                ),
-                align: "right",
-                render: (row) => formatNumber(row.orders),
-              },
-              {
-                key: "ordersTotal",
-                header: (
-                  <span className="inline-flex flex-col leading-[1.05]">
-                    <span>Заказы</span>
-                    <span>(общие)</span>
-                  </span>
-                ),
-                align: "right",
-                render: (row) => formatNumber(row.ordered_total),
-              },
-              { key: "ctr", header: "CTR", align: "right", dividerBefore: true, render: (row) => formatPercent(row.CTR) },
-              { key: "cr1", header: "CR1", align: "right", render: (row) => formatPercent(computeRate(row.atbs, row.clicks)) },
-              { key: "cr2", header: "CR2", align: "right", render: (row) => formatPercent(computeRate(row.orders, row.atbs)) },
-              { key: "cpm", header: "CPM", align: "right", dividerBefore: true, render: (row) => formatMoney(computeCpm(row.expense_sum, row.views), true) },
-              { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.CPC, true) },
-              { key: "cpl", header: "CPL", align: "right", render: (row) => formatMoney(computeMoneyPer(row.expense_sum, row.atbs), true) },
-              {
-                key: "cpoAds",
-                header: (
-                  <span className="inline-flex flex-col leading-[1.05]">
-                    <span>CPO</span>
-                    <span>(РК)</span>
-                  </span>
-                ),
-                align: "right",
-                render: (row) => formatMoney(row.CPO, true),
-              },
-              {
-                key: "cpoOverall",
-                header: (
-                  <span className="inline-flex flex-col leading-[1.05]">
-                    <span>CPO</span>
-                    <span>(всего)</span>
-                  </span>
-                ),
-                align: "right",
-                render: (row) => formatMoney(row.CPO_overall ?? computeMoneyPer(row.expense_sum, row.ordered_total), true),
-              },
-            ]}
-          />
-        ) : (
-          <MetricTable
-            rows={analyticsRows}
-            emptyText="Дневная аналитика отсутствует."
-            variant="flat"
-            className="overflow-visible rounded-[24px] border border-[var(--color-line)] bg-white"
-            columns={[
-              {
-                key: "metric",
-                header: "Показатель",
-                stickyLeft: 0,
-                headerClassName: "min-w-[240px]",
-                cellClassName: "min-w-[240px] font-medium",
-                render: (row) => row.label,
-              },
-              ...days.map((day) => {
-                const parts = formatAnalyticsDayParts(day.day);
-                return {
-                  key: day.day,
-                  header: (
-                    <span className="inline-flex min-w-[112px] flex-col leading-[1.05]">
-                      <span>{parts.weekday}</span>
-                      <span>{parts.date}</span>
-                    </span>
-                  ),
-                  align: "right" as const,
-                  dividerBefore: true,
-                  headerClassName: "min-w-[112px]",
-                  cellClassName: "min-w-[112px] whitespace-nowrap",
-                  render: (row: (typeof analyticsRows)[number]) => row.renderValue(day),
-                };
-              }),
-            ]}
-          />
-        )}
-      </div>
+      )}
     </LegacySection>
   );
 }
@@ -5207,10 +5725,12 @@ function CampaignStatusSection({ product }: { product: ProductSummary }) {
 function CampaignClustersContent({
   campaign,
   isWildberries,
+  productAverageCheck,
   openClusterDialog,
 }: {
   campaign: CampaignSummary;
   isWildberries: boolean;
+  productAverageCheck: number | null;
   openClusterDialog: (campaignId: number, campaignName: string, cluster: ClusterItem) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -5342,14 +5862,28 @@ function CampaignClustersContent({
 
   const visibleRowTotals = useMemo(() => {
     const popularity = visibleRows.reduce((sum, row) => sum + (toNumber(row.popularity) ?? 0), 0);
+    const popularityPerDay = visibleRows.reduce((sum, row) => sum + (toNumber(row.popularity) ?? 0) / 7, 0);
     const expense = visibleRows.reduce((sum, row) => sum + (toNumber(row.expense) ?? 0), 0);
     const views = visibleRows.reduce((sum, row) => sum + (toNumber(row.views) ?? 0), 0);
     const clicks = visibleRows.reduce((sum, row) => sum + (toNumber(row.clicks) ?? 0), 0);
     const atbs = visibleRows.reduce((sum, row) => sum + (toNumber(row.atbs) ?? 0), 0);
     const orders = visibleRows.reduce((sum, row) => sum + (toNumber(row.orders) ?? 0), 0);
     const overallOrders = visibleRows.reduce((sum, row) => sum + (toNumber(row.shks) ?? 0), 0);
+    const drrOrdersTotals = visibleRows.reduce(
+      (sum, row) => {
+        const totals = accumulateClusterOrdersDrrTotals(row.daily);
+        if (!totals) {
+          return sum;
+        }
+        sum.spend += totals.spend;
+        sum.orders += totals.orders;
+        return sum;
+      },
+      { spend: 0, orders: 0 },
+    );
     return {
       popularity,
+      popularityPerDay,
       expense,
       views,
       clicks,
@@ -5360,13 +5894,13 @@ function CampaignClustersContent({
       cr1: computeRate(atbs, clicks),
       cr2: computeRate(orders, atbs),
       crf: computeRate(orders, clicks),
-      ocr: computeRate(overallOrders, orders),
+      drrOrders: computeClusterOrdersDrrValue(drrOrdersTotals.spend, drrOrdersTotals.orders, productAverageCheck),
       cpm: computeCpm(expense, views),
       cpc: computeMoneyPer(expense, clicks),
       cpl: computeMoneyPer(expense, atbs),
       cpo: computeMoneyPer(expense, orders),
     };
-  }, [visibleRows]);
+  }, [productAverageCheck, visibleRows]);
 
   return (
     <>
@@ -5432,12 +5966,19 @@ function CampaignClustersContent({
           {analyticsCards.length ? (
             analyticsCards.map((card) => (
               <div key={card.key} className={cn("rounded-[18px] border px-4 py-3", card.tone)}>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em]">{card.label}</span>
-                  <span className="text-[11px] font-semibold opacity-75">{formatNumber(card.count)} кл.</span>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.16em]">{card.label}</span>
+                    <strong className="mt-2 block font-display text-[1.5rem] leading-none">
+                      {formatNumber(card.count)}
+                    </strong>
+                    <strong className="mt-2 block font-display text-[1.5rem] leading-none">
+                      {formatMoney(card.expense)}
+                    </strong>
+                  </div>
+                  <span className="pt-0.5 text-[11px] font-semibold opacity-75">кл.</span>
                 </div>
-                <div className="mt-2 flex items-end justify-between gap-3">
-                  <strong className="font-display text-[1.05rem] leading-none">{formatMoney(card.expense)}</strong>
+                <div className="mt-3 flex items-end justify-end gap-3">
                   <span className="text-[11px] font-medium opacity-80">
                     {formatNumber(card.clicks)} кликов · {formatNumber(card.views)} показов
                   </span>
@@ -5502,8 +6043,8 @@ function CampaignClustersContent({
             render: (row) => {
               const clusterSearchUrl = isWildberries ? buildWildberriesSearchUrl(row.name) : null;
               return (
-                <div className="flex min-w-[180px] max-w-[216px] items-start gap-3">
-                  <div className="shrink-0 pt-0.5">
+                <div className="flex min-w-[180px] max-w-[216px] items-center gap-2.5">
+                  <div className="shrink-0">
                     <ClusterStateIcon cluster={row} />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -5554,9 +6095,23 @@ function CampaignClustersContent({
             ),
             headerSummary: formatNumber(visibleRowTotals.popularity),
             stickyLeft: 248,
-            headerClassName: "!w-[124px] !min-w-[124px] !px-2.5",
-            cellClassName: "!w-[124px] !min-w-[124px] !px-2.5",
+            headerClassName: "!w-[98px] !min-w-[98px] !px-2",
+            cellClassName: "!w-[98px] !min-w-[98px] !px-2",
             render: (row) => formatNumber(row.popularity),
+          },
+          {
+            key: "popularity_daily",
+            header: (
+              <span className="inline-flex flex-col leading-[1.05]">
+                <span>Запросы</span>
+                <span>в день</span>
+              </span>
+            ),
+            headerSummary: formatNumber(Math.round(visibleRowTotals.popularityPerDay)),
+            stickyLeft: 346,
+            headerClassName: "!w-[92px] !min-w-[92px] !px-2",
+            cellClassName: "!w-[92px] !min-w-[92px] !px-2",
+            render: (row) => formatNumber(Math.round((toNumber(row.popularity) ?? 0) / 7)),
           },
           {
             key: "strategy_status",
@@ -5569,18 +6124,36 @@ function CampaignClustersContent({
           },
           {
             key: "strategy_bid",
-            header: "Ставки",
+            header: (
+              <span className="inline-flex w-full flex-col items-center gap-1 leading-[1.05]">
+                <span>Ставки</span>
+                <span className="inline-flex items-center gap-1 text-[0.58rem] font-medium uppercase tracking-[0.18em] text-[var(--color-muted)]">
+                  <span>Текущая</span>
+                  <span aria-hidden="true">→</span>
+                  <span>Таргет</span>
+                </span>
+              </span>
+            ),
             headerSummary: null,
-            headerClassName: "!w-[210px] !min-w-[210px] !px-2",
-            cellClassName: "!w-[210px] !min-w-[210px] !px-2",
+            headerClassName: "!w-[176px] !min-w-[176px] !px-2",
+            cellClassName: "!w-[176px] !min-w-[176px] !px-2",
             render: (row) => <ClusterStrategyBidCell cluster={row} />,
           },
           {
             key: "strategy_position",
-            header: "Позиции",
+            header: (
+              <span className="inline-flex w-full flex-col items-center gap-1 leading-[1.05]">
+                <span>Позиции</span>
+                <span className="inline-flex items-center gap-1 text-[0.58rem] font-medium uppercase tracking-[0.18em] text-[var(--color-muted)]">
+                  <span>Текущая</span>
+                  <span aria-hidden="true">→</span>
+                  <span>Таргет</span>
+                </span>
+              </span>
+            ),
             headerSummary: null,
-            headerClassName: "!w-[146px] !min-w-[146px] !px-2",
-            cellClassName: "!w-[146px] !min-w-[146px] !px-2",
+            headerClassName: "!w-[112px] !min-w-[112px] !px-2",
+            cellClassName: "!w-[112px] !min-w-[112px] !px-2",
             render: (row) => <ClusterStrategyPositionCell cluster={row} />,
           },
           {
@@ -5588,8 +6161,8 @@ function CampaignClustersContent({
             header: "Тренд 7д",
             headerSummary: null,
             dividerBefore: true,
-            headerClassName: "!w-[82px] !min-w-[82px] !px-1.5",
-            cellClassName: "!w-[82px] !min-w-[82px] !px-1.5",
+            headerClassName: "!w-[74px] !min-w-[74px] !px-1.5",
+            cellClassName: "!w-[74px] !min-w-[74px] !px-1.5",
             render: (row) => (
               <ClusterPositionSparkline
                 points={clusterPositionSeriesByClusterId.get(row.normquery_id)?.series || []}
@@ -5601,8 +6174,8 @@ function CampaignClustersContent({
             header: <ClusterPositionDayColumnHeader day={day} />,
             headerSummary: null,
             dividerBefore: columnIndex === 0,
-            headerClassName: "!w-[56px] !min-w-[56px] !px-[3px] !py-2",
-            cellClassName: "!w-[56px] !min-w-[56px] !px-[3px] !py-2",
+            headerClassName: "!w-[56px] !min-w-[56px] !px-[3px] !py-1.5",
+            cellClassName: "!w-[56px] !min-w-[56px] !px-[3px] !py-1.5",
             render: (row: ClusterItem) => {
               const compareDay = clusterPositionDayKeysDesc[columnIndex + 1];
               return (
@@ -5618,12 +6191,34 @@ function CampaignClustersContent({
           { key: "clicks", header: "Клики", headerSummary: formatNumber(visibleRowTotals.clicks), align: "right", render: (row) => formatNumber(row.clicks) },
           { key: "atbs", header: "Корзины", headerSummary: formatNumber(visibleRowTotals.atbs), align: "right", render: (row) => formatNumber(row.atbs) },
           { key: "orders", header: "Заказы", headerSummary: formatNumber(visibleRowTotals.orders), align: "right", render: (row) => formatNumber(row.orders) },
-          { key: "overall_orders", header: "Общие заказы", headerSummary: formatNumber(visibleRowTotals.overallOrders), align: "right", render: (row) => formatNumber(row.shks) },
+          {
+            key: "overall_orders",
+            header: (
+              <span className="inline-flex flex-col leading-[1.05]">
+                <span>Общие</span>
+                <span>заказы</span>
+              </span>
+            ),
+            headerSummary: formatNumber(visibleRowTotals.overallOrders),
+            align: "right",
+            render: (row) => formatNumber(row.shks),
+          },
           { key: "ctr", header: "CTR", headerSummary: formatPercent(visibleRowTotals.ctr), align: "right", dividerBefore: true, render: (row) => formatPercent(row.ctr) },
           { key: "cr1", header: "CR1", headerSummary: formatPercent(visibleRowTotals.cr1), align: "right", render: (row) => formatPercent(computeRate(row.atbs, row.clicks)) },
           { key: "cr2", header: "CR2", headerSummary: formatPercent(visibleRowTotals.cr2), align: "right", render: (row) => formatPercent(computeRate(row.orders, row.atbs)) },
           { key: "cr", header: "CRF", headerSummary: formatPercent(visibleRowTotals.crf), align: "right", render: (row) => formatPercent(row.cr) },
-          { key: "ocr", header: "OCR", headerSummary: formatPercent(visibleRowTotals.ocr), align: "right", render: (row) => formatPercent(row.ocr) },
+          {
+            key: "drr_orders",
+            header: (
+              <span className="inline-flex flex-col leading-[1.05]">
+                <span>ДРР</span>
+                <span>(РК Заказы)</span>
+              </span>
+            ),
+            headerSummary: formatPercent(visibleRowTotals.drrOrders),
+            align: "right",
+            render: (row) => formatPercent(computeClusterOrdersDrr(row.daily, productAverageCheck)),
+          },
           { key: "cpm", header: "CPM", headerSummary: formatMoney(visibleRowTotals.cpm, true), align: "right", dividerBefore: true, render: (row) => formatMoney(computeCpm(row.expense, row.views), true) },
           { key: "cpc", header: "CPC", headerSummary: formatMoney(visibleRowTotals.cpc, true), align: "right", render: (row) => formatMoney(row.cpc, true) },
           { key: "cpl", header: "CPL", headerSummary: formatMoney(visibleRowTotals.cpl, true), align: "right", render: (row) => formatMoney(computeMoneyPer(row.expense, row.atbs), true) },
@@ -5638,7 +6233,7 @@ function CampaignClustersContent({
               <button
                 type="button"
                 onClick={() => openClusterDialog(campaign.id, campaign.name, row)}
-                className="rounded-2xl bg-[var(--color-ink)] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#342f49]"
+                className="rounded-2xl bg-[var(--color-ink)] px-2.5 py-1.5 text-[11px] font-medium leading-none text-white transition hover:bg-[#342f49]"
               >
                 Детали
               </button>
@@ -5658,6 +6253,7 @@ function ProductClustersPanel({
   openClusterDialog: (campaignId: number, campaignName: string, cluster: ClusterItem) => void;
 }) {
   const isWildberries = /wb|wildberries/i.test(String(product.shop.marketplace || ""));
+  const productAverageCheck = useMemo(() => buildBoardMetrics(product).averageCheck, [product]);
   const campaignsWithClusters = useMemo(
     () => product.campaigns.filter((campaign) => campaign.clusters.items.length),
     [product.campaigns],
@@ -5730,179 +6326,12 @@ function ProductClustersPanel({
         </div>
       </div>
 
-      <CampaignClustersContent campaign={activeCampaign} isWildberries={isWildberries} openClusterDialog={openClusterDialog} />
-    </LegacySection>
-  );
-}
-
-function ProductHoursPanel({ product }: { product: ProductSummary }) {
-  const initialPreset = resolveHoursSectionPreset(product.period.span_days);
-  const [windowPreset, setWindowPreset] = useState<HoursSectionWindowPreset>(initialPreset);
-  const [hoursProduct, setHoursProduct] = useState<ProductSummary>(product);
-  const [isHoursLoading, setIsHoursLoading] = useState(false);
-  const hoursContextKey = `${product.article}:${product.period.current_start || ""}:${product.period.current_end || ""}`;
-  const requestedRange = useMemo(
-    () => resolveHoursSectionRange(product.period.current_end, windowPreset),
-    [product.period.current_end, windowPreset],
-  );
-  const baseRangeKey = `${product.article}:${product.period.current_start || ""}:${product.period.current_end || ""}`;
-  const requestedRangeKey = `${product.article}:${requestedRange.start}:${requestedRange.end}`;
-  const hoursCacheRef = useRef<Map<string, ProductSummary>>(new Map());
-  const hoursFetchAbortRef = useRef<AbortController | null>(null);
-  const hoursFetchKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    hoursCacheRef.current.set(baseRangeKey, product);
-  }, [baseRangeKey, product]);
-
-  useEffect(() => {
-    hoursFetchAbortRef.current?.abort();
-    hoursFetchAbortRef.current = null;
-    hoursFetchKeyRef.current = null;
-    setWindowPreset(resolveHoursSectionPreset(product.period.span_days));
-    setHoursProduct(product);
-    setIsHoursLoading(false);
-  }, [hoursContextKey, product]);
-
-  useEffect(
-    () => () => {
-      hoursFetchAbortRef.current?.abort();
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (requestedRange.start === product.period.current_start && requestedRange.end === product.period.current_end) {
-      hoursFetchAbortRef.current?.abort();
-      hoursFetchAbortRef.current = null;
-      hoursFetchKeyRef.current = null;
-      setHoursProduct(product);
-      setIsHoursLoading(false);
-      return;
-    }
-
-    const cachedProduct = hoursCacheRef.current.get(requestedRangeKey);
-    if (cachedProduct) {
-      hoursFetchAbortRef.current?.abort();
-      hoursFetchAbortRef.current = null;
-      hoursFetchKeyRef.current = null;
-      setHoursProduct(cachedProduct);
-      setIsHoursLoading(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    hoursFetchAbortRef.current?.abort();
-    hoursFetchAbortRef.current = controller;
-    hoursFetchKeyRef.current = requestedRangeKey;
-    setIsHoursLoading(true);
-
-    fetchProducts({
-      articles: [product.article],
-      start: requestedRange.start,
-      end: requestedRange.end,
-      campaignMode: "full",
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        const nextProduct = response.products.find((item) => item.article === product.article) ?? null;
-        if (!nextProduct) {
-          return;
-        }
-        hoursCacheRef.current.set(requestedRangeKey, nextProduct);
-        setHoursProduct(nextProduct);
-      })
-      .catch(() => {
-        // Keep the currently visible content on screen if the local fetch fails.
-      })
-      .finally(() => {
-        if (hoursFetchAbortRef.current === controller) {
-          hoursFetchAbortRef.current = null;
-        }
-        if (hoursFetchKeyRef.current === requestedRangeKey) {
-          hoursFetchKeyRef.current = null;
-        }
-        if (!controller.signal.aborted) {
-          setIsHoursLoading(false);
-        }
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [
-    product,
-    product.article,
-    product.period.current_end,
-    product.period.current_start,
-    requestedRange.end,
-    requestedRange.start,
-    requestedRangeKey,
-  ]);
-
-  const hoursSourceProduct = hoursProduct.article === product.article ? hoursProduct : product;
-  const ordersByHour = new Map(hoursSourceProduct.orders_heatmap.by_hour.map((row) => [row.hour, row.orders]));
-  const hourlyRows = hoursSourceProduct.heatmap.by_hour.map((row) => ({
-    hour: `${row.hour}:00`,
-    views: row.views,
-    clicks: row.clicks,
-    spent: row.spent,
-    ctr: row.CTR,
-    cpc: row.CPC,
-    orders: ordersByHour.get(row.hour) ?? 0,
-  }));
-
-  return (
-    <LegacySection
-      title="Часы показов и heatmap"
-      note={`${formatDateRange(requestedRange.start, requestedRange.end)} · heatmap и расписание`}
-      actions={
-        <>
-          {isHoursLoading ? <MetaPill tone="accent">Догружаю</MetaPill> : null}
-          <div className="chart-window-switch" aria-label="Окно раздела Часы">
-            {HOURS_SECTION_WINDOWS.map((window) => (
-              <button
-                key={window.value}
-                type="button"
-                onClick={() => setWindowPreset(window.value)}
-                className={windowPreset === window.value ? "chart-window-chip is-active" : "chart-window-chip"}
-              >
-                {window.label}
-              </button>
-            ))}
-          </div>
-        </>
-      }
-    >
-      <div className="grid gap-4 xl:grid-cols-[0.92fr,1.08fr]">
-        <div className="space-y-4">
-          <div className="rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-4">
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Покрытие по расписанию</p>
-            <ScheduleMatrix schedule={hoursSourceProduct.schedule_aggregate} />
-          </div>
-        </div>
-        <div className="space-y-4">
-          <div className="rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-3">
-            <HourlyPerformanceChart heatmap={hoursSourceProduct.heatmap} ordersHeatmap={hoursSourceProduct.orders_heatmap} />
-          </div>
-          <MetricTable
-            rows={hourlyRows}
-            emptyText="Почасовые данные отсутствуют."
-            columns={[
-              { key: "hour", header: "Час", render: (row) => row.hour },
-              { key: "views", header: "Показы", align: "right", render: (row) => formatNumber(row.views) },
-              { key: "clicks", header: "Клики", align: "right", render: (row) => formatNumber(row.clicks) },
-              { key: "spent", header: "Расход", align: "right", render: (row) => formatMoney(row.spent) },
-              { key: "ctr", header: "CTR", align: "right", render: (row) => formatPercent(row.ctr) },
-              { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.cpc, true) },
-              { key: "orders", header: "Заказы", align: "right", render: (row) => formatNumber(row.orders) },
-            ]}
-          />
-        </div>
-      </div>
+      <CampaignClustersContent
+        campaign={activeCampaign}
+        isWildberries={isWildberries}
+        productAverageCheck={productAverageCheck}
+        openClusterDialog={openClusterDialog}
+      />
     </LegacySection>
   );
 }
@@ -6233,10 +6662,9 @@ function LegacyTabBar({
   const [layout, setLayout] = useState({ height: 0, width: 0, left: 0 });
   const tabs: Array<{ value: ProductTab; label: string }> = [
     { value: "overview", label: "Обзор" },
-    { value: "daily", label: "Аналитика по дням" },
+    { value: "daily", label: "Аналитика" },
     { value: "campaign-status", label: "Статусы РК" },
     { value: "clusters", label: "Кластеры" },
-    { value: "hours", label: "Часы" },
     { value: "campaign-heatmap", label: "Heatmap РК" },
     { value: "bids", label: "Ставки" },
   ];
@@ -6321,7 +6749,6 @@ function LegacyTabBar({
             )}
           >
             {tab.label}
-            {tab.value === "daily" ? ` · ${formatNumber(product.daily_stats.length)}` : ""}
           </button>
         ))}
       </div>
@@ -6329,55 +6756,8 @@ function LegacyTabBar({
   );
 }
 
-function ProductPickerList({
-  items,
-  selectedArticle,
-  onSelect,
-  trackedArticles,
-}: {
-  items: Array<{ article: string; name: string; brand?: string; image_url?: string; shopName?: string }>;
-  selectedArticle: string;
-  onSelect: (article: string) => void;
-  trackedArticles: string[];
-}) {
-  if (!items.length) {
-    return <div className="rounded-[18px] border border-dashed border-[var(--color-line)] px-4 py-5 text-sm text-[var(--color-muted)]">Совпадений пока нет.</div>;
-  }
-
-  return (
-    <div className="space-y-2">
-      {items.map((item) => {
-        const isActive = item.article === selectedArticle;
-        const isTracked = trackedArticles.includes(item.article);
-        return (
-          <button
-            type="button"
-            key={item.article}
-            onClick={() => onSelect(item.article)}
-            className={cn(
-              "flex w-full items-start gap-3 rounded-[18px] border px-3 py-3 text-left transition",
-              isActive ? "border-[rgba(241,120,40,0.28)] bg-[var(--color-brand-100)]" : "border-[var(--color-line)] bg-white hover:bg-[var(--color-surface-soft)]",
-            )}
-          >
-            <div className="h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-2xl bg-[var(--color-surface-strong)]">
-              {item.image_url ? <img src={item.image_url} alt={item.name} className="h-full w-full object-cover" /> : null}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-medium text-[var(--color-ink)]">{item.name}</p>
-              <p className="mt-1 text-xs text-[var(--color-muted)]">
-                {item.article} · {item.brand || "Без бренда"} {item.shopName ? `· ${item.shopName}` : ""}
-              </p>
-            </div>
-            {isTracked ? <MetaPill tone="accent">В треке</MetaPill> : <MetaPill>Открыть</MetaPill>}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function ProductPage() {
-  const { payload, comparePayload, trackedArticles, selectedArticle, start, end } = useLoaderData() as ProductLoaderData;
+  const { payload, comparePayload, trackedArticles, start, end, payloadIsCached = false } = useLoaderData() as ProductLoaderData;
   const navigate = useNavigate();
   const navigation = useNavigation();
   const revalidator = useRevalidator();
@@ -6388,8 +6768,10 @@ export function ProductPage() {
   const [isOverviewChartsOverlayOpen, setOverviewChartsOverlayOpen] = useState(false);
   const [isCampaignChartsOverlayOpen, setCampaignChartsOverlayOpen] = useState(false);
   const [visibleCampaignIds, setVisibleCampaignIds] = useState<number[]>([]);
+  const [payloadState, setPayloadState] = useState(payload);
   const [comparePayloadState, setComparePayloadState] = useState<ProductsResponse | null>(comparePayload);
   const [isCompareLoading, setIsCompareLoading] = useState(false);
+  const [isPayloadRefreshing, setIsPayloadRefreshing] = useState(false);
   const [isCompareEnabled, setIsCompareEnabled] = useState(() => {
     if (typeof window === "undefined") {
       return true;
@@ -6418,8 +6800,8 @@ export function ProductPage() {
   const chartFetchKeyRef = useRef<string | null>(null);
   const chartFetchPromiseRef = useRef<Promise<ProductSummary | null> | null>(null);
 
-  const currentProduct = payload.products.find((product) => product.article === selectedArticle) ?? payload.products[0] ?? null;
-  const compareProduct = comparePayloadState?.products.find((product) => product.article === selectedArticle) ?? comparePayloadState?.products[0] ?? null;
+  const currentProduct = payloadState.products[0] ?? null;
+  const compareProduct = comparePayloadState?.products[0] ?? null;
   const effectiveCompareProduct = isCompareEnabled ? compareProduct : null;
   const appliedStart = start || currentProduct?.period.current_start || "";
   const appliedEnd = end || currentProduct?.period.current_end || "";
@@ -6436,13 +6818,81 @@ export function ProductPage() {
     setBudgetHistoryTarget(null);
     setOverviewChartsOverlayOpen(false);
     setCampaignChartsOverlayOpen(false);
-  }, [selectedArticle]);
+  }, [currentProduct?.article]);
+
+  useEffect(() => {
+    setPayloadState(payload);
+  }, [payload]);
 
   useEffect(() => {
     setDraftStart(appliedStart);
     setDraftEnd(appliedEnd);
     setDraftPreset(appliedPreset);
   }, [appliedStart, appliedEnd, appliedPreset]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.__xwayProductAppReady = true;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !payloadState.products.length) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(
+        PRODUCT_PAGE_CACHE_STORAGE_KEY,
+        JSON.stringify({
+          payload: payloadState,
+          comparePayload: null,
+          trackedArticles,
+          start: appliedStart,
+          end: appliedEnd,
+          payloadIsCached: false,
+        } satisfies ProductLoaderData),
+      );
+    } catch {
+      // Ignore cache write failures; the page should continue rendering.
+    }
+  }, [appliedEnd, appliedStart, payloadState, trackedArticles]);
+
+  useEffect(() => {
+    if (!payloadIsCached) {
+      setIsPayloadRefreshing(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsPayloadRefreshing(true);
+
+    fetchProducts({
+      articles: trackedArticles,
+      start: start,
+      end: end,
+      campaignMode: "full",
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setPayloadState(response);
+      })
+      .catch(() => {
+        // Keep cached content on screen if the refresh fails.
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsPayloadRefreshing(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [end, payloadIsCached, start, trackedArticles]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -6609,6 +7059,7 @@ export function ProductPage() {
       normqueryId: cluster.normquery_id,
       clusterName: cluster.name,
       campaignName,
+      productAverageCheck: buildBoardMetrics(currentProduct).averageCheck,
       start: appliedStart,
       end: appliedEnd,
     });
@@ -6636,16 +7087,14 @@ export function ProductPage() {
   };
 
   const navigateToProduct = (next: {
-    articles?: string[];
-    selected?: string;
+    article?: string;
     start?: string | null;
     end?: string | null;
   }) => {
-    const nextArticles = next.articles ?? trackedArticles;
-    const nextSelected = next.selected ?? selectedArticle;
+    const nextArticle = next.article ?? currentProduct?.article ?? trackedArticles[0] ?? "";
     const nextStart = next.start ?? appliedStart;
     const nextEnd = next.end ?? appliedEnd;
-    navigate(`/product${buildProductSearch({ articles: nextArticles, selected: nextSelected, start: nextStart, end: nextEnd })}`);
+    navigate(`/product${buildProductSearch({ article: nextArticle, start: nextStart, end: nextEnd })}`);
   };
 
   const handlePresetChange = (nextPreset: string) => {
@@ -6798,6 +7247,16 @@ export function ProductPage() {
     void ensureChartProduct();
   }, [ensureChartProduct]);
 
+  useEffect(() => {
+    if (!currentProduct) {
+      return;
+    }
+    if ((currentProduct.period.span_days || 0) >= 3) {
+      return;
+    }
+    void ensureChartProduct();
+  }, [currentProduct, ensureChartProduct]);
+
   const handleLoadCompare = useCallback(() => {
     if (!isCompareEnabled || isCompareLoading || comparePayloadState) {
       return;
@@ -6857,12 +7316,17 @@ export function ProductPage() {
   }
 
   const topLevelErrors = Object.entries(currentProduct.errors || {}).filter(([, value]) => Boolean(value));
-  const productPath = `/product${buildProductSearch({ articles: trackedArticles, selected: selectedArticle, start: draftStart, end: draftEnd })}`;
+  const productPath = `/product${buildProductSearch({ article: currentProduct.article, start: draftStart, end: draftEnd })}`;
   const catalogPath = `/catalog${buildCatalogSearch(draftStart, draftEnd)}`;
-  const toolbarRefreshing = revalidator.state !== "idle" || navigation.state !== "idle";
+  const toolbarRefreshing = revalidator.state !== "idle" || navigation.state !== "idle" || isPayloadRefreshing;
   const heroMetrics = buildBoardMetrics(currentProduct);
   const previousHeroMetrics = effectiveCompareProduct ? buildBoardMetrics(effectiveCompareProduct) : null;
-  const dailySpendSummary = useMemo(() => buildProductDailySpendSummary(currentProduct), [currentProduct]);
+  const stocksRuleSummary = resolveStocksRuleSummary(currentProduct);
+  const dailySpendSourceProduct =
+    chartProduct?.article === currentProduct.article && (chartProduct.period.span_days || 0) >= Math.max(currentProduct.period.span_days || 0, 3)
+      ? chartProduct
+      : currentProduct;
+  const dailySpendSummary = useMemo(() => buildProductDailySpendSummary(dailySpendSourceProduct), [dailySpendSourceProduct]);
   const overviewErrorsSourceProduct =
     overviewErrorsWindow > (currentProduct.period.span_days || 0) && chartProduct?.article === currentProduct.article ? chartProduct : currentProduct;
   const overviewErrorSummaries = useMemo(
@@ -6888,7 +7352,7 @@ export function ProductPage() {
     toolbarRefreshing
       ? {
           key: "page",
-          label: navigation.state !== "idle" ? "Загружаю страницу" : "Обновляю данные",
+          label: isPayloadRefreshing ? "Обновляю данные на странице" : navigation.state !== "idle" ? "Загружаю страницу" : "Обновляю данные",
           tone: "page" as const,
         }
       : null,
@@ -7020,7 +7484,7 @@ export function ProductPage() {
                   style={{ width: "100%", justifySelf: "stretch" }}
                 >
                   <div ref={overviewLeftSideRef} className="product-overview-side">
-                    <div ref={overviewSignalsRef} className="product-overview-signals grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div ref={overviewSignalsRef} className="product-overview-signals grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                       <ProductSignalCard label="Остаток" value={`${formatNumber(currentProduct.stock.current)} шт`} />
                       <ProductSignalCard
                         label="Средний чек"
@@ -7034,10 +7498,21 @@ export function ProductPage() {
                         delta={formatSignedMoney(diffValue(heroMetrics.spend, previousHeroMetrics?.spend))}
                         deltaClassName={deltaTone(diffValue(heroMetrics.spend, previousHeroMetrics?.spend), false)}
                       />
+                      <ProductSignalCard
+                        label="Стоп всех РК"
+                        value={stocksRuleSummary.value}
+                        valueClassName={stocksRuleSummary.valueClassName}
+                        hint={stocksRuleSummary.hint}
+                        hintClassName={stocksRuleSummary.hintClassName}
+                      />
                     </div>
                     <div
                       className="campaign-inline-heatmap product-hero-heatmap product-overview-heatmap is-compact is-inline-row"
-                      style={overviewHeatmapHeight !== null ? { height: `${overviewHeatmapHeight}px` } : undefined}
+                      style={
+                        overviewHeatmapHeight !== null
+                          ? { height: `${overviewHeatmapHeight}px`, minHeight: `${overviewHeatmapHeight}px` }
+                          : undefined
+                      }
                     >
                       <ScheduleMatrix
                         schedule={currentProduct.schedule_aggregate}
@@ -7111,27 +7586,30 @@ export function ProductPage() {
                                       }
                                       return left.tone === "budget" ? -1 : 1;
                                     });
+                                    const bidKind = resolveBidKind(item.campaign);
+                                    const bidTypeLabel = bidKind === "cpc" ? "CPC" : "CPM";
 
                                     return (
-                                      <div key={item.id} className="campaign-budget-progress-track-row" style={buildCampaignAccentStyle(item.campaignId)}>
+                                      <div key={item.id} className="campaign-budget-progress-track-row" style={buildCampaignStatusAccentStyle(item.campaign)}>
                                         <div className="campaign-budget-progress-track-copy">
                                           <div className="campaign-budget-progress-track-head" title={`${item.label}${item.meta ? ` · ${item.meta}` : ""}`}>
-                                            <div className="campaign-budget-progress-track-title">
+                                            <div className="campaign-budget-progress-track-title-row">
                                               <CampaignStatusIconBadge campaign={item.campaign} className="campaign-budget-progress-track-pill-status" />
-                                              <span className="campaign-budget-progress-track-pill-label">{resolveCampaignVisibilityPillMainLabel(item.campaign)}</span>
+                                              <span className="campaign-budget-progress-track-type-pill">{bidTypeLabel}</span>
+                                              {trackZones.length ? (
+                                                <span className="campaign-budget-progress-track-zone-inline" aria-hidden="true">
+                                                  {trackZones.map((zone) => {
+                                                    const ZoneIcon = zone.icon;
+                                                    return (
+                                                      <span key={`${item.id}-${zone.key}`} className="campaign-budget-progress-track-pill-zone">
+                                                        <ZoneIcon className="size-3" />
+                                                      </span>
+                                                    );
+                                                  })}
+                                                </span>
+                                              ) : null}
+                                              <span className="campaign-budget-progress-track-pill-label">{item.label}</span>
                                             </div>
-                                            {trackZones.length ? (
-                                              <span className="campaign-budget-progress-track-zone-capsule" aria-hidden="true">
-                                                {trackZones.map((zone) => {
-                                                  const ZoneIcon = zone.icon;
-                                                  return (
-                                                    <span key={`${item.id}-${zone.key}`} className="campaign-budget-progress-track-pill-zone">
-                                                      <ZoneIcon className="size-3" />
-                                                    </span>
-                                                  );
-                                                })}
-                                              </span>
-                                            ) : null}
                                           </div>
                                           {orderedBadges.length ? (
                                             <div className="campaign-budget-progress-track-badges">
@@ -7219,7 +7697,6 @@ export function ProductPage() {
                 {activeTab === "daily" ? <ProductDailyPanel product={currentProduct} /> : null}
                 {activeTab === "campaign-status" ? <CampaignStatusSection product={currentProduct} /> : null}
                 {activeTab === "clusters" ? <ProductClustersPanel product={currentProduct} openClusterDialog={openClusterDialog} /> : null}
-                {activeTab === "hours" ? <ProductHoursPanel product={currentProduct} /> : null}
                 {activeTab === "campaign-heatmap" ? renderCampaignHeatmap(currentProduct) : null}
                 {activeTab === "bids" ? renderBids(currentProduct) : null}
               </div>

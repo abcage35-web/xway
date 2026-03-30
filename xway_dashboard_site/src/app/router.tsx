@@ -8,8 +8,7 @@ import { RootLayout } from "../routes/root-layout";
 
 function defaultProductPath() {
   const params = new URLSearchParams();
-  params.set("articles", DEFAULT_ARTICLES.join(","));
-  params.set("selected", DEFAULT_ARTICLES[0]!);
+  params.set("articles", DEFAULT_ARTICLES[0]!);
   return `/product?${params.toString()}`;
 }
 

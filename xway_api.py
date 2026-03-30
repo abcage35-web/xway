@@ -688,6 +688,12 @@ class XwayApi:
             referer=f"https://am.xway.ru/wb/shop/{shop_id}/product/{product_id}",
         )
 
+    def product_stocks_rule(self, shop_id: int, product_id: int) -> Dict[str, Any]:
+        return self._get_json(
+            f"https://am.xway.ru/api/adv/shop/{shop_id}/product/{product_id}/stocks-rule",
+            referer=f"https://am.xway.ru/wb/shop/{shop_id}/product/{product_id}",
+        )
+
     def product_stata(self, shop_id: int, product_id: int) -> Dict[str, Any]:
         r = self.range
         return self.product_stata_range(shop_id, product_id, r["current_start"], r["current_end"])
@@ -2012,6 +2018,7 @@ def _product_summary(
     match: Dict[str, Any],
     shop_info: Dict[str, Any],
     info: Dict[str, Any],
+    stocks_rule_payload: Dict[str, Any],
     stat_item: Dict[str, Any],
     dynamics: Dict[str, Any],
     stata: Dict[str, Any],
@@ -2029,6 +2036,9 @@ def _product_summary(
     totals = stata.get("totals", {})
     daily_totals = _daily_totals(daily_stats)
     normalized_product_spend_limits = _normalize_product_spend_limits(stat_item, product, campaigns)
+    normalized_stocks_rule = copy.deepcopy(product.get("stocks_rule") or {})
+    if stocks_rule_payload:
+        normalized_stocks_rule.update(copy.deepcopy(stocks_rule_payload))
 
     return {
         "article": article,
@@ -2113,7 +2123,7 @@ def _product_summary(
         },
         "operations": {
             "spend_limits": copy.deepcopy(product.get("spend_limits")),
-            "stocks_rule": copy.deepcopy(product.get("stocks_rule")),
+            "stocks_rule": normalized_stocks_rule or None,
             "campaigns_data": copy.deepcopy(product.get("campaigns_data") or {}),
             "campaigns_by_type": copy.deepcopy((product.get("campaigns_data") or {}).get("campaigns_by_type") or {}),
         },
@@ -2164,10 +2174,12 @@ def _collect_single_article(
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_shop_info = executor.submit(api.shop_details, shop_id)
         future_info = executor.submit(api.product_info, shop_id, product_id)
+        future_stocks_rule = executor.submit(api.product_stocks_rule, shop_id, product_id)
         future_dynamics = executor.submit(api.product_dynamics, shop_id, product_id)
         future_stata = executor.submit(api.product_stata, shop_id, product_id)
         shop_info = future_shop_info.result()
         info = future_info.result()
+        stocks_rule_payload, _ = _safe_call(lambda: future_stocks_rule.result(), {})
         dynamics = future_dynamics.result()
         stata = future_stata.result()
 
@@ -2366,6 +2378,7 @@ def _collect_single_article(
         match,
         shop_info,
         info,
+        stocks_rule_payload or {},
         stat_item,
         dynamics,
         stata,

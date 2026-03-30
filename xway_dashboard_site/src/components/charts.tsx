@@ -36,6 +36,22 @@ const CAMPAIGN_INLINE_TOOLTIP_GAP = 20;
 const CAMPAIGN_INLINE_TOOLTIP_EDGE_PADDING = 16;
 const CAMPAIGN_INLINE_STATUS_VIEW_STORAGE_KEY = "xway-campaign-inline-status-view";
 
+function getTooltipBoundaryRect(element: HTMLElement | null, fallbackRect: DOMRect) {
+  if (typeof window === "undefined") {
+    return fallbackRect;
+  }
+  let current = element?.parentElement ?? null;
+  while (current && current !== document.body) {
+    const styles = window.getComputedStyle(current);
+    const overflowY = styles.overflowY === "visible" ? styles.overflow : styles.overflowY;
+    if (overflowY === "auto" || overflowY === "scroll" || overflowY === "hidden" || overflowY === "clip") {
+      return current.getBoundingClientRect();
+    }
+    current = current.parentElement;
+  }
+  return fallbackRect;
+}
+
 export type OverviewWindow = (typeof OVERVIEW_WINDOWS)[number];
 export type CampaignOverviewStatusKey = "active" | "paused" | "freeze" | "unknown";
 export interface CampaignOverviewStatusEntry {
@@ -557,18 +573,6 @@ export function CampaignInlineIssuesPanel({
   const issueSummaries = useMemo(() => buildCampaignIssueSummaries(campaign, statusDays), [campaign, statusDays]);
   const totalIssueHours = issueSummaries.reduce((sum, item) => sum + item.hours, 0);
   const statusDayByDay = useMemo(() => new Map(statusDays.map((day) => [day.day, day])), [statusDays]);
-  const statusDaysResetKey = useMemo(
-    () =>
-      statusDays
-        .map(
-          (day) =>
-            `${day.day}:${day.entries
-              .map((entry) => `${entry.key}:${entry.startTime}:${entry.endTime ?? ""}:${(entry.issueKinds || []).join("+")}:${(entry.reasonKinds || []).join("+")}`)
-              .join("|")}`,
-        )
-        .join("||"),
-    [statusDays],
-  );
   const [expandedIssues, setExpandedIssues] = useState<Record<CampaignIssueSummary["kind"], boolean>>({
     budget: false,
     limit: false,
@@ -578,7 +582,7 @@ export function CampaignInlineIssuesPanel({
 
   useEffect(() => {
     setExpandedIssues({ budget: false, limit: false });
-  }, [campaignId, statusDaysResetKey]);
+  }, [campaignId]);
 
   return (
     <div className={cn("campaign-inline-issues", className)}>
@@ -1267,8 +1271,10 @@ export function CampaignInlineOverviewChart({
     if (!plotRect || !tooltipRect) {
       return;
     }
-    const spaceAbove = tooltipAnchorY - CAMPAIGN_INLINE_TOOLTIP_GAP;
-    const spaceBelow = plotRect.height - tooltipAnchorY - CAMPAIGN_INLINE_TOOLTIP_GAP;
+    const boundaryRect = getTooltipBoundaryRect(plotRef.current, plotRect);
+    const anchorViewportY = plotRect.top + tooltipAnchorY;
+    const spaceAbove = anchorViewportY - boundaryRect.top - CAMPAIGN_INLINE_TOOLTIP_GAP;
+    const spaceBelow = boundaryRect.bottom - anchorViewportY - CAMPAIGN_INLINE_TOOLTIP_GAP;
     const nextPlacement =
       spaceAbove >= tooltipRect.height
         ? "above"
@@ -1297,7 +1303,6 @@ export function CampaignInlineOverviewChart({
           <p>{bidLabel} · по дням внутри периода</p>
         </div>
         <div className="flex items-center gap-2">
-          {headerAction}
           <div className="chart-window-switch">
             <button type="button" onClick={() => setStatusOverlayMode("strip")} className={statusOverlayMode === "strip" ? "chart-window-chip is-active" : "chart-window-chip"}>
               Полоска
@@ -1307,6 +1312,7 @@ export function CampaignInlineOverviewChart({
             </button>
           </div>
           <ChartWindowSwitch activeWindow={activeWindow} onChange={setActiveWindow} />
+          {headerAction}
         </div>
       </div>
 
@@ -1757,8 +1763,27 @@ export function HourlyPerformanceChart({
   );
 }
 
-export function ClusterDailyChart({ daily }: { daily: Record<string, ClusterDailyRow> }) {
+export function ClusterDailyChart({
+  daily,
+  productAverageCheck,
+}: {
+  daily: Record<string, ClusterDailyRow>;
+  productAverageCheck?: number | null;
+}) {
   const [hiddenSeries, setHiddenSeries] = useState<string[]>([]);
+  const computeClusterOrdersDrrValue = (
+    expense: number | null | undefined,
+    orders: number | null | undefined,
+    productAverageCheck: number | null | undefined,
+  ) => {
+    const spend = toNumber(expense);
+    const ordersAds = toNumber(orders);
+    const averageCheck = toNumber(productAverageCheck);
+    if (spend === null || ordersAds === null || ordersAds <= 0 || averageCheck === null || averageCheck <= 0) {
+      return null;
+    }
+    return (spend / (averageCheck * ordersAds)) * 100;
+  };
   const rows = Object.entries(daily)
     .map(([day, row]) => ({
       rawDay: day,
@@ -1769,7 +1794,7 @@ export function ClusterDailyChart({ daily }: { daily: Record<string, ClusterDail
       baskets: toNumber(row.basket) ?? 0,
       orders: toNumber(row.orders) ?? 0,
       spend: toNumber(row.expense) ?? 0,
-      drr: toNumber(row.DRR) ?? toNumber(row.drr),
+      drr: computeClusterOrdersDrrValue(row.expense ?? null, row.orders ?? null, productAverageCheck),
     }))
     .sort((left, right) => left.rawDay.localeCompare(right.rawDay));
   const clusterTooltipConfigs: OverviewTooltipMetricConfig[] = [
@@ -1779,7 +1804,7 @@ export function ClusterDailyChart({ daily }: { daily: Record<string, ClusterDail
     { key: "baskets", label: "Корзины", color: "#14a6a1", formatter: (value) => formatNumber(value) },
     { key: "orders", label: "Заказы", color: "#4ba66f", formatter: (value) => formatNumber(value) },
     { key: "spend", label: "Расход", color: "#f17828", formatter: (value) => formatMoney(value, true) },
-    { key: "drr", label: "ДРР", color: "#ff6b8a", formatter: (value) => formatPercent(value) },
+    { key: "drr", label: "ДРР (РК Заказы)", color: "#ff6b8a", formatter: (value) => formatPercent(value) },
   ];
   const positionAxisMax = Math.max(1, ...rows.map((row) => row.pos ?? 0));
   const drrAxisMax = Math.max(10, ...rows.map((row) => row.drr ?? 0));
@@ -1815,7 +1840,7 @@ export function ClusterDailyChart({ daily }: { daily: Record<string, ClusterDail
           { key: "baskets", label: "Корзины", color: "#14a6a1", active: !hiddenSeries.includes("baskets"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "baskets")) },
           { key: "orders", label: "Заказы", color: "#4ba66f", active: !hiddenSeries.includes("orders"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "orders")) },
           { key: "spend", label: "Расход", color: "#f17828", active: !hiddenSeries.includes("spend"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "spend")) },
-          { key: "drr", label: "ДРР", color: "#ff6b8a", active: !hiddenSeries.includes("drr"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "drr")) },
+          { key: "drr", label: "ДРР (РК Заказы)", color: "#ff6b8a", active: !hiddenSeries.includes("drr"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "drr")) },
         ]}
       />
     </div>

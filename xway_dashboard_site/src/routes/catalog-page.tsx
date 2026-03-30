@@ -118,35 +118,37 @@ function CatalogCampaignStatusIconBadge({
 function CatalogCampaignZonePill({
   label,
   kind,
+  iconOnly = false,
 }: {
   label: string;
   kind: "search" | "recom" | "both";
+  iconOnly?: boolean;
 }) {
   if (kind === "both") {
     return (
-      <span className="catalog-campaign-zone-pill is-both">
+      <span className={cn("catalog-campaign-zone-pill is-both", iconOnly && "is-icon-only")} title={label} aria-label={label}>
         <SearchIcon className="size-4" strokeWidth={2.05} />
-        <span>Поиск</span>
+        {iconOnly ? null : <span>Поиск</span>}
         <span className="catalog-campaign-zone-separator">+</span>
         <ThumbsUp className="size-4" strokeWidth={2.05} />
-        <span>Рекомендации</span>
+        {iconOnly ? null : <span>Рекомендации</span>}
       </span>
     );
   }
 
   if (kind === "recom") {
     return (
-      <span className="catalog-campaign-zone-pill is-recom">
+      <span className={cn("catalog-campaign-zone-pill is-recom", iconOnly && "is-icon-only")} title={label} aria-label={label}>
         <ThumbsUp className="size-4" strokeWidth={2.05} />
-        <span>Рекомендации</span>
+        {iconOnly ? null : <span>Рекомендации</span>}
       </span>
     );
   }
 
   return (
-    <span className="catalog-campaign-zone-pill is-search">
+    <span className={cn("catalog-campaign-zone-pill is-search", iconOnly && "is-icon-only")} title={label} aria-label={label}>
       <SearchIcon className="size-4" strokeWidth={2.05} />
-      <span>{label}</span>
+      {iconOnly ? null : <span>{label}</span>}
     </span>
   );
 }
@@ -213,7 +215,6 @@ function buildCatalogSearch(start?: string | null, end?: string | null) {
 function buildProductSearch(article: string, start?: string | null, end?: string | null) {
   const params = new URLSearchParams();
   params.set("articles", article);
-  params.set("selected", article);
   if (start) {
     params.set("start", start);
   }
@@ -535,14 +536,7 @@ export function CatalogPage() {
                             {slots.length ? (
                               slots.map((slot) => (
                                 <div key={`${article.article}-${slot.key}`} className={cn("catalog-campaign-card", `tone-${slot.displayStatus}`)}>
-                                  <div className="catalog-campaign-card-head">
-                                    <div className="catalog-campaign-copy">
-                                      <div className="catalog-campaign-title-row">
-                                        <span className={cn("catalog-campaign-kind-badge", `is-${slot.key}`)}>{slot.key === "cpc" ? "CPC" : "CPM"}</span>
-                                        <strong className="catalog-campaign-title">{slot.headline}</strong>
-                                      </div>
-                                      <CatalogCampaignZonePill label={slot.zoneLabel} kind={slot.zoneKind} />
-                                    </div>
+                                  <div className="catalog-campaign-card-head" title={`${slot.headline} · ${slot.zoneLabel}`}>
                                     <CatalogCampaignStatusIconBadge
                                       status={slot.displayStatus}
                                       label={
@@ -555,6 +549,9 @@ export function CatalogPage() {
                                               : "Статус не задан"
                                       }
                                     />
+                                    <span className={cn("catalog-campaign-kind-badge", `is-${slot.key}`)}>{slot.key === "cpc" ? "CPC" : "CPM"}</span>
+                                    <CatalogCampaignZonePill label={slot.zoneLabel} kind={slot.zoneKind} iconOnly />
+                                    <strong className="catalog-campaign-title">{slot.headline}</strong>
                                   </div>
                                 </div>
                               ))

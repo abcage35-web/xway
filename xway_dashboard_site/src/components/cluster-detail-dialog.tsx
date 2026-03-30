@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { fetchClusterDetail } from "../lib/api";
 import { formatMoney, formatNumber, formatPercent } from "../lib/format";
-import type { ClusterDetailResponse } from "../lib/types";
+import type { ClusterDailyRow, ClusterDetailResponse } from "../lib/types";
 import { ClusterDailyChart } from "./charts";
-import { KeyValueRow, LoadingState, MetricTable, SectionCard } from "./ui";
+import { LoadingState, MetricTable, SectionCard } from "./ui";
 
 interface ClusterDialogTarget {
   shopId: number;
@@ -13,8 +13,47 @@ interface ClusterDialogTarget {
   normqueryId: number;
   clusterName: string;
   campaignName: string;
+  productAverageCheck?: number | null;
   start?: string | null;
   end?: string | null;
+}
+
+function computeClusterOrdersDrrValue(
+  expense: number | null | undefined,
+  orders: number | null | undefined,
+  productAverageCheck: number | null | undefined,
+) {
+  const spend = expense === null || expense === undefined ? null : Number(expense);
+  const ordersAds = orders === null || orders === undefined ? null : Number(orders);
+  const averageCheck = productAverageCheck === null || productAverageCheck === undefined ? null : Number(productAverageCheck);
+  if (spend === null || ordersAds === null || ordersAds <= 0 || averageCheck === null || averageCheck <= 0) {
+    return null;
+  }
+  return (spend / (averageCheck * ordersAds)) * 100;
+}
+
+function computeClusterOrdersDrr(daily: Record<string, ClusterDailyRow>, productAverageCheck: number | null | undefined) {
+  let spend = 0;
+  let orders = 0;
+  let hasOrders = false;
+
+  Object.values(daily).forEach((row) => {
+    const rowSpend = row.expense === null || row.expense === undefined ? null : Number(row.expense);
+    const rowOrders = row.orders === null || row.orders === undefined ? null : Number(row.orders);
+    if (rowSpend !== null) {
+      spend += rowSpend;
+    }
+    if (rowOrders !== null && rowOrders > 0) {
+      orders += rowOrders;
+      hasOrders = true;
+    }
+  });
+
+  if (!hasOrders) {
+    return null;
+  }
+
+  return computeClusterOrdersDrrValue(spend, orders, productAverageCheck);
 }
 
 export function ClusterDetailDialog({
@@ -123,20 +162,40 @@ export function ClusterDetailDialog({
 
           {!loading && payload ? (
             <div className="space-y-6">
-              <div className="grid gap-6 xl:grid-cols-[1.65fr,0.95fr]">
-                <SectionCard title="Дневная динамика" caption="Позиция, показы, клики, корзины, заказы, расход и ДРР по дням">
-                  <ClusterDailyChart daily={payload.daily} />
-                </SectionCard>
+              {(() => {
+                const clusterOrdersDrr = computeClusterOrdersDrr(payload.daily, target.productAverageCheck);
+                const summaryCards = [
+                  { label: "Текущая позиция", value: formatNumber(payload.position) },
+                  { label: "ДРР (РК Заказы)", value: formatPercent(clusterOrdersDrr) },
+                  { label: "Записей истории", value: formatNumber(payload.history.length) },
+                  { label: "Изменений ставки", value: formatNumber(payload.bid_history.length) },
+                  { label: "Период", value: `${payload.range.current_start} → ${payload.range.current_end}` },
+                ];
 
-                <SectionCard title="Сводка кластера" caption="Быстрый контекст по текущей детализации">
-                  <div className="space-y-1">
-                    <KeyValueRow label="Текущая позиция" value={formatNumber(payload.position)} />
-                    <KeyValueRow label="Записей истории" value={formatNumber(payload.history.length)} />
-                    <KeyValueRow label="Изменений ставки" value={formatNumber(payload.bid_history.length)} />
-                    <KeyValueRow label="Период" value={`${payload.range.current_start} → ${payload.range.current_end}`} />
-                  </div>
-                </SectionCard>
-              </div>
+                return (
+                  <>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      {summaryCards.map((card) => (
+                        <div
+                          key={card.label}
+                          className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-3"
+                        >
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
+                            {card.label}
+                          </div>
+                          <div className="mt-2 font-display text-[1.15rem] leading-none text-[var(--color-ink)]">
+                            {card.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <SectionCard title="Дневная динамика" caption="Позиция, показы, клики, корзины, заказы, расход и ДРР (РК Заказы) по дням">
+                      <ClusterDailyChart daily={payload.daily} productAverageCheck={target.productAverageCheck} />
+                    </SectionCard>
+                  </>
+                );
+              })()}
 
               <SectionCard title="История ставок" caption="Последние изменения бидов внутри кластера">
                 <MetricTable
@@ -173,6 +232,12 @@ export function ClusterDetailDialog({
                     { key: "ctr", header: "CTR", align: "right", render: (row) => formatPercent(row.CTR) },
                     { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.CPC, true) },
                     { key: "expense", header: "Расход", align: "right", render: (row) => formatMoney(row.expense) },
+                    {
+                      key: "drr",
+                      header: "ДРР (РК Заказы)",
+                      align: "right",
+                      render: (row) => formatPercent(computeClusterOrdersDrrValue(row.expense ?? null, row.orders ?? null, target.productAverageCheck)),
+                    },
                     { key: "pos", header: "Позиция", align: "right", render: (row) => formatNumber(row.rates_promo_pos ?? row.org_pos) },
                   ]}
                 />

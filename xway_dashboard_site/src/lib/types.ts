@@ -393,6 +393,41 @@ export interface CampaignSummary {
   status_logs?: CampaignStatusLogs;
 }
 
+export interface ProductStocksRule {
+  active?: boolean | null;
+  has_error?: boolean | null;
+  type?: string | null;
+  condition?: string | null;
+  metric?: string | null;
+  kind?: string | null;
+  rule_type?: string | null;
+  mode?: string | null;
+  field?: string | null;
+  threshold?: number | string | null;
+  value?: number | string | null;
+  stock?: number | string | null;
+  stock_threshold?: number | string | null;
+  min_stock?: number | string | null;
+  remain_stock?: number | string | null;
+  quantity?: number | string | null;
+  qty?: number | string | null;
+  days?: number | string | null;
+  days_gap?: number | string | null;
+  days_left?: number | string | null;
+  days_threshold?: number | string | null;
+  turnover_days?: number | string | null;
+  coverage_days?: number | string | null;
+  days_to_stockout?: number | string | null;
+  stocks_limit?: number | string | null;
+  last_state?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ProductOperationsSummary {
+  stocks_rule?: ProductStocksRule | null;
+  [key: string]: unknown;
+}
+
 export interface ProductSummary {
   article: string;
   product_id: number;
@@ -415,6 +450,7 @@ export interface ProductSummary {
   schedule_aggregate: ScheduleAggregate;
   campaigns: CampaignSummary[];
   bid_log: BidLogEntry[];
+  operations?: ProductOperationsSummary | null;
 }
 
 export interface ProductsResponse {
