@@ -2,7 +2,7 @@ import { Group } from "@visx/group";
 import { ParentSize } from "@visx/responsive";
 import { Text as VisxText } from "@visx/text";
 import { useTooltip } from "@visx/tooltip";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronRight, LoaderCircle, Search, Sparkles } from "lucide-react";
 import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, formatNumber, formatPercent, relativeDeltaClass, statusTone } from "../lib/format";
 import type { ScheduleAggregate } from "../lib/types";
@@ -631,6 +631,33 @@ export function ScheduleMatrix({
     active: boolean;
     placement: "top" | "bottom";
   }>();
+  const layoutRef = useRef<HTMLDivElement | null>(null);
+  const [layoutBounds, setLayoutBounds] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const node = layoutRef.current;
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const updateBounds = () => {
+      const nextWidth = node.clientWidth;
+      const nextHeight = node.clientHeight;
+      setLayoutBounds((current) =>
+        current.width === nextWidth && current.height === nextHeight
+          ? current
+          : { width: nextWidth, height: nextHeight },
+      );
+    };
+
+    updateBounds();
+
+    const observer = new ResizeObserver(() => {
+      updateBounds();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [responsiveResetKey]);
 
   const compactDayLabel = (key: string, label: string) => {
     const normalizedKey = String(key || "").toLowerCase();
@@ -710,15 +737,15 @@ export function ScheduleMatrix({
   };
 
   return (
-    <div className="schedule-grid-card-wrapper relative z-0 overflow-visible">
+    <div ref={layoutRef} className="schedule-grid-card-wrapper relative z-0 overflow-visible">
       <div className={cn("schedule-grid-card w-full", compact ? "min-w-0 is-compact" : "min-w-0", autoWidth && "is-auto-width")}>
         <div className="schedule-modern-scroll">
           <div className="schedule-modern-viewport">
             <div className="schedule-modern-canvas">
               <ParentSize key={responsiveResetKey ?? "default"} debounceTime={0}>
                 {({ width, height }) => {
-                  const measuredWidth = Math.max(width || 0, 0);
-                  const measuredHeight = Math.max(height || 0, 0);
+                  const measuredWidth = Math.max(width || layoutBounds.width || 0, 0);
+                  const measuredHeight = Math.max(height || layoutBounds.height || 0, 0);
                   const svgWidth = autoWidth
                     ? chartNaturalWidth
                     : Math.max(measuredWidth || chartNaturalWidth, compact ? 220 : 320);

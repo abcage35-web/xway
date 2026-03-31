@@ -43,6 +43,7 @@ import {
   formatMoney,
   formatNumber,
   formatPercent,
+  getTodayIso,
   getRangePreset,
   toNumber,
 } from "../lib/format";
@@ -426,6 +427,22 @@ function computeClusterOrdersDrr(
 ) {
   const totals = accumulateClusterOrdersDrrTotals(daily);
   return totals ? computeClusterOrdersDrrValue(totals.spend, totals.orders, averageCheck) : null;
+}
+
+function countClusterTrafficPeriodDays(start: string | null | undefined, end: string | null | undefined) {
+  if (!start || !end) {
+    return 0;
+  }
+  const effectiveEnd = end === getTodayIso() ? shiftIsoDateString(end, -1) ?? end : end;
+  if (effectiveEnd < start) {
+    return 0;
+  }
+  const startDate = new Date(`${start}T00:00:00Z`);
+  const endDate = new Date(`${effectiveEnd}T00:00:00Z`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return 0;
+  }
+  return Math.floor((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
 }
 
 function formatBoardCount(value: number | string | null | undefined, compact = false) {
@@ -5124,6 +5141,7 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
   const [sectionView, setSectionView] = useState<AnalyticsSectionView>("daily");
   const [tableView, setTableView] = useState<DailyTableView>("daily");
   const days = dailyRowsNewestFirst(product.daily_stats);
+  const productAverageCheck = useMemo(() => buildBoardMetrics(product).averageCheck, [product]);
   const initialPreset = resolveHoursSectionPreset(product.period.span_days);
   const [windowPreset, setWindowPreset] = useState<HoursSectionWindowPreset>(initialPreset);
   const [hoursProduct, setHoursProduct] = useState<ProductSummary>(product);
@@ -5240,12 +5258,19 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
   const ordersByHour = new Map(hoursSourceProduct.orders_heatmap.by_hour.map((row) => [row.hour, row.orders]));
   const hourlyRows = hoursSourceProduct.heatmap.by_hour.map((row) => ({
     hour: `${row.hour}:00`,
+    avgStock: null,
     views: row.views,
     clicks: row.clicks,
     spent: row.spent,
+    atbs: null,
     ctr: row.CTR,
     cpc: row.CPC,
     orders: ordersByHour.get(row.hour) ?? 0,
+    orderedTotal: null,
+    sumPrice:
+      productAverageCheck !== null && productAverageCheck > 0 && (ordersByHour.get(row.hour) ?? 0) > 0
+        ? (ordersByHour.get(row.hour) ?? 0) * productAverageCheck
+        : null,
   }));
 
   const analyticsRows: Array<{
@@ -5489,12 +5514,85 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
               emptyText="Почасовые данные отсутствуют."
               columns={[
                 { key: "hour", header: "Час", render: (row) => row.hour },
-                { key: "views", header: "Показы", align: "right", render: (row) => formatNumber(row.views) },
-                { key: "clicks", header: "Клики", align: "right", render: (row) => formatNumber(row.clicks) },
+                { key: "stock", header: "Остаток", align: "right", render: (row) => formatNumber(row.avgStock) },
+                {
+                  key: "drrAtbs",
+                  header: (
+                    <span className="inline-flex flex-col leading-[1.05]">
+                      <span>ДРР по</span>
+                      <span>корзинам</span>
+                    </span>
+                  ),
+                  align: "right",
+                  dividerBefore: true,
+                  render: (row) => formatPercent(computeDrrAtbs(row.spent, row.sumPrice, row.orders, row.atbs)),
+                },
+                {
+                  key: "drrOrders",
+                  header: (
+                    <span className="inline-flex flex-col leading-[1.05]">
+                      <span>ДРР по</span>
+                      <span>заказам</span>
+                    </span>
+                  ),
+                  align: "right",
+                  render: (row) => formatPercent(computeDrr(row.spent, row.sumPrice)),
+                },
                 { key: "spent", header: "Расход", align: "right", render: (row) => formatMoney(row.spent) },
-                { key: "ctr", header: "CTR", align: "right", render: (row) => formatPercent(row.ctr) },
+                { key: "sum", header: "Выручка", align: "right", render: (row) => formatMoney(row.sumPrice) },
+                { key: "views", header: "Показы", align: "right", dividerBefore: true, render: (row) => formatNumber(row.views) },
+                { key: "clicks", header: "Клики", align: "right", render: (row) => formatNumber(row.clicks) },
+                { key: "atbs", header: "Корзины", align: "right", render: (row) => formatNumber(row.atbs) },
+                {
+                  key: "ordersAds",
+                  header: (
+                    <span className="inline-flex flex-col leading-[1.05]">
+                      <span>Заказы</span>
+                      <span>(РК)</span>
+                    </span>
+                  ),
+                  align: "right",
+                  render: (row) => formatNumber(row.orders),
+                },
+                {
+                  key: "ordersTotal",
+                  header: (
+                    <span className="inline-flex flex-col leading-[1.05]">
+                      <span>Заказы</span>
+                      <span>(общие)</span>
+                    </span>
+                  ),
+                  align: "right",
+                  render: (row) => formatNumber(row.orderedTotal),
+                },
+                { key: "ctr", header: "CTR", align: "right", dividerBefore: true, render: (row) => formatPercent(row.ctr) },
+                { key: "cr1", header: "CR1", align: "right", render: (row) => formatPercent(computeRate(row.atbs, row.clicks)) },
+                { key: "cr2", header: "CR2", align: "right", render: (row) => formatPercent(computeRate(row.orders, row.atbs)) },
+                { key: "cpm", header: "CPM", align: "right", dividerBefore: true, render: (row) => formatMoney(computeCpm(row.spent, row.views), true) },
                 { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.cpc, true) },
-                { key: "orders", header: "Заказы", align: "right", render: (row) => formatNumber(row.orders) },
+                { key: "cpl", header: "CPL", align: "right", render: (row) => formatMoney(computeMoneyPer(row.spent, row.atbs), true) },
+                {
+                  key: "cpoAds",
+                  header: (
+                    <span className="inline-flex flex-col leading-[1.05]">
+                      <span>CPO</span>
+                      <span>(РК)</span>
+                    </span>
+                  ),
+                  align: "right",
+                  render: (row) => formatMoney(computeMoneyPer(row.spent, row.orders), true),
+                },
+                {
+                  key: "cpoOverall",
+                  header: (
+                    <span className="inline-flex flex-col leading-[1.05]">
+                      <span>CPO</span>
+                      <span>(всего)</span>
+                    </span>
+                  ),
+                  align: "right",
+                  render: (row) => formatMoney(computeMoneyPer(row.spent, row.orderedTotal), true),
+                },
               ]}
             />
           </div>
@@ -5511,6 +5609,7 @@ function CampaignStatusCard({
   campaign: CampaignSummary;
   view: "timeline" | "hours";
 }) {
+  const [hoveredHourLegendKey, setHoveredHourLegendKey] = useState<string | null>(null);
   const mpHistory = campaign.status_logs?.mp_history || [];
   const timelineDays = useMemo(() => [...buildCampaignStatusTimelineDays(campaign)].reverse(), [campaign]);
   const hourlyDays = useMemo(
@@ -5593,7 +5692,15 @@ function CampaignStatusCard({
                         {hourSlots.map((slot) => (
                           <span
                             key={`${campaign.id}-status-ribbon-slot-${day.day}-${slot.hour}`}
-                            className={cn("campaign-status-ribbon-hour", `is-${slot.variant}`)}
+                            className={cn(
+                              "campaign-status-ribbon-hour",
+                              `is-${slot.variant}`,
+                              hoveredHourLegendKey
+                                ? slot.legendKey === hoveredHourLegendKey
+                                  ? "is-hover-match"
+                                  : "is-hover-dim"
+                                : null,
+                            )}
                             title={`${day.label} · ${slot.title}`}
                           />
                         ))}
@@ -5603,12 +5710,28 @@ function CampaignStatusCard({
                 })}
               </div>
               {hourLegendItems.length ? (
-                <div className="campaign-status-strip-legend">
+                <div className="campaign-status-hours-legend">
                   {hourLegendItems.map((item) => (
-                    <span key={`${campaign.id}-status-legend-${item.key}`} className="campaign-status-strip-legend-item">
-                      <span className={cn("campaign-status-strip-legend-dot", `is-${item.variant}`)} aria-hidden="true" />
+                    <button
+                      key={`${campaign.id}-status-legend-${item.key}`}
+                      type="button"
+                      className={cn(
+                        "campaign-status-hours-legend-bubble",
+                        `is-${item.variant}`,
+                        hoveredHourLegendKey
+                          ? item.key === hoveredHourLegendKey
+                            ? "is-filter-active"
+                            : "is-filter-dim"
+                          : null,
+                      )}
+                      onMouseEnter={() => setHoveredHourLegendKey(item.key)}
+                      onMouseLeave={() => setHoveredHourLegendKey(null)}
+                      onFocus={() => setHoveredHourLegendKey(item.key)}
+                      onBlur={() => setHoveredHourLegendKey(null)}
+                    >
+                      <span className={cn("campaign-status-hours-legend-dot", `is-${item.variant}`)} aria-hidden="true" />
                       <span>{item.label}</span>
-                    </span>
+                    </button>
                   ))}
                 </div>
               ) : null}
@@ -5726,11 +5849,15 @@ function CampaignClustersContent({
   campaign,
   isWildberries,
   productAverageCheck,
+  periodStart,
+  periodEnd,
   openClusterDialog,
 }: {
   campaign: CampaignSummary;
   isWildberries: boolean;
   productAverageCheck: number | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
   openClusterDialog: (campaignId: number, campaignName: string, cluster: ClusterItem) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -5782,6 +5909,11 @@ function CampaignClustersContent({
     [visibleRows, clusterPositionDayKeys],
   );
 
+  const clusterTrafficPeriodDays = useMemo(
+    () => countClusterTrafficPeriodDays(periodStart, periodEnd),
+    [periodEnd, periodStart],
+  );
+
   const analyticsCards = useMemo(
     () =>
       activeFilters.map((filterKey) => {
@@ -5789,6 +5921,11 @@ function CampaignClustersContent({
         const expense = rows.reduce((sum, item) => sum + (toNumber(item.expense) ?? 0), 0);
         const clicks = rows.reduce((sum, item) => sum + (toNumber(item.clicks) ?? 0), 0);
         const views = rows.reduce((sum, item) => sum + (toNumber(item.views) ?? 0), 0);
+        const atbs = rows.reduce((sum, item) => sum + (toNumber(item.atbs) ?? 0), 0);
+        const orders = rows.reduce((sum, item) => sum + (toNumber(item.orders) ?? 0), 0);
+        const queryDemandPerDay = rows.reduce((sum, item) => sum + (toNumber(item.popularity) ?? 0) / 7, 0);
+        const trafficCapacity = queryDemandPerDay * clusterTrafficPeriodDays;
+        const trafficShare = trafficCapacity > 0 ? (views / trafficCapacity) * 100 : null;
         const config = {
           enabled: {
             label: "Включены",
@@ -5811,9 +5948,13 @@ function CampaignClustersContent({
           expense,
           clicks,
           views,
+          atbs,
+          orders,
+          trafficCapacity,
+          trafficShare,
         };
       }),
-    [activeFilters, campaign.clusters.items],
+    [activeFilters, campaign.clusters.items, clusterTrafficPeriodDays],
   );
 
   const excludedClustersCount = useMemo(
@@ -5831,10 +5972,25 @@ function CampaignClustersContent({
     [campaign.clusters.max_rules_available, isWildberries],
   );
 
-  const currentRulesUsed = useMemo(
-    () => toNumber(campaign.clusters.current_rules_used),
-    [campaign.clusters.current_rules_used],
-  );
+  const excludedClusterTraffic = useMemo(() => {
+    const rows = campaign.clusters.items.filter((item) => matchesClusterFilter(item, ["excluded"]));
+    const expense = rows.reduce((sum, item) => sum + (toNumber(item.expense) ?? 0), 0);
+    const views = rows.reduce((sum, item) => sum + (toNumber(item.views) ?? 0), 0);
+    const clicks = rows.reduce((sum, item) => sum + (toNumber(item.clicks) ?? 0), 0);
+    const atbs = rows.reduce((sum, item) => sum + (toNumber(item.atbs) ?? 0), 0);
+    const orders = rows.reduce((sum, item) => sum + (toNumber(item.orders) ?? 0), 0);
+    const queryDemandPerDay = rows.reduce((sum, item) => sum + (toNumber(item.popularity) ?? 0) / 7, 0);
+    const trafficCapacity = queryDemandPerDay * clusterTrafficPeriodDays;
+    return {
+      expense,
+      views,
+      clicks,
+      atbs,
+      orders,
+      trafficCapacity,
+      trafficShare: trafficCapacity > 0 ? (views / trafficCapacity) * 100 : null,
+    };
+  }, [campaign.clusters.items, clusterTrafficPeriodDays]);
 
   const filterButtons: Array<{
     key: ClusterFilterMode;
@@ -5934,12 +6090,17 @@ function CampaignClustersContent({
         </div>
 
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-[18px] border border-[#282a36] bg-white px-4 py-3">
+          <div className="rounded-[18px] border border-slate-200 bg-slate-50/70 px-4 py-3 text-[var(--color-ink)]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Исключённые</div>
+                <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">кластеры</div>
                 <strong className="mt-2 block font-display text-[1.5rem] leading-none text-[var(--color-ink)]">
                   {formatNumber(excludedClustersCount)}
+                </strong>
+                <div className="mt-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">расход</div>
+                <strong className="mt-2 block font-display text-[1.5rem] leading-none text-[var(--color-ink)]">
+                  {formatMoney(excludedClusterTraffic.expense)}
                 </strong>
               </div>
               <div
@@ -5954,12 +6115,19 @@ function CampaignClustersContent({
                 <Info className="size-3.5 shrink-0" />
               </div>
             </div>
-            <div className="mt-3 text-[12px] leading-5 text-[var(--color-muted)]">
-              {currentRulesUsed !== null && excludedRulesLimit !== null
-                ? `Использовано правил: ${formatNumber(currentRulesUsed)} из ${formatNumber(excludedRulesLimit)}`
-                : excludedRulesLimit !== null
-                  ? `Лимит исключений: ${formatNumber(excludedRulesLimit)}`
-                  : "Лимит исключений не задан"}
+            <div className="mt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">трафик периода</div>
+              <div className="mt-1 flex items-end justify-between gap-3">
+                <strong className="font-display text-[1.1rem] leading-none text-[var(--color-ink)]">
+                  {excludedClusterTraffic.trafficShare !== null ? formatPercent(excludedClusterTraffic.trafficShare) : "—"}
+                </strong>
+              </div>
+              <div className="mt-1 text-[11px] leading-none text-[var(--color-muted)]">
+                ({formatCompactNumber(excludedClusterTraffic.views)} / {formatCompactNumber(Math.round(excludedClusterTraffic.trafficCapacity || 0))})
+              </div>
+            </div>
+            <div className="mt-3 text-[11px] font-medium text-[var(--color-muted)]">
+              {formatNumber(excludedClusterTraffic.views)} просмотров &gt; {formatNumber(excludedClusterTraffic.clicks)} кликов &gt; {formatNumber(excludedClusterTraffic.atbs)} корзин &gt; {formatNumber(excludedClusterTraffic.orders)} заказов
             </div>
           </div>
 
@@ -5969,18 +6137,26 @@ function CampaignClustersContent({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.16em]">{card.label}</span>
+                    <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-60">кластеры</div>
                     <strong className="mt-2 block font-display text-[1.5rem] leading-none">
                       {formatNumber(card.count)}
                     </strong>
+                    <div className="mt-3 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-60">расход</div>
                     <strong className="mt-2 block font-display text-[1.5rem] leading-none">
                       {formatMoney(card.expense)}
                     </strong>
+                    <div className="mt-3 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-60">трафик периода</div>
+                    <strong className="mt-2 block font-display text-[1.2rem] leading-none">
+                      {card.trafficShare !== null ? formatPercent(card.trafficShare) : "—"}
+                    </strong>
+                    <div className="mt-1 text-[11px] leading-none opacity-70">
+                      ({formatCompactNumber(card.views)} / {formatCompactNumber(Math.round(card.trafficCapacity || 0))})
+                    </div>
                   </div>
-                  <span className="pt-0.5 text-[11px] font-semibold opacity-75">кл.</span>
                 </div>
-                <div className="mt-3 flex items-end justify-end gap-3">
+                <div className="mt-3">
                   <span className="text-[11px] font-medium opacity-80">
-                    {formatNumber(card.clicks)} кликов · {formatNumber(card.views)} показов
+                    {formatNumber(card.views)} просмотров &gt; {formatNumber(card.clicks)} кликов &gt; {formatNumber(card.atbs)} корзин &gt; {formatNumber(card.orders)} заказов
                   </span>
                 </div>
               </div>
@@ -6330,6 +6506,8 @@ function ProductClustersPanel({
         campaign={activeCampaign}
         isWildberries={isWildberries}
         productAverageCheck={productAverageCheck}
+        periodStart={product.period.current_start}
+        periodEnd={product.period.current_end}
         openClusterDialog={openClusterDialog}
       />
     </LegacySection>
@@ -6952,9 +7130,9 @@ export function ProductPage() {
       const budgetHeight = budgetNode.getBoundingClientRect().height;
       const styles = window.getComputedStyle(leftSideNode);
       const gap = Number.parseFloat(styles.rowGap || styles.gap || "0") || 0;
-      const nextHeight = Math.max(Math.round(budgetHeight - signalsHeight - gap), 0);
+      const nextHeight = Math.max(budgetHeight - signalsHeight - gap, 0);
 
-      setOverviewHeatmapHeight((current) => (current === nextHeight ? current : nextHeight));
+      setOverviewHeatmapHeight((current) => (current !== null && Math.abs(current - nextHeight) < 0.5 ? current : nextHeight));
     };
 
     updateOverviewHeatmapHeight();
@@ -7510,7 +7688,7 @@ export function ProductPage() {
                       className="campaign-inline-heatmap product-hero-heatmap product-overview-heatmap is-compact is-inline-row"
                       style={
                         overviewHeatmapHeight !== null
-                          ? { height: `${overviewHeatmapHeight}px`, minHeight: `${overviewHeatmapHeight}px` }
+                          ? { height: `${overviewHeatmapHeight}px` }
                           : undefined
                       }
                     >

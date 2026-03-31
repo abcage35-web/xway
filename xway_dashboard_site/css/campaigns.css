@@ -393,6 +393,94 @@
   gap: 12px;
 }
 
+.campaign-status-hours-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.campaign-status-hours-legend-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(215, 221, 239, 0.9);
+  border-radius: 999px;
+  background: rgba(248, 247, 252, 0.92);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.campaign-status-hours-legend-bubble.is-filter-active {
+  box-shadow: 0 10px 22px rgba(44, 35, 66, 0.12);
+  transform: translateY(-1px);
+}
+
+.campaign-status-hours-legend-bubble.is-filter-dim {
+  opacity: 0.52;
+}
+
+.campaign-status-hours-legend-dot {
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: rgba(224, 231, 255, 0.46);
+}
+
+.campaign-status-hours-legend-bubble.is-active {
+  border-color: rgba(138, 220, 180, 0.72);
+  background: rgba(236, 251, 244, 0.92);
+}
+
+.campaign-status-hours-legend-bubble.is-freeze {
+  border-color: rgba(144, 177, 255, 0.72);
+  background: rgba(238, 244, 255, 0.92);
+}
+
+.campaign-status-hours-legend-bubble.is-paused,
+.campaign-status-hours-legend-bubble.is-paused-schedule {
+  border-color: rgba(181, 157, 250, 0.74);
+  background: rgba(244, 239, 255, 0.92);
+}
+
+.campaign-status-hours-legend-bubble.is-paused-limit,
+.campaign-status-hours-legend-bubble.is-paused-budget,
+.campaign-status-hours-legend-bubble.is-paused-mixed {
+  border-color: rgba(233, 146, 146, 0.76);
+  background: rgba(255, 239, 239, 0.94);
+}
+
+.campaign-status-hours-legend-dot.is-active {
+  background: rgba(62, 157, 105, 0.88);
+}
+
+.campaign-status-hours-legend-dot.is-freeze {
+  background: rgba(75, 123, 255, 0.9);
+}
+
+.campaign-status-hours-legend-dot.is-paused,
+.campaign-status-hours-legend-dot.is-paused-schedule {
+  background: rgba(139, 100, 246, 0.92);
+}
+
+.campaign-status-hours-legend-dot.is-paused-limit,
+.campaign-status-hours-legend-dot.is-paused-budget,
+.campaign-status-hours-legend-dot.is-paused-mixed {
+  background: rgba(215, 95, 95, 0.94);
+}
+
 .campaign-status-hours-slider {
   display: flex;
   align-items: stretch;
@@ -415,6 +503,28 @@
 
 .campaign-status-hours-slider .campaign-status-ribbon-card + .campaign-status-ribbon-card {
   border-left: 1px dashed rgba(196, 202, 224, 0.92);
+}
+
+.campaign-status-ribbon-hour {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.campaign-status-ribbon-hour.is-hover-match {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.54) inset,
+    0 8px 16px rgba(44, 35, 66, 0.12);
+}
+
+.campaign-status-ribbon-hour.is-hover-dim {
+  background: rgba(221, 225, 236, 0.84) !important;
+  border-color: rgba(204, 210, 226, 0.96) !important;
+  opacity: 0.52;
 }
 
 .campaign-status-strip-axis {
@@ -2800,6 +2910,7 @@
 
 .schedule-grid-card-wrapper {
   position: relative;
+  width: 100%;
   border-radius: inherit;
 }
 
@@ -2818,6 +2929,8 @@
 }
 
 .schedule-modern-canvas {
+  width: 100%;
+  min-width: 100%;
   overflow: hidden;
   border-radius: inherit;
 }
