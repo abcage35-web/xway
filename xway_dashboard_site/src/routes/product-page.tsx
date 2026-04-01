@@ -632,6 +632,7 @@ interface BoardMetricCell {
   value: string;
   delta?: string | null;
   deltaGood?: boolean;
+  hint?: ReactNode;
   action?: ReactNode;
   inlineMetrics?: Array<{
     label: string;
@@ -858,6 +859,214 @@ function buildCampaignMetrics(campaign: CampaignSummary) {
     drrAtbsSeries: buildCampaignMetricSeries(campaign, (row) => computeDrrAtbs(row.expense_sum, row.sum_price, row.orders, row.atbs)),
     drrOrdersSeries: buildCampaignMetricSeries(campaign, (row) => computeDrr(row.expense_sum, row.sum_price)),
   };
+}
+
+type CampaignZoneMetricKey = "views" | "clicks";
+type CampaignZoneKey = "search" | "recom";
+
+const CAMPAIGN_ZONE_RAW_FIELD_CANDIDATES: Record<CampaignZoneKey, Record<CampaignZoneMetricKey, string[]>> = {
+  search: {
+    views: ["search_views", "views_search", "viewsSearch", "searchViews"],
+    clicks: ["search_clicks", "clicks_search", "clicksSearch", "searchClicks"],
+  },
+  recom: {
+    views: [
+      "recom_views",
+      "views_recom",
+      "viewsRecom",
+      "recomViews",
+      "recommend_views",
+      "views_recommendation",
+      "recommendation_views",
+      "recommendationViews",
+      "recommendations_views",
+    ],
+    clicks: [
+      "recom_clicks",
+      "clicks_recom",
+      "clicksRecom",
+      "recomClicks",
+      "recommend_clicks",
+      "clicks_recommendation",
+      "recommendation_clicks",
+      "recommendationClicks",
+      "recommendations_clicks",
+    ],
+  },
+};
+
+const CAMPAIGN_ZONE_RAW_NESTED_KEYS: Record<CampaignZoneKey, string[]> = {
+  search: ["search"],
+  recom: ["recom", "recommendation", "recommendations", "recs"],
+};
+
+const CAMPAIGN_ZONE_RAW_CONTAINER_KEYS = [
+  "stat",
+  "stats",
+  "metrics",
+  "summary",
+  "result",
+  "report",
+  "zones",
+] as const;
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readCampaignZoneMetricFromContainer(
+  container: Record<string, unknown>,
+  zone: CampaignZoneKey,
+  metric: CampaignZoneMetricKey,
+) {
+  for (const field of CAMPAIGN_ZONE_RAW_FIELD_CANDIDATES[zone][metric]) {
+    const value = toNumber(container[field] as number | string | null | undefined);
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  const metricAliases = metric === "views" ? ["views", "shows", "impressions"] : ["clicks"];
+  for (const nestedKey of CAMPAIGN_ZONE_RAW_NESTED_KEYS[zone]) {
+    const nested = container[nestedKey];
+    if (!isRecordLike(nested)) {
+      continue;
+    }
+    for (const alias of metricAliases) {
+      const value = toNumber(nested[alias] as number | string | null | undefined);
+      if (value !== null) {
+        return value;
+      }
+      const countValue = toNumber(nested[`${alias}_count`] as number | string | null | undefined);
+      if (countValue !== null) {
+        return countValue;
+      }
+    }
+  }
+
+  return null;
+}
+
+function pickCampaignZoneMetricFromApi(
+  campaign: CampaignSummary,
+  zone: CampaignZoneKey,
+  metric: CampaignZoneMetricKey,
+) {
+  const raw = campaign.raw;
+  if (!isRecordLike(raw)) {
+    return null;
+  }
+
+  const containers: Record<string, unknown>[] = [raw];
+  CAMPAIGN_ZONE_RAW_CONTAINER_KEYS.forEach((key) => {
+    const candidate = raw[key];
+    if (isRecordLike(candidate)) {
+      containers.push(candidate);
+    }
+  });
+
+  for (const container of containers) {
+    const value = readCampaignZoneMetricFromContainer(container, zone, metric);
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function sumCampaignClusterMetric(campaign: CampaignSummary, metric: CampaignZoneMetricKey) {
+  let hasValue = false;
+  let total = 0;
+  for (const cluster of campaign.clusters.items) {
+    const value = toNumber(metric === "views" ? cluster.views : cluster.clicks);
+    if (value === null) {
+      continue;
+    }
+    hasValue = true;
+    total += value;
+  }
+  return hasValue ? total : null;
+}
+
+function clampMetricShare(value: number, total: number) {
+  return Math.min(Math.max(value, 0), total);
+}
+
+function formatCampaignZoneShareHint(campaign: CampaignSummary, metric: CampaignZoneMetricKey, total: number | null) {
+  const totalValue = toNumber(total);
+  if (totalValue === null || totalValue <= 0) {
+    return null;
+  }
+
+  const zones = resolveCampaignZoneBadges(campaign);
+  const hasSearch = zones.some((zone) => zone.key === "search");
+  const hasRecom = zones.some((zone) => zone.key === "recom");
+  const searchFromApi = hasSearch ? pickCampaignZoneMetricFromApi(campaign, "search", metric) : null;
+  const recomFromApi = hasRecom ? pickCampaignZoneMetricFromApi(campaign, "recom", metric) : null;
+  const searchFromClusters = hasSearch ? sumCampaignClusterMetric(campaign, metric) : null;
+
+  let searchCount = searchFromApi;
+  let recomCount = recomFromApi;
+
+  if (hasSearch && hasRecom) {
+    if (searchCount === null && searchFromClusters !== null) {
+      searchCount = searchFromClusters;
+    }
+    if (searchCount !== null) {
+      searchCount = clampMetricShare(searchCount, totalValue);
+    }
+    if (recomCount !== null) {
+      recomCount = clampMetricShare(recomCount, totalValue);
+    }
+
+    if (searchCount === null && recomCount !== null) {
+      searchCount = Math.max(totalValue - recomCount, 0);
+    }
+    if (recomCount === null && searchCount !== null) {
+      recomCount = Math.max(totalValue - searchCount, 0);
+    }
+    if (searchCount === null && recomCount === null) {
+      searchCount = totalValue;
+      recomCount = 0;
+    }
+
+    const combined = (searchCount ?? 0) + (recomCount ?? 0);
+    if (combined > totalValue) {
+      if (searchFromApi !== null && recomFromApi === null) {
+        recomCount = Math.max(totalValue - (searchCount ?? 0), 0);
+      } else if (recomFromApi !== null && searchFromApi === null) {
+        searchCount = Math.max(totalValue - (recomCount ?? 0), 0);
+      } else {
+        const scaledSearch = Math.round(((searchCount ?? 0) / combined) * totalValue);
+        searchCount = scaledSearch;
+        recomCount = Math.max(totalValue - scaledSearch, 0);
+      }
+    } else if (combined < totalValue) {
+      if (recomCount !== null) {
+        recomCount += totalValue - combined;
+      } else if (searchCount !== null) {
+        searchCount += totalValue - combined;
+      }
+    }
+  } else if (hasSearch) {
+    searchCount = clampMetricShare(searchFromApi ?? searchFromClusters ?? totalValue, totalValue);
+  } else if (hasRecom) {
+    recomCount = clampMetricShare(recomFromApi ?? totalValue, totalValue);
+  }
+
+  const parts = zones
+    .map((zone) => {
+      const count = zone.key === "search" ? searchCount : recomCount;
+      if (count === null) {
+        return null;
+      }
+      const share = (count / totalValue) * 100;
+      return `${zone.label} ${formatPercent(share, 1)}`;
+    })
+    .filter((value): value is string => Boolean(value));
+
+  return parts.length ? parts.join(" · ") : null;
 }
 
 function resolveCompareCampaign(campaign: CampaignSummary, compareProduct?: ProductSummary | null) {
@@ -3314,6 +3523,7 @@ function PerformanceCell({ cell }: { cell: BoardMetricCell }) {
         <strong className="font-display text-[1.15rem] leading-none text-[var(--color-ink)]">{cell.value}</strong>
         {cell.delta ? <span className={cn("text-[11px] font-semibold leading-none", cell.deltaGood === undefined ? "text-[var(--color-muted)]" : cell.deltaGood ? "text-emerald-600" : "text-rose-500")}>({cell.delta})</span> : null}
       </div>
+      {cell.hint ? <div className="mt-1 text-[10px] leading-tight text-[var(--color-muted)]">{cell.hint}</div> : null}
     </div>
   );
 }
@@ -3722,6 +3932,8 @@ function CampaignPerformanceBoard({
 }) {
   const current = buildCampaignMetrics(campaign);
   const previous = compareCampaign ? buildCampaignMetrics(compareCampaign) : null;
+  const viewsZoneHint = formatCampaignZoneShareHint(campaign, "views", current.views);
+  const clicksZoneHint = formatCampaignZoneShareHint(campaign, "clicks", current.clicks);
   const compareDiff = (currentValue: number | string | null | undefined, previousValue: number | string | null | undefined) => {
     if (!compareCampaign) {
       return null;
@@ -3742,6 +3954,7 @@ function CampaignPerformanceBoard({
         value: formatBoardCount(current.views, true),
         delta: formatSignedNumber(compareDiff(current.views, previous?.views)),
         deltaGood: (compareDiff(current.views, previous?.views) ?? 0) >= 0,
+        hint: viewsZoneHint,
       },
       cost: {
         label: "CPM",
@@ -3759,6 +3972,7 @@ function CampaignPerformanceBoard({
         value: formatBoardCount(current.clicks),
         delta: formatSignedNumber(compareDiff(current.clicks, previous?.clicks)),
         deltaGood: (compareDiff(current.clicks, previous?.clicks) ?? 0) >= 0,
+        hint: clicksZoneHint,
       },
       cost: {
         label: "CPC",
@@ -4325,7 +4539,7 @@ function PerformanceOverviewBoard({
               </div>
               <div className="mb-2 grid grid-cols-2 gap-x-4 gap-y-2">
                 {rowKeys
-                  .filter((rowKey) => column[rowKey].label || column[rowKey].inlineMetrics?.length)
+                  .filter((rowKey) => column[rowKey].label || column[rowKey].value || column[rowKey].hint || column[rowKey].inlineMetrics?.length)
                   .map((rowKey) => (
                     column[rowKey].inlineMetrics?.length ? (
                       <div key={rowKey} className="col-span-2">
@@ -4338,6 +4552,7 @@ function PerformanceOverviewBoard({
                           <strong className="font-display text-[1rem] text-[var(--color-ink)]">{column[rowKey].value}</strong>
                           {column[rowKey].delta ? <span className={cn("text-[10px] font-semibold", column[rowKey].deltaGood === undefined ? "text-[var(--color-muted)]" : column[rowKey].deltaGood ? "text-emerald-600" : "text-rose-500")}>({column[rowKey].delta})</span> : null}
                         </div>
+                        {column[rowKey].hint ? <div className="mt-1 text-[10px] leading-tight text-[var(--color-muted)]">{column[rowKey].hint}</div> : null}
                       </div>
                     )
                   ))}

@@ -391,6 +391,7 @@ export interface CampaignSummary {
   clusters: ClusterPayload;
   schedule_config?: CampaignScheduleConfig;
   status_logs?: CampaignStatusLogs;
+  raw?: Record<string, unknown>;
 }
 
 export interface ProductStocksRule {
