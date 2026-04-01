@@ -2174,7 +2174,8 @@ body.page-view-articles .article-nav-inline {
 }
 
 .campaign-card-meta-side.is-inline {
-  flex: 0 1 auto;
+  width: 100%;
+  min-width: 0;
 }
 
 .campaign-card-meta-side-line {
@@ -2226,6 +2227,7 @@ body.page-view-articles .article-nav-inline {
   }
 
   .campaign-card-head-top {
+    grid-template-columns: minmax(0, 1fr);
     align-items: flex-start;
   }
 
@@ -2290,19 +2292,21 @@ body.page-view-articles .article-nav-inline {
 }
 
 .campaign-card-head-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 244px;
+  align-items: start;
   gap: 12px;
 }
 
 .campaign-card-head-top-side {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  justify-items: end;
   gap: 10px;
   min-width: 0;
   margin-left: auto;
+  width: 244px;
 }
 
 .campaign-card-head-pills {

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Check, ChevronDown, ExternalLink, Info, Maximize2, Minus, Pause, Pin, Play, Plus, Search, Snowflake, Star, ThumbsUp, X } from "lucide-react";
-import Marquee from "react-fast-marquee";
-import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import MarqueeImport from "react-fast-marquee";
+import type { CSSProperties, ElementType, MouseEvent, ReactNode } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData, useNavigate, useNavigation, useRevalidator } from "react-router";
 import {
@@ -91,6 +91,8 @@ const HOURS_SECTION_WINDOWS = [
   { value: "14", label: "14" },
   { value: "30", label: "30" },
 ] as const;
+
+const Marquee = ((MarqueeImport as unknown as { default?: ElementType }).default ?? MarqueeImport) as ElementType;
 
 type HoursSectionWindowPreset = (typeof HOURS_SECTION_WINDOWS)[number]["value"];
 
@@ -3900,6 +3902,14 @@ function SpendAccentCard({
   );
 }
 
+function BoardHintCard({ text }: { text: string | null }) {
+  return (
+    <div className="flex min-h-[60px] items-center px-2 py-2">
+      {text ? <div className="text-[11px] leading-tight text-[var(--color-muted)]">{text}</div> : <div className="min-h-[24px]" />}
+    </div>
+  );
+}
+
 function CampaignKeyTile({
   label,
   value,
@@ -3954,7 +3964,7 @@ function CampaignPerformanceBoard({
         value: formatBoardCount(current.views, true),
         delta: formatSignedNumber(compareDiff(current.views, previous?.views)),
         deltaGood: (compareDiff(current.views, previous?.views) ?? 0) >= 0,
-        hint: viewsZoneHint,
+        hint: null,
       },
       cost: {
         label: "CPM",
@@ -3963,7 +3973,7 @@ function CampaignPerformanceBoard({
         deltaGood: (compareDiff(current.cpm, previous?.cpm) ?? 0) <= 0,
       },
       rate: EMPTY_BOARD_CELL,
-      highlight: null,
+      highlight: <BoardHintCard text={viewsZoneHint} />,
     },
     {
       stage: "Клики",
@@ -3972,7 +3982,7 @@ function CampaignPerformanceBoard({
         value: formatBoardCount(current.clicks),
         delta: formatSignedNumber(compareDiff(current.clicks, previous?.clicks)),
         deltaGood: (compareDiff(current.clicks, previous?.clicks) ?? 0) >= 0,
-        hint: clicksZoneHint,
+        hint: null,
       },
       cost: {
         label: "CPC",
@@ -3986,7 +3996,7 @@ function CampaignPerformanceBoard({
         delta: formatSignedPercent(compareDiff(current.ctr, previous?.ctr)),
         deltaGood: (compareDiff(current.ctr, previous?.ctr) ?? 0) >= 0,
       },
-      highlight: null,
+      highlight: <BoardHintCard text={clicksZoneHint} />,
     },
     {
       stage: "Корзины",
