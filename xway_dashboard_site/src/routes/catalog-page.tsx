@@ -418,6 +418,7 @@ function CatalogStickyFilterShell({
   toolbar,
   filters,
   onHeightChange,
+  activeFiltersCount = 0,
 }: {
   toolbar: (controls: {
     collapseAll: () => void;
@@ -426,6 +427,7 @@ function CatalogStickyFilterShell({
   }) => ReactNode;
   filters: ReactNode;
   onHeightChange: (height: number) => void;
+  activeFiltersCount?: number;
 }) {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") {
@@ -458,6 +460,12 @@ function CatalogStickyFilterShell({
     }
     window.localStorage.setItem(CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY, detailsExpanded ? "1" : "0");
   }, [detailsExpanded]);
+
+  useEffect(() => {
+    if (activeFiltersCount > 0 && !collapsed && !detailsExpanded) {
+      setDetailsExpanded(true);
+    }
+  }, [activeFiltersCount, collapsed, detailsExpanded]);
 
   useEffect(() => {
     if (!rootRef.current || !innerRef.current) {
@@ -518,7 +526,7 @@ function CatalogStickyFilterShell({
             className="flex h-8 items-center gap-2 rounded-full bg-[var(--color-surface-soft)] px-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
           >
             <SlidersHorizontal className="size-4" />
-            Фильтры
+            {activeFiltersCount > 0 ? `Фильтры · ${formatNumber(activeFiltersCount)}` : "Фильтры"}
             <ChevronDown className="size-4" />
           </button>
         </div>
@@ -1159,6 +1167,13 @@ export function CatalogPage() {
     setSortField("stock");
     setSortDirection("desc");
   };
+  const activeListFilterCount =
+    (query.trim() ? 1 : 0) +
+    (selectedShopIds.length ? 1 : 0) +
+    (selectedCategories.length ? 1 : 0) +
+    (selectedSkus.length ? 1 : 0) +
+    (stockFrom || stockTo ? 1 : 0) +
+    (turnoverFrom || turnoverTo ? 1 : 0);
 
   const collectArticleIssues = async () => {
     articleIssuesAbortRef.current?.abort();
@@ -1284,6 +1299,7 @@ export function CatalogPage() {
 
       <CatalogStickyFilterShell
         onHeightChange={setToolbarHeight}
+        activeFiltersCount={activeListFilterCount}
         toolbar={({ collapseAll, detailsExpanded, toggleDetails }) => (
           <RangeToolbar
             start={start}
@@ -1309,12 +1325,27 @@ export function CatalogPage() {
                   <SlidersHorizontal className="size-4" />
                   Скрыть фильтры
                 </button>
+                {activeListFilterCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={clearLocalFilters}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
+                  >
+                    Сбросить выборку
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={toggleDetails}
-                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
+                  className={cn(
+                    "metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm transition hover:bg-[var(--color-surface-strong)]",
+                    activeListFilterCount > 0 ? "text-brand-200" : "text-[var(--color-ink)]",
+                  )}
                 >
-                  <span>{detailsExpanded ? "Свернуть параметры" : "Параметры списка"}</span>
+                  <span>
+                    {detailsExpanded ? "Свернуть параметры" : "Параметры списка"}
+                    {activeListFilterCount > 0 ? ` · ${formatNumber(activeListFilterCount)}` : ""}
+                  </span>
                   <ChevronDown className={cn("size-4 transition-transform", detailsExpanded && "rotate-180")} />
                 </button>
               </>
