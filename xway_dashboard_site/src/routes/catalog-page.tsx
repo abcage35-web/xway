@@ -2,10 +2,12 @@ import { useDeferredValue, useEffect, useRef, useState, startTransition } from "
 import { ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, Snowflake, ThumbsUp } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
-import { fetchCatalog } from "../lib/api";
+import { fetchCatalog, fetchCatalogChart } from "../lib/api";
 import { buildPresetRange, cn, formatCompactNumber, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, shiftIsoDate, toNumber } from "../lib/format";
-import type { CatalogArticle, CatalogCampaignState, CatalogResponse, CatalogShop } from "../lib/types";
-import { InlineMetricSet, KeyValueRow, MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
+import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
+import { CatalogSelectionChart } from "../components/catalog-selection-chart";
+import { SearchableMultiSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
+import { InlineMetricSet, MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
 
 interface CatalogLoaderData {
   payload: CatalogResponse;
@@ -14,6 +16,7 @@ interface CatalogLoaderData {
   end?: string | null;
 }
 
+type CatalogChartWindow = 7 | 14 | 30 | 60;
 type CatalogCampaignSlotKind = "unified" | "manual" | "cpc";
 type CatalogCampaignDisplayStatus = "active" | "paused" | "freeze" | "muted";
 
@@ -224,6 +227,20 @@ function buildProductSearch(article: string, start?: string | null, end?: string
   return `?${params.toString()}`;
 }
 
+function resolveCatalogChartWindow(spanDays: number | null | undefined): CatalogChartWindow {
+  const numeric = Number(spanDays || 0);
+  if (numeric <= 7) {
+    return 7;
+  }
+  if (numeric <= 14) {
+    return 14;
+  }
+  if (numeric <= 30) {
+    return 30;
+  }
+  return 60;
+}
+
 export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<CatalogLoaderData> {
   const url = new URL(request.url);
   const start = url.searchParams.get("start");
@@ -253,17 +270,132 @@ function articleMatches(article: CatalogArticle, query: string) {
   return haystack.includes(query);
 }
 
-function filterShops(payload: CatalogResponse, query: string) {
+function normalizeCategoryValue(value: string | null | undefined) {
+  return String(value || "").trim() || "__empty__";
+}
+
+function formatCategoryLabel(value: string | null | undefined) {
+  return String(value || "").trim() || "Без категории";
+}
+
+function buildShopOptions(payload: CatalogResponse): SearchableMultiSelectOption[] {
+  return payload.shops
+    .map((shop) => ({
+      value: String(shop.id),
+      label: shop.name,
+      searchText: [shop.marketplace, shop.tariff_code, shop.name].filter(Boolean).join(" "),
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, "ru"));
+}
+
+function buildCategoryOptions(payload: CatalogResponse): SearchableMultiSelectOption[] {
+  const byCategory = new Map<string, SearchableMultiSelectOption>();
+  payload.shops.forEach((shop) => {
+    shop.articles.forEach((article) => {
+      const value = normalizeCategoryValue(article.category_keyword);
+      if (!byCategory.has(value)) {
+        byCategory.set(value, {
+          value,
+          label: formatCategoryLabel(article.category_keyword),
+          searchText: [article.category_keyword, article.name, article.brand, shop.name].filter(Boolean).join(" "),
+        });
+      }
+    });
+  });
+  return [...byCategory.values()].sort((left, right) => left.label.localeCompare(right.label, "ru"));
+}
+
+function buildSkuOptions(payload: CatalogResponse): SearchableMultiSelectOption[] {
+  const bySku = new Map<string, SearchableMultiSelectOption>();
+  payload.shops.forEach((shop) => {
+    shop.articles.forEach((article) => {
+      if (bySku.has(article.article)) {
+        return;
+      }
+      bySku.set(article.article, {
+        value: article.article,
+        label: `${article.article} · ${article.name || "Без названия"}`,
+        searchText: [article.article, article.name, article.brand, article.vendor_code, article.category_keyword, shop.name].filter(Boolean).join(" "),
+      });
+    });
+  });
+  return [...bySku.values()].sort((left, right) => left.label.localeCompare(right.label, "ru"));
+}
+
+function formatProductsWord(count: number) {
+  const abs = Math.abs(count) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 19) {
+    return "товаров";
+  }
+  if (last === 1) {
+    return "товар";
+  }
+  if (last >= 2 && last <= 4) {
+    return "товара";
+  }
+  return "товаров";
+}
+
+function summarizeCatalogArticles(articles: CatalogArticle[]) {
+  return articles.reduce(
+    (totals, article) => {
+      totals.views += toNumber(article.views) ?? 0;
+      totals.clicks += toNumber(article.clicks) ?? 0;
+      totals.orders += toNumber(article.orders) ?? 0;
+      totals.expense_sum += toNumber(article.expense_sum) ?? 0;
+      return totals;
+    },
+    {
+      views: 0,
+      clicks: 0,
+      orders: 0,
+      expense_sum: 0,
+    },
+  );
+}
+
+function filterShops(
+  payload: CatalogResponse,
+  filters: {
+    query: string;
+    selectedShopIds: string[];
+    selectedCategories: string[];
+    selectedSkus: string[];
+  },
+) {
   return payload.shops
     .map((shop) => {
-      const articles = shop.articles.filter((article) => articleMatches(article, query));
-      const shopMatches = shop.name.toLowerCase().includes(query);
-      if (query && !articles.length && !shopMatches) {
+      if (filters.selectedShopIds.length && !filters.selectedShopIds.includes(String(shop.id))) {
         return null;
       }
+
+      const baseArticles = shop.articles.filter((article) => {
+        if (filters.selectedCategories.length && !filters.selectedCategories.includes(normalizeCategoryValue(article.category_keyword))) {
+          return false;
+        }
+        if (filters.selectedSkus.length && !filters.selectedSkus.includes(article.article)) {
+          return false;
+        }
+        return true;
+      });
+
+      if (!baseArticles.length) {
+        return null;
+      }
+
+      const shopMatches = shop.name.toLowerCase().includes(filters.query);
+      const articles = filters.query
+        ? (shopMatches ? baseArticles : baseArticles.filter((article) => articleMatches(article, filters.query)))
+        : baseArticles;
+
+      if (!articles.length) {
+        return null;
+      }
+
       return {
         ...shop,
-        articles: query && shopMatches && !articles.length ? shop.articles : articles.length ? articles : shop.articles,
+        articles,
       };
     })
     .filter(Boolean) as CatalogShop[];
@@ -273,12 +405,41 @@ export function CatalogPage() {
   const { payload, comparePayload, start, end } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+  const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
+  const [chartCollapsed, setChartCollapsed] = useState(false);
+  const [chartWindow, setChartWindow] = useState<CatalogChartWindow>(() => resolveCatalogChartWindow(payload.range.span_days));
+  const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState<string | null>(null);
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const chartFetchAbortRef = useRef<AbortController | null>(null);
 
-  const visibleShops = filterShops(payload, deferredQuery);
+  const shopOptions = buildShopOptions(payload);
+  const categoryOptions = buildCategoryOptions(payload);
+  const skuOptions = buildSkuOptions(payload);
+  const visibleShops = filterShops(payload, {
+    query: deferredQuery,
+    selectedShopIds,
+    selectedCategories,
+    selectedSkus,
+  });
+  const visibleArticles = visibleShops.flatMap((shop) =>
+    shop.articles.map((article) => ({
+      shopId: shop.id,
+      productId: article.product_id,
+    })),
+  );
+  const chartSelectionCount = visibleArticles.length;
+  const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
+  const chartProductRefsKey = chartProductRefs.join(",");
+  const chartRangeEnd = payload.range.current_end;
+  const chartRangeStart = shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
+  const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
   const preset = getRangePreset(start, end);
   const catalogSearch = buildCatalogSearch(start, end);
 
@@ -316,6 +477,63 @@ export function CatalogPage() {
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      chartFetchAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    chartFetchAbortRef.current?.abort();
+    if (chartCollapsed) {
+      setChartLoading(false);
+      setChartError(null);
+      return;
+    }
+    if (!chartSelectionCount) {
+      setChartLoading(false);
+      setChartError(null);
+      setChartData(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    chartFetchAbortRef.current = controller;
+    const timer = window.setTimeout(() => {
+      setChartLoading(true);
+      setChartError(null);
+      setChartData(null);
+      fetchCatalogChart({
+        productRefs: chartProductRefs,
+        start: chartRangeStart,
+        end: chartRangeEnd,
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setChartData(response);
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setChartError(error instanceof Error ? error.message : "Не удалось загрузить агрегированный график.");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setChartLoading(false);
+          }
+        });
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [chartCollapsed, chartProductRefsKey, chartSelectionCount, chartRangeEnd, chartRangeStart]);
 
   const ctr = payload.totals.views > 0 ? (payload.totals.clicks / payload.totals.views) * 100 : 0;
   const cr = payload.totals.clicks > 0 ? (payload.totals.orders / payload.totals.clicks) * 100 : 0;
@@ -359,6 +577,12 @@ export function CatalogPage() {
     return `${numeric > 0 ? "+" : ""}${formatPercent(numeric)}`;
   };
   const renderDeltaText = (value: string | null) => (value ? `${value} к прошлому периоду` : undefined);
+  const clearLocalFilters = () => {
+    setQuery("");
+    setSelectedShopIds([]);
+    setSelectedCategories([]);
+    setSelectedSkus([]);
+  };
 
   return (
     <div className="space-y-6">
@@ -389,9 +613,83 @@ export function CatalogPage() {
           preset={preset}
           onPresetChange={handlePresetChange}
           onRangeChange={handleRangeChange}
-          extra={<SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />}
         />
       </div>
+
+      <SectionCard
+        title="График каталога"
+        caption={`Отображение за ${chartWindow} дн. · ${chartRangeLabel}. Отдельная шкала рассчитывается для каждого показателя, поэтому сильные расхождения по абсолютным значениям не сжимают остальные линии.`}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="chart-window-switch" aria-label="Период графика каталога">
+              {[7, 14, 30, 60].map((windowValue) => (
+                <button
+                  key={windowValue}
+                  type="button"
+                  onClick={() => setChartWindow(windowValue as CatalogChartWindow)}
+                  className={chartWindow === windowValue ? "chart-window-chip is-active" : "chart-window-chip"}
+                >
+                  {windowValue}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setChartCollapsed((current) => !current)}
+              className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+            >
+              {chartCollapsed ? "Показать график" : "Скрыть график"}
+            </button>
+          </div>
+        }
+      >
+        <div className="mb-5 grid w-full gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
+          <div className="min-w-0">
+            <SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />
+          </div>
+          <SearchableMultiSelect
+            label="Кабинет"
+            allLabel="Все кабинеты"
+            options={shopOptions}
+            selectedValues={selectedShopIds}
+            onChange={setSelectedShopIds}
+            emptyText="Кабинеты не найдены"
+          />
+          <SearchableMultiSelect
+            label="Категория"
+            allLabel="Все категории"
+            options={categoryOptions}
+            selectedValues={selectedCategories}
+            onChange={setSelectedCategories}
+            emptyText="Категории не найдены"
+          />
+          <SearchableMultiSelect
+            label="SKU"
+            allLabel="Все SKU"
+            options={skuOptions}
+            selectedValues={selectedSkus}
+            onChange={setSelectedSkus}
+            emptyText="SKU не найдены"
+          />
+        </div>
+
+        {!chartCollapsed ? (
+          <CatalogSelectionChart
+            rows={chartData?.rows ?? []}
+            totals={chartData?.totals ?? null}
+            selectionCount={chartSelectionCount}
+            loadedProductsCount={chartData?.loaded_products_count ?? null}
+            isLoading={chartLoading}
+            error={chartError}
+            rangeLabel={chartRangeLabel}
+            windowDays={chartWindow}
+          />
+        ) : (
+          <div className="text-sm text-[var(--color-muted)]">
+            График скрыт. В текущую выборку попало {formatNumber(chartSelectionCount)} {formatProductsWord(chartSelectionCount)}. При открытии он загрузится отдельно за последние {chartWindow} дн.
+          </div>
+        )}
+      </SectionCard>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
         <MetricCard
@@ -448,7 +746,7 @@ export function CatalogPage() {
       <div className="space-y-5">
         {visibleShops.map((shop) => {
           const collapsed = collapsedShopIds.includes(String(shop.id));
-          const totals = shop.listing_meta?.shop_totals;
+          const totals = summarizeCatalogArticles(shop.articles);
 
           return (
             <SectionCard
@@ -475,11 +773,11 @@ export function CatalogPage() {
                 <InlineMetricSet
                   values={[
                     { label: "Артикулы", value: formatNumber(shop.articles.length) },
-                    { label: "Показы", value: formatCompactNumber(totals?.views) },
-                    { label: "Клики", value: formatCompactNumber(totals?.clicks) },
-                    { label: "Заказы", value: formatNumber(totals?.orders) },
-                    { label: "Расход", value: formatMoney(totals?.sum) },
-                    { label: "CR", value: formatPercent(totals?.cr) },
+                    { label: "Показы", value: formatCompactNumber(totals.views) },
+                    { label: "Клики", value: formatCompactNumber(totals.clicks) },
+                    { label: "Заказы", value: formatNumber(totals.orders) },
+                    { label: "Расход", value: formatMoney(totals.expense_sum) },
+                    { label: "CR", value: formatPercent(totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null) },
                     { label: "Баланс", value: formatMoney(shop.balance) },
                     {
                       label: "Магазин",
@@ -591,8 +889,20 @@ export function CatalogPage() {
       </div>
 
       {!visibleShops.length ? (
-        <SectionCard title="Совпадений нет" caption={`По фильтру "${query}" ничего не нашлось.`}>
-          <div className="text-sm text-[var(--color-muted)]">Очистите фильтр или вернитесь к полному периоду: <Link to={`/catalog${catalogSearch}`} className="text-brand-200 underline underline-offset-4">показать все артикулы</Link>.</div>
+        <SectionCard title="Совпадений нет" caption="По текущим фильтрам ничего не нашлось.">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--color-muted)]">
+            <button
+              type="button"
+              onClick={clearLocalFilters}
+              className="text-brand-200 underline underline-offset-4"
+            >
+              Очистить локальные фильтры
+            </button>
+            <span>или</span>
+            <Link to={`/catalog${catalogSearch}`} className="text-brand-200 underline underline-offset-4">
+              вернуться к полному периоду
+            </Link>
+          </div>
         </SectionCard>
       ) : null}
     </div>
