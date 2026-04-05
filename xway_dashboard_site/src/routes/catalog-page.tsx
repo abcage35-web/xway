@@ -38,6 +38,7 @@ const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: st
 };
 
 const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
+const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
 const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v2";
 
 type CatalogSortField =
@@ -365,7 +366,7 @@ function FilterField({
   className?: string;
 }) {
   return (
-    <label className={cn("metric-chip flex flex-col gap-1 rounded-2xl px-4 py-3", className)}>
+    <label className={cn("metric-chip flex flex-col gap-1 rounded-2xl px-3.5 py-2.5", className)}>
       <span className="text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</span>
       {children}
     </label>
@@ -418,7 +419,11 @@ function CatalogStickyFilterShell({
   filters,
   onHeightChange,
 }: {
-  toolbar: ReactNode;
+  toolbar: (controls: {
+    collapseAll: () => void;
+    detailsExpanded: boolean;
+    toggleDetails: () => void;
+  }) => ReactNode;
   filters: ReactNode;
   onHeightChange: (height: number) => void;
 }) {
@@ -428,10 +433,16 @@ function CatalogStickyFilterShell({
     }
     return window.localStorage.getItem(CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY) === "1";
   });
+  const [detailsExpanded, setDetailsExpanded] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY) === "1";
+  });
   const rootRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
   const [isPinned, setIsPinned] = useState(false);
-  const [layout, setLayout] = useState({ height: 0, width: 0, left: 0 });
+  const [layout, setLayout] = useState({ height: 0, left: 0, right: 0 });
   const topOffset = 12;
 
   useEffect(() => {
@@ -440,6 +451,13 @@ function CatalogStickyFilterShell({
     }
     window.localStorage.setItem(CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
   }, [collapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY, detailsExpanded ? "1" : "0");
+  }, [detailsExpanded]);
 
   useEffect(() => {
     if (!rootRef.current || !innerRef.current) {
@@ -453,11 +471,11 @@ function CatalogStickyFilterShell({
       const innerRect = innerNode.getBoundingClientRect();
       const nextLayout = {
         height: Math.ceil(innerRect.height),
-        width: Math.ceil(wrapperRect.width),
         left: Math.round(wrapperRect.left),
+        right: Math.max(0, Math.round(window.innerWidth - wrapperRect.right)),
       };
       setLayout((current) =>
-        current.height === nextLayout.height && current.width === nextLayout.width && current.left === nextLayout.left ? current : nextLayout,
+        current.height === nextLayout.height && current.left === nextLayout.left && current.right === nextLayout.right ? current : nextLayout,
       );
       const pinned = wrapperRect.top <= topOffset;
       setIsPinned(pinned);
@@ -484,14 +502,14 @@ function CatalogStickyFilterShell({
       window.removeEventListener("scroll", updateLayout);
       window.removeEventListener("resize", updateLayout);
     };
-  }, [collapsed, onHeightChange]);
+  }, [collapsed, detailsExpanded, onHeightChange]);
 
   if (collapsed) {
     return (
-      <div ref={rootRef} className="relative z-[39]" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
+      <div ref={rootRef} className="relative z-[39] w-full" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
         <div
           ref={innerRef}
-          className="ml-auto flex w-fit items-center gap-2 rounded-[22px] border border-[var(--color-line)] bg-white/95 px-3 py-2 shadow-[0_12px_40px_rgba(44,35,66,0.1)] backdrop-blur-xl"
+          className="ml-auto flex w-fit items-center gap-2 rounded-[20px] border border-[var(--color-line)] bg-white/95 px-2.5 py-1.5 shadow-[0_12px_40px_rgba(44,35,66,0.1)] backdrop-blur-xl"
           style={isPinned ? { position: "fixed", top: `${topOffset}px`, right: "18px", zIndex: 39 } : undefined}
         >
           <button
@@ -509,34 +527,28 @@ function CatalogStickyFilterShell({
   }
 
   return (
-    <div ref={rootRef} className="relative z-[39]" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
+    <div ref={rootRef} className="relative z-[39] w-full" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
       <div
         ref={innerRef}
-        className="space-y-3"
+        className="space-y-2.5"
         style={
           isPinned
             ? {
                 position: "fixed",
                 top: `${topOffset}px`,
                 left: `${layout.left}px`,
-                width: `${layout.width}px`,
+                right: `${layout.right}px`,
                 zIndex: 39,
               }
             : undefined
         }
       >
-        {toolbar}
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => setCollapsed(true)}
-            className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-          >
-            <SlidersHorizontal className="size-4" />
-            Скрыть фильтры
-          </button>
-        </div>
-        {filters}
+        {toolbar({
+          collapseAll: () => setCollapsed(true),
+          detailsExpanded,
+          toggleDetails: () => setDetailsExpanded((current) => !current),
+        })}
+        {detailsExpanded ? filters : null}
       </div>
     </div>
   );
@@ -1272,7 +1284,7 @@ export function CatalogPage() {
 
       <CatalogStickyFilterShell
         onHeightChange={setToolbarHeight}
-        toolbar={
+        toolbar={({ collapseAll, detailsExpanded, toggleDetails }) => (
           <RangeToolbar
             start={start}
             end={end}
@@ -1280,34 +1292,52 @@ export function CatalogPage() {
             onPresetChange={handlePresetChange}
             onRangeChange={handleRangeChange}
             extra={
-              <button
-                type="button"
-                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-                className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-              >
-                <ArrowUpDown className="size-4 rotate-90" />
-                Наверх
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                >
+                  <ArrowUpDown className="size-4 rotate-90" />
+                  Наверх
+                </button>
+                <button
+                  type="button"
+                  onClick={collapseAll}
+                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                >
+                  <SlidersHorizontal className="size-4" />
+                  Скрыть фильтры
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleDetails}
+                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
+                >
+                  <span>{detailsExpanded ? "Свернуть параметры" : "Параметры списка"}</span>
+                  <ChevronDown className={cn("size-4 transition-transform", detailsExpanded && "rotate-180")} />
+                </button>
+              </>
             }
           />
-        }
+        )}
         filters={
-          <div className="glass-panel rounded-[30px] p-4 sm:p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">
-                <h3 className="font-display text-lg font-semibold text-[var(--color-ink)]">Фильтры списка артикулов</h3>
+                <h3 className="font-display text-base font-semibold text-[var(--color-ink)]">Фильтры списка артикулов</h3>
                 <p className="text-sm text-[var(--color-muted)]">Поиск, кабинеты, остаток, оборачиваемость и сортировка таблиц по кабинетам.</p>
               </div>
               <button
                 type="button"
                 onClick={clearLocalFilters}
-                className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                className="metric-chip rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
               >
                 Сбросить фильтры
               </button>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
+            <div className="grid gap-2.5 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
               <div className="min-w-0">
                 <SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />
               </div>
@@ -1337,7 +1367,7 @@ export function CatalogPage() {
               />
             </div>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-2.5 grid gap-2.5 lg:grid-cols-2 xl:grid-cols-4">
               <NumericRangeField
                 label="Остаток"
                 fromValue={stockFrom}

@@ -367,9 +367,9 @@ export function RangeToolbar({
   extra?: ReactNode;
 }) {
   return (
-    <div className="glass-panel flex flex-col gap-4 rounded-[30px] p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
-      <div className="flex flex-1 flex-col gap-4 xl:flex-row xl:items-center">
-        <div className="metric-chip inline-flex w-full items-center gap-3 rounded-2xl px-4 py-3 xl:w-auto">
+    <div className="glass-panel flex flex-col gap-3 rounded-[28px] p-3 sm:p-3.5 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
+        <div className="metric-chip inline-flex w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 xl:w-auto">
           <CalendarDays className="size-4 text-brand-200" />
           <select
             value={preset}
@@ -401,7 +401,7 @@ export function RangeToolbar({
         </div>
 
         <div className="grid flex-1 gap-3 sm:grid-cols-2">
-          <label className="metric-chip flex items-center gap-3 rounded-2xl px-4 py-3 text-sm">
+          <label className="metric-chip flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm">
             <span className="text-[var(--color-muted)]">Начало</span>
             <input
               type="date"
@@ -410,7 +410,7 @@ export function RangeToolbar({
               className="ml-auto bg-transparent text-[var(--color-ink)] outline-none"
             />
           </label>
-          <label className="metric-chip flex items-center gap-3 rounded-2xl px-4 py-3 text-sm">
+          <label className="metric-chip flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm">
             <span className="text-[var(--color-muted)]">Конец</span>
             <input
               type="date"
@@ -422,7 +422,7 @@ export function RangeToolbar({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">{extra}</div>
+      <div className="flex flex-wrap items-center gap-2.5">{extra}</div>
     </div>
   );
 }
