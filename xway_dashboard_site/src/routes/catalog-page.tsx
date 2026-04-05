@@ -988,7 +988,10 @@ function mapCatalogIssueRows(
 
 async function readApiErrorMessage(error: unknown) {
   if (error instanceof Response) {
-    const text = await error.text();
+    if (error.bodyUsed) {
+      return error.statusText ? `Ошибка API (${error.status}): ${error.statusText}` : `Ошибка API (${error.status})`;
+    }
+    const text = await error.clone().text();
     if (!text) {
       return `Ошибка API (${error.status})`;
     }
