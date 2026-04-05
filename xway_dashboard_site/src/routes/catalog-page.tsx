@@ -2,8 +2,8 @@ import { useDeferredValue, useEffect, useRef, useState, startTransition } from "
 import { ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, Snowflake, ThumbsUp } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
-import { fetchCatalog, fetchCatalogChart, fetchProducts } from "../lib/api";
-import { buildCatalogArticleYesterdayIssues, type CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
+import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
+import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogSelectionChart } from "../components/catalog-selection-chart";
@@ -13,6 +13,7 @@ import { InlineMetricSet, MetricCard, MetricTable, PageHero, RangeToolbar, Searc
 interface CatalogLoaderData {
   payload: CatalogResponse;
   comparePayload: CatalogResponse | null;
+  turnoverPayload: CatalogResponse | null;
   start?: string | null;
   end?: string | null;
 }
@@ -257,7 +258,21 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
     comparePayload = null;
   }
 
-  return { payload, comparePayload, start, end };
+  const turnoverEnd = payload.range.current_end;
+  const turnoverStart = shiftIsoDate(turnoverEnd, -2);
+  let turnoverPayload: CatalogResponse | null = null;
+
+  if (payload.range.current_start === turnoverStart && payload.range.current_end === turnoverEnd) {
+    turnoverPayload = payload;
+  } else {
+    try {
+      turnoverPayload = await fetchCatalog({ request, start: turnoverStart, end: turnoverEnd });
+    } catch {
+      turnoverPayload = null;
+    }
+  }
+
+  return { payload, comparePayload, turnoverPayload, start, end };
 }
 
 function articleMatches(article: CatalogArticle, query: string) {
@@ -356,6 +371,31 @@ function summarizeCatalogArticles(articles: CatalogArticle[]) {
   );
 }
 
+function computeTurnoverDays(stock: number | string | null | undefined, orderedReport3d: number | string | null | undefined, windowDays = 3) {
+  const stockValue = toNumber(stock);
+  if (stockValue === null || stockValue <= 0) {
+    return null;
+  }
+  const orderedValue = toNumber(orderedReport3d);
+  if (orderedValue === null) {
+    return null;
+  }
+  if (orderedValue <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return stockValue / (orderedValue / windowDays);
+}
+
+function formatTurnoverDays(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  if (!Number.isFinite(value)) {
+    return "∞";
+  }
+  return `${formatNumber(value, value >= 10 ? 0 : 1)} дн`;
+}
+
 function chunkItems<T>(items: T[], size: number) {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
@@ -385,6 +425,30 @@ function getArticleIssueHoursTotal(item: CatalogArticleYesterdayIssues) {
 
 function getArticleIssueIncidentsTotal(item: CatalogArticleYesterdayIssues) {
   return item.issues.reduce((sum, issue) => sum + issue.incidents, 0);
+}
+
+async function readApiErrorMessage(error: unknown) {
+  if (error instanceof Response) {
+    const text = await error.text();
+    if (!text) {
+      return `Ошибка API (${error.status})`;
+    }
+    try {
+      const parsed = JSON.parse(text) as { error?: string };
+      return parsed.error || text;
+    } catch {
+      return text;
+    }
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Не удалось собрать ошибки по артикулам.";
+}
+
+async function isWorkerSubrequestLimitError(error: unknown) {
+  const message = await readApiErrorMessage(error);
+  return /too many subrequests/i.test(message);
 }
 
 function filterShops(
@@ -434,7 +498,7 @@ function filterShops(
 }
 
 export function CatalogPage() {
-  const { payload, comparePayload, start, end } = useLoaderData() as CatalogLoaderData;
+  const { payload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
@@ -464,14 +528,35 @@ export function CatalogPage() {
     selectedCategories,
     selectedSkus,
   });
+  const turnoverOrdersByRef = new Map(
+    (turnoverPayload?.shops || []).flatMap((shop) =>
+      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
+    ),
+  );
+  const visibleIssueTargets = [...new Map(
+    visibleShops.flatMap((shop) =>
+      shop.articles.map((article) => [
+        `${shop.id}:${article.product_id}`,
+        {
+          ref: `${shop.id}:${article.product_id}`,
+          article: article.article,
+          name: article.name || `Артикул ${article.article}`,
+          productUrl: article.product_url,
+          stock: article.stock,
+        },
+      ]),
+    ),
+  ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0);
   const visibleArticleCodes = [...new Set(visibleShops.flatMap((shop) => shop.articles.map((article) => article.article)))].sort((left, right) => left.localeCompare(right, "ru"));
+  const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
+  const visibleIssueTargetMetaByRef = new Map(visibleIssueTargets.map((item) => [item.ref, item]));
   const visibleArticles = visibleShops.flatMap((shop) =>
     shop.articles.map((article) => ({
       shopId: shop.id,
       productId: article.product_id,
     })),
   );
-  const visibleArticleCodesKey = visibleArticleCodes.join(",");
+  const visibleIssueTargetRefsKey = visibleIssueTargetRefs.join(",");
   const chartSelectionCount = visibleArticles.length;
   const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
   const chartProductRefsKey = chartProductRefs.join(",");
@@ -530,7 +615,7 @@ export function CatalogPage() {
     setArticleIssuesLoading(false);
     setArticleIssuesError(null);
     setArticleIssueRows(null);
-  }, [visibleArticleCodesKey]);
+  }, [visibleIssueTargetRefsKey]);
 
   useEffect(() => {
     chartFetchAbortRef.current?.abort();
@@ -634,7 +719,7 @@ export function CatalogPage() {
 
   const collectArticleIssues = async () => {
     articleIssuesAbortRef.current?.abort();
-    if (!visibleArticleCodes.length) {
+    if (!visibleIssueTargetRefs.length) {
       setArticleIssueRows([]);
       setArticleIssuesError(null);
       setArticleIssuesLoading(false);
@@ -647,24 +732,64 @@ export function CatalogPage() {
     setArticleIssuesError(null);
 
     try {
-      const chunks = chunkItems(visibleArticleCodes, 40);
-      const products = [];
-      for (const chunk of chunks) {
-        const response = await fetchProducts({
-          articles: chunk,
+      const fetchIssueRowsChunk = async (refs: string[]): Promise<Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>> => {
+        const response = await fetchCatalogIssues({
+          productRefs: refs,
           start: yesterdayIso,
           end: yesterdayIso,
-          campaignMode: "full",
           signal: controller.signal,
         });
+        return response.rows.map((row) => ({
+          product_ref: row.product_ref,
+          issues: row.issues.map((issue) => ({
+            kind: issue.kind,
+            title: issue.title,
+            hours: issue.hours,
+            incidents: issue.incidents,
+            estimatedGap: issue.estimated_gap,
+            campaignIds: issue.campaign_ids,
+            campaignLabels: issue.campaign_labels,
+          })),
+        }));
+      };
+
+      const fetchIssueRowsAdaptive = async (refs: string[]): Promise<Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>> => {
+        try {
+          return await fetchIssueRowsChunk(refs);
+        } catch (error) {
+          if (refs.length > 1 && (await isWorkerSubrequestLimitError(error))) {
+            const middle = Math.ceil(refs.length / 2);
+            const left = await fetchIssueRowsAdaptive(refs.slice(0, middle));
+            const right = await fetchIssueRowsAdaptive(refs.slice(middle));
+            return [...left, ...right];
+          }
+          throw error;
+        }
+      };
+
+      const chunks = chunkItems(visibleIssueTargetRefs, 20);
+      const issueRows = [];
+      for (const chunk of chunks) {
+        const rows = await fetchIssueRowsAdaptive(chunk);
         if (controller.signal.aborted) {
           return;
         }
-        products.push(...response.products);
+        issueRows.push(...rows);
       }
 
-      const nextRows = products
-        .map((product) => buildCatalogArticleYesterdayIssues(product, yesterdayIso))
+      const nextRows = issueRows
+        .map((row) => {
+          const meta = visibleIssueTargetMetaByRef.get(row.product_ref);
+          if (!meta || !row.issues.length) {
+            return null;
+          }
+          return {
+            article: meta.article,
+            name: meta.name,
+            productUrl: meta.productUrl,
+            issues: row.issues,
+          };
+        })
         .filter((item): item is CatalogArticleYesterdayIssues => Boolean(item))
         .sort((left, right) => {
           const hoursDiff = getArticleIssueHoursTotal(right) - getArticleIssueHoursTotal(left);
@@ -683,7 +808,7 @@ export function CatalogPage() {
       if (controller.signal.aborted) {
         return;
       }
-      setArticleIssuesError(error instanceof Error ? error.message : "Не удалось собрать ошибки по артикулам.");
+      setArticleIssuesError(await readApiErrorMessage(error));
     } finally {
       if (!controller.signal.aborted) {
         setArticleIssuesLoading(false);
@@ -852,15 +977,15 @@ export function CatalogPage() {
 
       <SectionCard
         title="Ошибки по артикулам"
-        caption={`Сбор бюджетных и лимитных остановок по всем видимым артикулам только за вчера, ${yesterdayLabel}. По кнопке запрашиваются детальные кампании так же, как в ошибках внутри товара по всем РК.`}
+        caption={`Сбор бюджетных и лимитных остановок только по видимым артикулам с остатком > 0 за вчера, ${yesterdayLabel}. По кнопке запрашиваются детальные кампании так же, как в ошибках внутри товара по всем РК.`}
         actions={
           <button
             type="button"
             onClick={collectArticleIssues}
-            disabled={articleIssuesLoading || !visibleArticleCodes.length}
+            disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
             className={cn(
               "metric-chip rounded-2xl px-4 py-2 text-sm transition",
-              articleIssuesLoading || !visibleArticleCodes.length
+              articleIssuesLoading || !visibleIssueTargetRefs.length
                 ? "cursor-not-allowed text-[var(--color-muted)] opacity-70"
                 : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
             )}
@@ -872,6 +997,7 @@ export function CatalogPage() {
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-muted)]">
             <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleArticleCodes.length)} артикулов в текущей выборке</span>
+            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleIssueTargetRefs.length)} с остатком &gt; 0</span>
             {articleIssueRows ? (
               <span className="metric-chip rounded-2xl px-3 py-2">
                 {formatNumber(articleIssueRows.length)} с ошибками за {yesterdayLabel}
@@ -887,7 +1013,7 @@ export function CatalogPage() {
 
           {articleIssuesLoading && !articleIssueRows ? (
             <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-              Загружаю вчерашние ошибки по {formatNumber(visibleArticleCodes.length)} артикулам.
+              Загружаю вчерашние ошибки по {formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком &gt; 0.
             </div>
           ) : null}
 
@@ -1053,6 +1179,20 @@ export function CatalogPage() {
                         ),
                       },
                       { key: "stock", header: "Остаток", align: "right", render: (article) => formatNumber(article.stock) },
+                      {
+                        key: "turnover",
+                        header: (
+                          <span className="inline-flex flex-col leading-[1.05]">
+                            <span>Оборач.</span>
+                            <span>3 дн</span>
+                          </span>
+                        ),
+                        align: "right",
+                        render: (article) =>
+                          formatTurnoverDays(
+                            computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)),
+                          ),
+                      },
                       {
                         key: "campaigns",
                         header: <CatalogCampaignColumnsHeader />,

@@ -1,4 +1,4 @@
-import type { CatalogChartResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
+import type { CatalogChartResponse, CatalogIssuesResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
 
@@ -87,6 +87,20 @@ export async function fetchCatalogChart(options: {
   }
   appendRange(url.searchParams, options.start, options.end);
   return requestJson<CatalogChartResponse>(url.toString(), options.signal);
+}
+
+export async function fetchCatalogIssues(options: {
+  productRefs: string[];
+  start?: string | null;
+  end?: string | null;
+  signal?: AbortSignal;
+}) {
+  const url = new URL("/api/catalog-issues", window.location.origin);
+  if (options.productRefs.length) {
+    url.searchParams.set("products", options.productRefs.join(","));
+  }
+  appendRange(url.searchParams, options.start, options.end);
+  return requestJson<CatalogIssuesResponse>(url.toString(), options.signal);
 }
 
 export async function fetchClusterDetail(options: {

@@ -1,4 +1,5 @@
 import { collectCatalog, collectCatalogChart } from "../_lib/catalog.js";
+import { collectCatalogIssues } from "../_lib/catalog-issues.js";
 import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { collectProducts } from "../_lib/products.js";
 import { errorResponse, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
@@ -73,7 +74,7 @@ async function handleNativeRequest(context, pathname) {
     return jsonResponse({
       ok: true,
       backend: hasNativeStorageState(context.env) ? "cloudflare-native" : "proxy-only",
-      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/products", "/api/cluster-detail"],
+      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-issues", "/api/products", "/api/cluster-detail"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       has_storage_state: hasNativeStorageState(context.env),
@@ -104,6 +105,20 @@ async function handleNativeRequest(context, pathname) {
       .filter(Boolean);
     return jsonResponse(
       await collectCatalogChart(context.env, {
+        productRefs,
+        start: searchParamsValue(requestUrl, "start"),
+        end: searchParamsValue(requestUrl, "end"),
+      }),
+    );
+  }
+
+  if (pathname === "/api/catalog-issues") {
+    const productRefs = String(requestUrl.searchParams.get("products") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return jsonResponse(
+      await collectCatalogIssues(context.env, {
         productRefs,
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
@@ -151,7 +166,7 @@ export async function onRequest(context) {
   const requestUrl = new URL(context.request.url);
   const pathname = requestUrl.pathname;
   const apiOrigin = sanitizeOrigin(context.env.API_ORIGIN);
-  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/products", "/api/cluster-detail"]);
+  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-issues", "/api/products", "/api/cluster-detail"]);
 
   if (nativeRoutes.has(pathname)) {
     if (pathname === "/api/health" || hasNativeStorageState(context.env)) {

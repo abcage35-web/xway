@@ -562,6 +562,30 @@ export interface CatalogChartTotals {
   crf: number | null;
 }
 
+export interface CatalogIssuesIssue {
+  kind: "budget" | "limit";
+  title: string;
+  hours: number;
+  incidents: number;
+  estimated_gap: number | null;
+  campaign_ids: number[];
+  campaign_labels: string[];
+}
+
+export interface CatalogIssuesRow {
+  product_ref: string;
+  issues: CatalogIssuesIssue[];
+}
+
+export interface CatalogIssuesResponse {
+  ok: boolean;
+  generated_at: string;
+  range: DateRange;
+  rows: CatalogIssuesRow[];
+  requested_products: string[];
+  loaded_products_count: number;
+}
+
 export interface CatalogChartResponse {
   ok: boolean;
   generated_at: string;

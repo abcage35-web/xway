@@ -523,7 +523,7 @@ function flattenPauseTooltips(payload) {
     });
 }
 
-function normalizeStatusPauseHistory(payload) {
+export function normalizeStatusPauseHistory(payload) {
   const intervals = flattenPauseTooltips(payload);
   return {
     labels: payload?.labels || [],
