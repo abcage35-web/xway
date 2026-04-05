@@ -2,8 +2,9 @@ import { useDeferredValue, useEffect, useRef, useState, startTransition } from "
 import { ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, Snowflake, ThumbsUp } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
-import { fetchCatalog, fetchCatalogChart } from "../lib/api";
-import { buildPresetRange, cn, formatCompactNumber, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, shiftIsoDate, toNumber } from "../lib/format";
+import { fetchCatalog, fetchCatalogChart, fetchProducts } from "../lib/api";
+import { buildCatalogArticleYesterdayIssues, type CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
+import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogSelectionChart } from "../components/catalog-selection-chart";
 import { SearchableMultiSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
@@ -355,6 +356,37 @@ function summarizeCatalogArticles(articles: CatalogArticle[]) {
   );
 }
 
+function chunkItems<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function formatIssueIncidents(count: number) {
+  const abs = Math.abs(count) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 19) {
+    return `${count} остановок`;
+  }
+  if (last === 1) {
+    return `${count} остановка`;
+  }
+  if (last >= 2 && last <= 4) {
+    return `${count} остановки`;
+  }
+  return `${count} остановок`;
+}
+
+function getArticleIssueHoursTotal(item: CatalogArticleYesterdayIssues) {
+  return item.issues.reduce((sum, issue) => sum + issue.hours, 0);
+}
+
+function getArticleIssueIncidentsTotal(item: CatalogArticleYesterdayIssues) {
+  return item.issues.reduce((sum, issue) => sum + issue.incidents, 0);
+}
+
 function filterShops(
   payload: CatalogResponse,
   filters: {
@@ -413,11 +445,15 @@ export function CatalogPage() {
   const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
+  const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
+  const [articleIssueRows, setArticleIssueRows] = useState<CatalogArticleYesterdayIssues[] | null>(null);
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const chartFetchAbortRef = useRef<AbortController | null>(null);
+  const articleIssuesAbortRef = useRef<AbortController | null>(null);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -428,18 +464,22 @@ export function CatalogPage() {
     selectedCategories,
     selectedSkus,
   });
+  const visibleArticleCodes = [...new Set(visibleShops.flatMap((shop) => shop.articles.map((article) => article.article)))].sort((left, right) => left.localeCompare(right, "ru"));
   const visibleArticles = visibleShops.flatMap((shop) =>
     shop.articles.map((article) => ({
       shopId: shop.id,
       productId: article.product_id,
     })),
   );
+  const visibleArticleCodesKey = visibleArticleCodes.join(",");
   const chartSelectionCount = visibleArticles.length;
   const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
   const chartProductRefsKey = chartProductRefs.join(",");
   const chartRangeEnd = payload.range.current_end;
   const chartRangeStart = shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
+  const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
+  const yesterdayLabel = formatDate(yesterdayIso);
   const preset = getRangePreset(start, end);
   const catalogSearch = buildCatalogSearch(start, end);
 
@@ -481,8 +521,16 @@ export function CatalogPage() {
   useEffect(() => {
     return () => {
       chartFetchAbortRef.current?.abort();
+      articleIssuesAbortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    articleIssuesAbortRef.current?.abort();
+    setArticleIssuesLoading(false);
+    setArticleIssuesError(null);
+    setArticleIssueRows(null);
+  }, [visibleArticleCodesKey]);
 
   useEffect(() => {
     chartFetchAbortRef.current?.abort();
@@ -582,6 +630,65 @@ export function CatalogPage() {
     setSelectedShopIds([]);
     setSelectedCategories([]);
     setSelectedSkus([]);
+  };
+
+  const collectArticleIssues = async () => {
+    articleIssuesAbortRef.current?.abort();
+    if (!visibleArticleCodes.length) {
+      setArticleIssueRows([]);
+      setArticleIssuesError(null);
+      setArticleIssuesLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    articleIssuesAbortRef.current = controller;
+    setArticleIssuesLoading(true);
+    setArticleIssuesError(null);
+
+    try {
+      const chunks = chunkItems(visibleArticleCodes, 40);
+      const products = [];
+      for (const chunk of chunks) {
+        const response = await fetchProducts({
+          articles: chunk,
+          start: yesterdayIso,
+          end: yesterdayIso,
+          campaignMode: "full",
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) {
+          return;
+        }
+        products.push(...response.products);
+      }
+
+      const nextRows = products
+        .map((product) => buildCatalogArticleYesterdayIssues(product, yesterdayIso))
+        .filter((item): item is CatalogArticleYesterdayIssues => Boolean(item))
+        .sort((left, right) => {
+          const hoursDiff = getArticleIssueHoursTotal(right) - getArticleIssueHoursTotal(left);
+          if (hoursDiff !== 0) {
+            return hoursDiff;
+          }
+          const incidentsDiff = getArticleIssueIncidentsTotal(right) - getArticleIssueIncidentsTotal(left);
+          if (incidentsDiff !== 0) {
+            return incidentsDiff;
+          }
+          return left.article.localeCompare(right.article, "ru");
+        });
+
+      setArticleIssueRows(nextRows);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      setArticleIssuesError(error instanceof Error ? error.message : "Не удалось собрать ошибки по артикулам.");
+    } finally {
+      if (!controller.signal.aborted) {
+        setArticleIssuesLoading(false);
+      }
+    }
   };
 
   return (
@@ -742,6 +849,128 @@ export function CatalogPage() {
           deltaClassName={deltaClassName(diffValue(cr, compareCr), true)}
         />
       </div>
+
+      <SectionCard
+        title="Ошибки по артикулам"
+        caption={`Сбор бюджетных и лимитных остановок по всем видимым артикулам только за вчера, ${yesterdayLabel}. По кнопке запрашиваются детальные кампании так же, как в ошибках внутри товара по всем РК.`}
+        actions={
+          <button
+            type="button"
+            onClick={collectArticleIssues}
+            disabled={articleIssuesLoading || !visibleArticleCodes.length}
+            className={cn(
+              "metric-chip rounded-2xl px-4 py-2 text-sm transition",
+              articleIssuesLoading || !visibleArticleCodes.length
+                ? "cursor-not-allowed text-[var(--color-muted)] opacity-70"
+                : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
+            )}
+          >
+            {articleIssuesLoading ? "Собираем ошибки..." : "Собрать ошибки за вчера"}
+          </button>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-muted)]">
+            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleArticleCodes.length)} артикулов в текущей выборке</span>
+            {articleIssueRows ? (
+              <span className="metric-chip rounded-2xl px-3 py-2">
+                {formatNumber(articleIssueRows.length)} с ошибками за {yesterdayLabel}
+              </span>
+            ) : null}
+          </div>
+
+          {articleIssuesError ? (
+            <div className="rounded-[22px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {articleIssuesError}
+            </div>
+          ) : null}
+
+          {articleIssuesLoading && !articleIssueRows ? (
+            <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
+              Загружаю вчерашние ошибки по {formatNumber(visibleArticleCodes.length)} артикулам.
+            </div>
+          ) : null}
+
+          {!articleIssuesLoading && !articleIssuesError && articleIssueRows && !articleIssueRows.length ? (
+            <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
+              За {yesterdayLabel} по текущей выборке не найдено ошибок бюджета и лимитов.
+            </div>
+          ) : null}
+
+          {articleIssueRows?.length ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {articleIssueRows.map((item) => (
+                <article key={item.article} className="rounded-[24px] border border-[var(--color-line)] bg-white/90 p-4 shadow-[0_12px_30px_rgba(44,35,66,0.06)]">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                          to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+                          className="font-display text-lg font-semibold text-[var(--color-ink)] hover:text-brand-200"
+                        >
+                          Артикул {item.article}
+                        </Link>
+                        <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">
+                          {formatNumber(getArticleIssueHoursTotal(item), 1)} ч простоя
+                        </span>
+                        <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">
+                          {formatIssueIncidents(getArticleIssueIncidentsTotal(item))}
+                        </span>
+                      </div>
+                      <p className="truncate text-sm text-[var(--color-muted)]" title={item.name}>
+                        {item.name}
+                      </p>
+                    </div>
+                    <a
+                      href={item.productUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-2xl border border-[var(--color-line)] px-3 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
+                    >
+                      XWAY
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {item.issues.map((issue) => (
+                      <div
+                        key={`${item.article}-${issue.kind}`}
+                        className={cn(
+                          "rounded-[20px] border px-4 py-3",
+                          issue.kind === "budget" ? "border-rose-200 bg-rose-50/70" : "border-amber-200 bg-amber-50/70",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-medium text-[var(--color-ink)]">{issue.title}</p>
+                          <span
+                            className={cn(
+                              "rounded-full px-2.5 py-1 text-xs font-medium",
+                              issue.kind === "budget" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700",
+                            )}
+                          >
+                            {formatIssueIncidents(issue.incidents)}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-sm text-[var(--color-muted)]">
+                          <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issue.hours, 1)} ч</span>
+                          {issue.estimatedGap !== null ? <span className="metric-chip rounded-2xl px-3 py-2">≈ {formatMoney(issue.estimatedGap)}</span> : null}
+                          <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issue.campaignIds.length)} РК</span>
+                        </div>
+                        {issue.campaignLabels.length ? (
+                          <p className="mt-3 text-xs leading-5 text-[var(--color-muted)]">
+                            {issue.campaignLabels.join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </SectionCard>
 
       <div className="space-y-5">
         {visibleShops.map((shop) => {

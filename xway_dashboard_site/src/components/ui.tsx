@@ -172,6 +172,34 @@ export function MetricTable<T>({
     return <EmptyState title="Пока пусто" text={emptyText} />;
   }
 
+  const tableViewportRef = useRef<HTMLDivElement | null>(null);
+  const tableElementRef = useRef<HTMLTableElement | null>(null);
+  const [hasHorizontalOverflow, setHasHorizontalOverflow] = useState(false);
+
+  useEffect(() => {
+    const viewportNode = tableViewportRef.current;
+    const tableNode = tableElementRef.current;
+    if (!viewportNode || !tableNode || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    // Native sticky headers stop pinning to the page when they live inside an
+    // unconditional overflow-x container, because that wrapper becomes the
+    // sticky containing block. We only opt into horizontal scrolling when the
+    // table really overflows; otherwise sticky stays viewport-based.
+    const syncOverflowState = () => {
+      const next = tableNode.scrollWidth - viewportNode.clientWidth > 1;
+      setHasHorizontalOverflow((current) => (current === next ? current : next));
+    };
+
+    syncOverflowState();
+    const observer = new ResizeObserver(syncOverflowState);
+    observer.observe(viewportNode);
+    observer.observe(tableNode);
+    return () => observer.disconnect();
+  }, [columns.length, rows.length]);
+
+  const enableStickyHeader = stickyHeader && !hasHorizontalOverflow;
   const hasHeaderSummary = columns.some((column) => column.headerSummary !== undefined);
 
   return (
@@ -183,21 +211,27 @@ export function MetricTable<T>({
         className,
       )}
     >
-      <div className={cn("overflow-x-auto", variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible")}>
-        <table className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm">
+      <div
+        ref={tableViewportRef}
+        className={cn(
+          hasHorizontalOverflow || !stickyHeader ? "overflow-x-auto" : "overflow-visible",
+          variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible",
+        )}
+      >
+        <table ref={tableElementRef} className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm">
           <thead className="bg-[var(--color-surface-soft)]">
             <tr>
               {columns.map((column) => (
                 <th
                   key={column.key}
                   style={{
-                    ...(stickyHeader ? { top: headerStickyTop } : null),
+                    ...(enableStickyHeader ? { top: headerStickyTop } : null),
                     ...(column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : null),
                   }}
                   className={cn(
                     "bg-[var(--color-surface-soft)] px-4 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[var(--color-muted)]",
-                    (stickyHeader || column.stickyLeft !== undefined) && "sticky",
-                    stickyHeader && "z-10",
+                    (enableStickyHeader || column.stickyLeft !== undefined) && "sticky",
+                    enableStickyHeader && "z-10",
                     column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head z-[12]",
                     column.dividerBefore && "border-l border-[var(--color-line)]",
                     column.align === "right" ? "text-right" : "text-left",
@@ -214,13 +248,13 @@ export function MetricTable<T>({
                   <th
                     key={`${column.key}-summary`}
                     style={{
-                      ...(stickyHeader ? { top: headerStickyTop } : null),
+                      ...(enableStickyHeader ? { top: headerStickyTop } : null),
                       ...(column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : null),
                     }}
                     className={cn(
                       "metric-table-summary-head bg-[var(--color-surface-soft)] px-4 py-2 text-[0.8rem] font-semibold normal-case tracking-normal text-[var(--color-ink)]",
-                      (stickyHeader || column.stickyLeft !== undefined) && "sticky",
-                      stickyHeader && "z-10",
+                      (enableStickyHeader || column.stickyLeft !== undefined) && "sticky",
+                      enableStickyHeader && "z-10",
                       column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head z-[12]",
                       column.dividerBefore && "border-l border-[var(--color-line)]",
                       column.align === "right" ? "text-right" : "text-left",

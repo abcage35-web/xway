@@ -339,6 +339,12 @@
     background: var(--color-surface);
     box-shadow: 0 24px 60px rgb(44 35 66 / 0.08);
   }
+
+  .catalog-range-toolbar-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 36;
+  }
 }
 
 @layer utilities {
