@@ -76,6 +76,13 @@ interface CatalogChartProgressState {
   errorCount: number;
 }
 
+interface CatalogChartCacheEntry {
+  response: CatalogChartResponse;
+  productRefsKey: string;
+  rangeStart: string;
+  rangeEnd: string;
+}
+
 function CatalogCampaignColumnsHeader() {
   const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string; subtitle: string }> = [
     { key: "unified", title: "кампания", subtitle: "Единая ставка" },
@@ -463,6 +470,61 @@ function mergeCatalogChartResponses(
     totals: buildCatalogChartTotals(rows),
     errors: [...(current?.errors ?? []), ...(incoming.errors ?? [])],
   };
+}
+
+function sliceCatalogChartResponse(
+  response: CatalogChartResponse,
+  requestedStart: string,
+  requestedEnd: string,
+): CatalogChartResponse {
+  const rows = response.rows
+    .filter((row) => row.day >= requestedStart && row.day <= requestedEnd)
+    .map((row) => finalizeCatalogChartRow(row));
+
+  return {
+    ...response,
+    range: {
+      ...response.range,
+      current_start: requestedStart,
+      current_end: requestedEnd,
+      span_days: rows.length,
+    },
+    rows,
+    totals: buildCatalogChartTotals(rows),
+  };
+}
+
+function resolveCachedCatalogChartResponse(
+  cache: Map<string, CatalogChartCacheEntry>,
+  options: {
+    cacheKey: string;
+    productRefsKey: string;
+    rangeStart: string;
+    rangeEnd: string;
+  },
+) {
+  const exact = cache.get(options.cacheKey);
+  if (exact) {
+    return exact.response;
+  }
+
+  let coveringEntry: CatalogChartCacheEntry | null = null;
+  for (const entry of cache.values()) {
+    if (entry.productRefsKey !== options.productRefsKey || entry.rangeEnd !== options.rangeEnd) {
+      continue;
+    }
+    if (entry.rangeStart > options.rangeStart) {
+      continue;
+    }
+    if (!coveringEntry || entry.rangeStart > coveringEntry.rangeStart) {
+      coveringEntry = entry;
+    }
+  }
+
+  if (!coveringEntry) {
+    return null;
+  }
+  return sliceCatalogChartResponse(coveringEntry.response, options.rangeStart, options.rangeEnd);
 }
 
 function matchesNumericRange(value: number | null | undefined, from: string, to: string) {
@@ -1021,7 +1083,7 @@ export function CatalogPage() {
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const chartFetchAbortRef = useRef<AbortController | null>(null);
-  const chartCacheRef = useRef<Map<string, CatalogChartResponse>>(new Map());
+  const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
 
   const shopOptions = buildShopOptions(payload);
@@ -1215,7 +1277,12 @@ export function CatalogPage() {
       return;
     }
 
-    const cached = chartCacheRef.current.get(chartCacheKey);
+    const cached = resolveCachedCatalogChartResponse(chartCacheRef.current, {
+      cacheKey: chartCacheKey,
+      productRefsKey: chartProductRefsKey,
+      rangeStart: chartRangeStart,
+      rangeEnd: chartRangeEnd,
+    });
     if (cached) {
       setChartLoading(false);
       setChartError(null);
@@ -1273,7 +1340,12 @@ export function CatalogPage() {
           }
 
           if (nextResponse) {
-            chartCacheRef.current.set(chartCacheKey, nextResponse);
+            chartCacheRef.current.set(chartCacheKey, {
+              response: nextResponse,
+              productRefsKey: chartProductRefsKey,
+              rangeStart: chartRangeStart,
+              rangeEnd: chartRangeEnd,
+            });
           }
         } catch (error) {
           if (controller.signal.aborted) {
