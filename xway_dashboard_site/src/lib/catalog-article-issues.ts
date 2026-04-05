@@ -26,6 +26,7 @@ export interface CatalogArticleYesterdayIssues {
   article: string;
   name: string;
   productUrl: string;
+  imageUrl?: string | null;
   issues: CatalogArticleIssueSummary[];
 }
 
@@ -393,6 +394,7 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
     article: product.article,
     name: product.identity.name || `Артикул ${product.article}`,
     productUrl: product.product_url,
+    imageUrl: product.identity.image_url || null,
     issues,
   };
 }

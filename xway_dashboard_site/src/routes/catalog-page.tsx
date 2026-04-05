@@ -888,9 +888,13 @@ function getArticleIssueIncidentsTotal(item: CatalogArticleYesterdayIssues) {
   return item.issues.reduce((sum, issue) => sum + issue.incidents, 0);
 }
 
+type CatalogIssueDisplayRow = CatalogArticleYesterdayIssues & {
+  imageUrl: string | null;
+};
+
 function mapCatalogIssueRows(
   rows: Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>,
-  metaByRef: Map<string, { article: string; name: string; productUrl: string; stock: number | string | null | undefined }>,
+  metaByRef: Map<string, { article: string; name: string; productUrl: string; imageUrl?: string | null; stock: number | string | null | undefined }>,
 ) {
   return rows
     .map((row) => {
@@ -902,10 +906,11 @@ function mapCatalogIssueRows(
         article: meta.article,
         name: meta.name,
         productUrl: meta.productUrl,
+        imageUrl: meta.imageUrl || null,
         issues: row.issues,
       };
     })
-    .filter((item): item is CatalogArticleYesterdayIssues => Boolean(item))
+    .filter((item): item is CatalogIssueDisplayRow => item !== null)
     .sort((left, right) => {
       const hoursDiff = getArticleIssueHoursTotal(right) - getArticleIssueHoursTotal(left);
       if (hoursDiff !== 0) {
@@ -1107,6 +1112,7 @@ export function CatalogPage() {
           article: article.article,
           name: article.name || `Артикул ${article.article}`,
           productUrl: article.product_url,
+          imageUrl: article.image_url || null,
           stock: article.stock,
         },
       ]),
@@ -1796,26 +1802,40 @@ export function CatalogPage() {
               {articleIssueRows.map((item) => (
                 <article key={item.article} className="rounded-[20px] border border-[var(--color-line)] bg-white/92 p-3 shadow-[0_10px_24px_rgba(44,35,66,0.05)]">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Link
-                          to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-display text-base font-semibold text-[var(--color-ink)] hover:text-brand-200"
-                        >
+                    <div className="min-w-0 flex flex-1 items-start gap-3">
+                      <Link
+                        to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="h-[74px] w-[56px] shrink-0 overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] shadow-[0_8px_20px_rgba(44,35,66,0.06)]"
+                        aria-label={`Открыть товар ${item.name}`}
+                      >
+                        {item.imageUrl ? (
+                          <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" />
+                        ) : null}
+                      </Link>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Link
+                            to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="min-w-0 font-display text-[1.05rem] font-semibold leading-tight text-[var(--color-ink)] hover:text-brand-200"
+                            title={item.name}
+                          >
+                            <span className="line-clamp-2">{item.name}</span>
+                          </Link>
+                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                            {formatNumber(getArticleIssueHoursTotal(item), 1)} ч простоя
+                          </span>
+                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                            {formatIssueIncidents(getArticleIssueIncidentsTotal(item))}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
                           Артикул {item.article}
-                        </Link>
-                        <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                          {formatNumber(getArticleIssueHoursTotal(item), 1)} ч простоя
-                        </span>
-                        <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                          {formatIssueIncidents(getArticleIssueIncidentsTotal(item))}
-                        </span>
+                        </p>
                       </div>
-                      <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
-                        {item.name}
-                      </p>
                     </div>
                     <a
                       href={item.productUrl}
