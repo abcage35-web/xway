@@ -62,7 +62,7 @@ function splitStatusDateTime(value?: string | null): StatusDateTimeParts {
 }
 
 function parseRuDateLabel(value?: string | null) {
-  const match = String(value || "").trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  const match = String(value || "").trim().match(/^(\d{1,2})[.-](\d{1,2})[.-](\d{4})$/);
   if (!match) {
     return null;
   }

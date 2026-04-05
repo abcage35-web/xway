@@ -74,11 +74,32 @@ export function formatPercent(value: number | string | null | undefined, digits 
   return `${numeric.toFixed(resolveFractionDigits(numeric, digits))}%`;
 }
 
+export function parseXwayDateTime(value: string | null | undefined) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+  const match = text.match(/^(\d{1,2})[.-](\d{1,2})[.-](\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!match) {
+    return null;
+  }
+  const [, day, month, year, hours = "0", minutes = "0", seconds = "0"] = match;
+  const parsed = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hours),
+    Number(minutes),
+    Number(seconds),
+  );
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export function formatDate(value: string | null | undefined) {
   if (!value) {
     return "—";
   }
-  const date = new Date(value);
+  const date = parseXwayDateTime(value) || new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
@@ -93,7 +114,7 @@ export function formatDateTime(value: string | null | undefined) {
     return "—";
   }
   const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const date = new Date(normalized);
+  const date = parseXwayDateTime(value) || new Date(normalized);
   if (Number.isNaN(date.getTime())) {
     return value;
   }

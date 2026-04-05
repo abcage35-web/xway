@@ -65,10 +65,36 @@ function isoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function parseXwayDateTime(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+  const match = text.match(/^(\d{1,2})[.-](\d{1,2})[.-](\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!match) {
+    return null;
+  }
+  const [, dd, mm, yyyy, hh = "0", min = "0", sec = "0"] = match;
+  const parsed = new Date(Date.UTC(
+    Number.parseInt(yyyy, 10),
+    Number.parseInt(mm, 10) - 1,
+    Number.parseInt(dd, 10),
+    Number.parseInt(hh, 10),
+    Number.parseInt(min, 10),
+    Number.parseInt(sec, 10),
+  ));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function parseFlexibleDateTime(value) {
   const text = String(value || "").trim();
   if (!text) {
     return null;
+  }
+
+  const explicitRu = parseXwayDateTime(text);
+  if (explicitRu) {
+    return explicitRu;
   }
 
   const normalized = text.replace("Z", "+00:00");
@@ -84,14 +110,14 @@ function parseFlexibleDateTime(value) {
     }
   }
 
-  const localDateTimeMatch = text.match(/^(\d{2})\.(\d{2})\.(\d{4}),\s*(\d{2}):(\d{2})$/);
+  const localDateTimeMatch = text.match(/^(\d{2})[.-](\d{2})[.-](\d{4}),\s*(\d{2}):(\d{2})$/);
   if (localDateTimeMatch) {
     const [, dd, mm, yyyy, hh, min] = localDateTimeMatch;
     const parsed = new Date(Date.UTC(Number.parseInt(yyyy, 10), Number.parseInt(mm, 10) - 1, Number.parseInt(dd, 10), Number.parseInt(hh, 10), Number.parseInt(min, 10)));
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
-  const localDateMatch = text.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  const localDateMatch = text.match(/^(\d{2})[.-](\d{2})[.-](\d{4})$/);
   if (localDateMatch) {
     const [, dd, mm, yyyy] = localDateMatch;
     const parsed = new Date(Date.UTC(Number.parseInt(yyyy, 10), Number.parseInt(mm, 10) - 1, Number.parseInt(dd, 10)));
@@ -368,7 +394,7 @@ function parseStatusDatetimeText(value, fallbackDate = null, fallbackYear = null
     return { value: null, hasExplicitDate: false };
   }
 
-  const dateMatch = text.match(/(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?/);
+  const dateMatch = text.match(/(\d{1,2})[.-](\d{1,2})(?:[.-](\d{4}))?/);
   const timeMatch = text.match(/(\d{1,2}):(\d{2})/);
 
   let day = fallbackDate ? fallbackDate.getUTCDate() : null;

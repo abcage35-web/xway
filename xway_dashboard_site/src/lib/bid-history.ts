@@ -1,4 +1,4 @@
-import { formatMoney, toNumber } from "./format";
+import { formatMoney, parseXwayDateTime, toNumber } from "./format";
 import type { BidLogEntry, CampaignSummary } from "./types";
 
 export type BidKind = "cpm" | "cpc";
@@ -66,9 +66,12 @@ export function parseBidHistoryDate(row: BidLogEntry) {
     }
   }
 
-  const fallbackValue = String(row.datetime || "")
-    .replace(/^(\d{2})-(\d{2})-(\d{4})/, "$3-$2-$1")
-    .replace(" ", "T");
+  const explicit = parseXwayDateTime(row.datetime);
+  if (explicit) {
+    return explicit;
+  }
+
+  const fallbackValue = String(row.datetime || "").replace(" ", "T");
   const parsed = new Date(fallbackValue);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
