@@ -1,5 +1,8 @@
 # Optional reserve proxy if you still keep an external backend.
 API_ORIGIN="https://api.example.com"
-# Use one of the two values below for native Cloudflare handlers.
+# Use one of the values below for native Cloudflare handlers.
 XWAY_STORAGE_STATE_JSON='{"cookies":[]}'
 # XWAY_STORAGE_STATE_BASE64=""
+# XWAY_COOKIE_HEADER="sessionid=...; csrftoken_v2=..."
+# XWAY_CSRF_TOKEN=""
+# XWAY_SESSIONID=""

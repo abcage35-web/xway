@@ -1,7 +1,7 @@
 import { collectCatalog, collectCatalogChart } from "../_lib/catalog.js";
 import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { collectProducts } from "../_lib/products.js";
-import { errorResponse, hasNativeStorageState, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
+import { errorResponse, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -77,6 +77,13 @@ async function handleNativeRequest(context, pathname) {
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       has_storage_state: hasNativeStorageState(context.env),
+      auth_sources: {
+        storage_state_json: Boolean(String(context.env.XWAY_STORAGE_STATE_JSON || "").trim()),
+        storage_state_base64: Boolean(String(context.env.XWAY_STORAGE_STATE_BASE64 || "").trim()),
+        cookie_header: hasCookieHeaderAuth(context.env),
+        sessionid: hasSessionCookieAuth(context.env),
+        csrf_token: hasCsrfToken(context.env),
+      },
     });
   }
 

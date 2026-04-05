@@ -20,8 +20,24 @@ export function sanitizeOrigin(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+export function hasCookieHeaderAuth(env) {
+  const cookieHeader = String(env.XWAY_COOKIE_HEADER || "").trim();
+  return Boolean(cookieHeader);
+}
+
+export function hasSessionCookieAuth(env) {
+  const sessionId = String(env.XWAY_SESSIONID || "").trim();
+  return Boolean(sessionId);
+}
+
+export function hasCsrfToken(env) {
+  const csrfToken = String(env.XWAY_CSRF_TOKEN || env.XWAY_CSRFTOKEN || "").trim();
+  return Boolean(csrfToken);
+}
+
 export function hasNativeStorageState(env) {
-  return Boolean(String(env.XWAY_STORAGE_STATE_JSON || env.XWAY_STORAGE_STATE_BASE64 || "").trim());
+  const storageState = String(env.XWAY_STORAGE_STATE_JSON || env.XWAY_STORAGE_STATE_BASE64 || "").trim();
+  return Boolean(storageState || hasCookieHeaderAuth(env) || hasSessionCookieAuth(env));
 }
 
 function parseIsoDate(value) {

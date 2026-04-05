@@ -1,4 +1,4 @@
-import { cloneValue, hasNativeStorageState, resolveRange, sanitizeOrigin } from "./utils.js";
+import { cloneValue, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, resolveRange, sanitizeOrigin } from "./utils.js";
 
 const SHOP_LIST_CACHE_TTL_MS = 120000;
 const SHOP_LISTING_CACHE_TTL_MS = 120000;
@@ -50,14 +50,52 @@ function parseStorageState(env) {
   const rawJson = String(env.XWAY_STORAGE_STATE_JSON || "").trim();
   const rawBase64 = String(env.XWAY_STORAGE_STATE_BASE64 || "").trim();
   const raw = rawJson || (rawBase64 ? decodeBase64(rawBase64) : "");
-  if (!raw) {
-    return null;
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed.cookies)) {
+      throw new Error("Storage state must contain a cookies array.");
+    }
+    return parsed;
   }
-  const parsed = JSON.parse(raw);
-  if (!Array.isArray(parsed.cookies)) {
-    throw new Error("Storage state must contain a cookies array.");
+
+  if (hasCookieHeaderAuth(env)) {
+    return {
+      cookies: String(env.XWAY_COOKIE_HEADER || "")
+        .split(";")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => {
+          const separatorIndex = part.indexOf("=");
+          if (separatorIndex <= 0) {
+            return null;
+          }
+          return {
+            name: part.slice(0, separatorIndex).trim(),
+            value: part.slice(separatorIndex + 1).trim(),
+          };
+        })
+        .filter((cookie) => cookie?.name && cookie?.value),
+    };
   }
-  return parsed;
+
+  if (hasSessionCookieAuth(env)) {
+    const cookies = [
+      {
+        name: "sessionid",
+        value: String(env.XWAY_SESSIONID || "").trim(),
+      },
+    ];
+    const csrfToken = String(env.XWAY_CSRF_TOKEN || env.XWAY_CSRFTOKEN || "").trim();
+    if (csrfToken) {
+      cookies.push({
+        name: "csrftoken_v2",
+        value: csrfToken,
+      });
+    }
+    return { cookies };
+  }
+
+  return null;
 }
 
 function buildCookieHeader(storageState) {
@@ -165,13 +203,13 @@ export class XwayApiClient {
   constructor(env, { start = null, end = null } = {}) {
     const storageState = parseStorageState(env);
     if (!storageState) {
-      throw new Error("XWAY_STORAGE_STATE_JSON or XWAY_STORAGE_STATE_BASE64 is required for native handlers.");
+      throw new Error("Native handlers require XWAY_STORAGE_STATE_JSON, XWAY_STORAGE_STATE_BASE64, XWAY_COOKIE_HEADER, or XWAY_SESSIONID.");
     }
     this.env = env;
     this.storageState = storageState;
     this.range = resolveRange(start, end);
     this.cookieHeader = buildCookieHeader(storageState);
-    this.csrfToken = csrfTokenFromState(storageState);
+    this.csrfToken = String(env.XWAY_CSRF_TOKEN || env.XWAY_CSRFTOKEN || "").trim() || csrfTokenFromState(storageState);
     this.baseOrigin = "https://am.xway.ru";
     this.cacheNamespace = sanitizeOrigin(env.CF_PAGES_URL || env.API_ORIGIN || "xway");
   }

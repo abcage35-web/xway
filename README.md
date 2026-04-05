@@ -29,9 +29,11 @@
 
 - `API_ORIGIN` = необязательно, URL резервного backend, например `https://api.example.com`
 - `XWAY_STORAGE_STATE_JSON` или `XWAY_STORAGE_STATE_BASE64` = storage state с cookies для прямых запросов в XWAY API из Cloudflare Functions
+- либо более простой вариант: `XWAY_COOKIE_HEADER` и `XWAY_CSRF_TOKEN`
 
 ### Что важно
 
-- Для полностью нативной работы на Cloudflare теперь достаточно фронта + `XWAY_STORAGE_STATE_JSON` или `XWAY_STORAGE_STATE_BASE64`.
+- Для полностью нативной работы на Cloudflare теперь достаточно фронта + одного из вариантов auth:
+  `XWAY_STORAGE_STATE_JSON`, `XWAY_STORAGE_STATE_BASE64`, `XWAY_COOKIE_HEADER`, либо `XWAY_SESSIONID`.
 - Отдельный Python backend нужен только если ты сознательно хочешь сохранить запасной proxy через `API_ORIGIN`.
 - Для React SPA отдельный `_redirects` не нужен, если в сборке есть корневой `index.html` и нет верхнеуровневого `404.html`.
