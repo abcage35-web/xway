@@ -9,6 +9,17 @@ export interface CatalogArticleIssueSummary {
   estimatedGap: number | null;
   campaignIds: number[];
   campaignLabels: string[];
+  campaigns: CatalogArticleIssueCampaign[];
+}
+
+export interface CatalogArticleIssueCampaign {
+  id: number;
+  label: string;
+  paymentType: "cpm" | "cpc" | null;
+  zoneKind: "search" | "recom" | "both" | null;
+  statusCode: string | null;
+  statusLabel: string | null;
+  displayStatus: "active" | "paused" | "freeze" | "muted";
 }
 
 export interface CatalogArticleYesterdayIssues {
@@ -334,7 +345,7 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
       if (!dayEntry) {
         return;
       }
-      const current =
+      const current: CatalogArticleIssueSummary & { campaignIdSet: Set<number>; campaignLabelSet: Set<string> } =
         aggregated.get(summary.kind) ||
         {
           kind: summary.kind,
@@ -342,8 +353,9 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
           hours: 0,
           incidents: 0,
           estimatedGap: 0,
-          campaignIds: [],
-          campaignLabels: [],
+          campaignIds: [] as number[],
+          campaignLabels: [] as string[],
+          campaigns: [] as CatalogArticleIssueCampaign[],
           campaignIdSet: new Set<number>(),
           campaignLabelSet: new Set<string>(),
         };

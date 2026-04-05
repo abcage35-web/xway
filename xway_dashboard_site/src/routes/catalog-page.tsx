@@ -1,5 +1,5 @@
-import { useDeferredValue, useEffect, useRef, useState, startTransition } from "react";
-import { ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, Snowflake, ThumbsUp } from "lucide-react";
+import { useDeferredValue, useEffect, useRef, useState, startTransition, type ReactNode } from "react";
+import { ArrowUpDown, ChevronDown, ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, SlidersHorizontal, Snowflake, ThumbsUp } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -36,6 +36,35 @@ const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: st
   manual: { headline: "Ручная ставка" },
   cpc: { headline: "Оплата за клики" },
 };
+
+const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
+const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v2";
+
+type CatalogSortField =
+  | "article"
+  | "name"
+  | "stock"
+  | "turnover"
+  | "campaigns"
+  | "spend"
+  | "views"
+  | "clicks"
+  | "orders"
+  | "ctr"
+  | "cr";
+
+type CatalogSortDirection = "asc" | "desc";
+
+interface CatalogIssueCacheEntry {
+  product_ref: string;
+  issues: CatalogArticleYesterdayIssues["issues"];
+}
+
+interface CatalogIssueCachePayload {
+  day: string;
+  rowsByRef: Record<string, CatalogIssueCacheEntry>;
+  updatedAt: string;
+}
 
 function CatalogCampaignColumnsHeader() {
   const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string; subtitle: string }> = [
@@ -158,6 +187,48 @@ function CatalogCampaignZonePill({
   );
 }
 
+function CatalogIssueCampaignPill({
+  campaign,
+}: {
+  campaign: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>[number];
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-2xl border px-2.5 py-1.5 text-[11px] font-medium leading-none",
+        campaign.displayStatus === "active"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : campaign.displayStatus === "freeze"
+            ? "border-sky-200 bg-sky-50 text-sky-700"
+            : campaign.displayStatus === "paused"
+              ? "border-amber-200 bg-amber-50 text-amber-700"
+              : "border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)]",
+      )}
+      title={`${campaign.label}${campaign.statusLabel ? ` · ${campaign.statusLabel}` : ""}`}
+    >
+      <CatalogCampaignStatusIconBadge status={campaign.displayStatus} label={campaign.statusLabel || "Статус не задан"} />
+      <span className={cn("catalog-campaign-kind-badge", campaign.paymentType === "cpc" ? "is-cpc" : "is-manual")}>
+        {campaign.paymentType === "cpc" ? "CPC" : "CPM"}
+      </span>
+      {campaign.zoneKind ? (
+        <CatalogCampaignZonePill
+          label={
+            campaign.zoneKind === "both"
+              ? "Поиск + Рекомендации"
+              : campaign.zoneKind === "recom"
+                ? "Рекомендации"
+                : "Поиск"
+          }
+          kind={campaign.zoneKind}
+          iconOnly
+        />
+      ) : null}
+      <span className="truncate">{campaign.label.replace(/^РК\s*/, "")}</span>
+      {campaign.statusLabel ? <span className="text-[var(--color-muted)]">· {campaign.statusLabel}</span> : null}
+    </span>
+  );
+}
+
 function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot[] {
   const byKey = new Map(article.campaign_states.map((state) => [state.key, state]));
   const slots: CatalogCampaignSlot[] = [];
@@ -227,6 +298,248 @@ function buildProductSearch(article: string, start?: string | null, end?: string
     params.set("end", end);
   }
   return `?${params.toString()}`;
+}
+
+function readCatalogIssuesCache(day: string): Record<string, CatalogIssueCacheEntry> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(CATALOG_ISSUES_CACHE_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as CatalogIssueCachePayload;
+    if (!parsed || parsed.day !== day || !parsed.rowsByRef || typeof parsed.rowsByRef !== "object") {
+      return {};
+    }
+    return parsed.rowsByRef;
+  } catch {
+    return {};
+  }
+}
+
+function writeCatalogIssuesCache(day: string, rowsByRef: Record<string, CatalogIssueCacheEntry>) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const payload: CatalogIssueCachePayload = {
+      day,
+      rowsByRef,
+      updatedAt: new Date().toISOString(),
+    };
+    window.localStorage.setItem(CATALOG_ISSUES_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota and privacy-mode failures.
+  }
+}
+
+function parseNumericFilterValue(value: string) {
+  const numeric = Number(String(value || "").replace(",", ".").trim());
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function matchesNumericRange(value: number | null | undefined, from: string, to: string) {
+  if (value === null || value === undefined) {
+    return !from && !to;
+  }
+  const min = parseNumericFilterValue(from);
+  const max = parseNumericFilterValue(to);
+  if (min !== null && value < min) {
+    return false;
+  }
+  if (max !== null && value > max) {
+    return false;
+  }
+  return true;
+}
+
+function FilterField({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <label className={cn("metric-chip flex flex-col gap-1 rounded-2xl px-4 py-3", className)}>
+      <span className="text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function NumericRangeField({
+  label,
+  fromValue,
+  toValue,
+  onFromChange,
+  onToChange,
+  step = "any",
+}: {
+  label: string;
+  fromValue: string;
+  toValue: string;
+  onFromChange: (value: string) => void;
+  onToChange: (value: string) => void;
+  step?: string;
+}) {
+  return (
+    <FilterField label={label}>
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="number"
+          inputMode="decimal"
+          step={step}
+          value={fromValue}
+          onChange={(event) => onFromChange(event.target.value)}
+          placeholder="от"
+          className="min-w-0 bg-transparent text-sm text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+        />
+        <input
+          type="number"
+          inputMode="decimal"
+          step={step}
+          value={toValue}
+          onChange={(event) => onToChange(event.target.value)}
+          placeholder="до"
+          className="min-w-0 bg-transparent text-sm text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+        />
+      </div>
+    </FilterField>
+  );
+}
+
+function CatalogStickyFilterShell({
+  toolbar,
+  filters,
+  onHeightChange,
+}: {
+  toolbar: ReactNode;
+  filters: ReactNode;
+  onHeightChange: (height: number) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY) === "1";
+  });
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  const [isPinned, setIsPinned] = useState(false);
+  const [layout, setLayout] = useState({ height: 0, width: 0, left: 0 });
+  const topOffset = 12;
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  }, [collapsed]);
+
+  useEffect(() => {
+    if (!rootRef.current || !innerRef.current) {
+      return;
+    }
+    const rootNode = rootRef.current;
+    const innerNode = innerRef.current;
+
+    const updateLayout = () => {
+      const wrapperRect = rootNode.getBoundingClientRect();
+      const innerRect = innerNode.getBoundingClientRect();
+      const nextLayout = {
+        height: Math.ceil(innerRect.height),
+        width: Math.ceil(wrapperRect.width),
+        left: Math.round(wrapperRect.left),
+      };
+      setLayout((current) =>
+        current.height === nextLayout.height && current.width === nextLayout.width && current.left === nextLayout.left ? current : nextLayout,
+      );
+      const pinned = wrapperRect.top <= topOffset;
+      setIsPinned(pinned);
+      const effectiveHeight = pinned ? topOffset + nextLayout.height + 8 : Math.ceil(wrapperRect.top + innerRect.height);
+      onHeightChange(effectiveHeight);
+    };
+
+    updateLayout();
+    window.addEventListener("scroll", updateLayout, { passive: true });
+    window.addEventListener("resize", updateLayout);
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(updateLayout);
+      observer.observe(rootNode);
+      observer.observe(innerNode);
+      return () => {
+        observer.disconnect();
+        window.removeEventListener("scroll", updateLayout);
+        window.removeEventListener("resize", updateLayout);
+      };
+    }
+
+    return () => {
+      window.removeEventListener("scroll", updateLayout);
+      window.removeEventListener("resize", updateLayout);
+    };
+  }, [collapsed, onHeightChange]);
+
+  if (collapsed) {
+    return (
+      <div ref={rootRef} className="relative z-[39]" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
+        <div
+          ref={innerRef}
+          className="ml-auto flex w-fit items-center gap-2 rounded-[22px] border border-[var(--color-line)] bg-white/95 px-3 py-2 shadow-[0_12px_40px_rgba(44,35,66,0.1)] backdrop-blur-xl"
+          style={isPinned ? { position: "fixed", top: `${topOffset}px`, right: "18px", zIndex: 39 } : undefined}
+        >
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            className="flex h-8 items-center gap-2 rounded-full bg-[var(--color-surface-soft)] px-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
+          >
+            <SlidersHorizontal className="size-4" />
+            Фильтры
+            <ChevronDown className="size-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={rootRef} className="relative z-[39]" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
+      <div
+        ref={innerRef}
+        className="space-y-3"
+        style={
+          isPinned
+            ? {
+                position: "fixed",
+                top: `${topOffset}px`,
+                left: `${layout.left}px`,
+                width: `${layout.width}px`,
+                zIndex: 39,
+              }
+            : undefined
+        }
+      >
+        {toolbar}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <SlidersHorizontal className="size-4" />
+            Скрыть фильтры
+          </button>
+        </div>
+        {filters}
+      </div>
+    </div>
+  );
 }
 
 function resolveCatalogChartWindow(spanDays: number | null | undefined): CatalogChartWindow {
@@ -540,6 +853,12 @@ export function CatalogPage() {
   const [selectedIssueShopIds, setSelectedIssueShopIds] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
+  const [stockFrom, setStockFrom] = useState("");
+  const [stockTo, setStockTo] = useState("");
+  const [turnoverFrom, setTurnoverFrom] = useState("");
+  const [turnoverTo, setTurnoverTo] = useState("");
+  const [sortField, setSortField] = useState<CatalogSortField>("stock");
+  const [sortDirection, setSortDirection] = useState<CatalogSortDirection>("desc");
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartWindow, setChartWindow] = useState<CatalogChartWindow>(() => resolveCatalogChartWindow(payload.range.span_days));
   const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
@@ -547,34 +866,91 @@ export function CatalogPage() {
   const [chartError, setChartError] = useState<string | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
-  const [articleIssueRows, setArticleIssueRows] = useState<CatalogArticleYesterdayIssues[] | null>(null);
-  const [articleIssuesCompletedCount, setArticleIssuesCompletedCount] = useState(0);
-  const [articleIssuesTotalCount, setArticleIssuesTotalCount] = useState(0);
+  const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
-  const toolbarRef = useRef<HTMLDivElement | null>(null);
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
   const skuOptions = buildSkuOptions(payload);
+  const turnoverOrdersByRef = new Map(
+    (turnoverPayload?.shops || []).flatMap((shop) =>
+      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
+    ),
+  );
   const visibleShops = filterShops(payload, {
     query: deferredQuery,
     selectedShopIds,
     selectedCategories,
     selectedSkus,
-  });
+  })
+    .map((shop) => {
+      const nextArticles = shop.articles
+        .filter((article) => {
+          const stockValue = toNumber(article.stock);
+          const turnoverValue = computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
+          return matchesNumericRange(stockValue, stockFrom, stockTo) && matchesNumericRange(turnoverValue, turnoverFrom, turnoverTo);
+        })
+        .sort((left, right) => {
+          const resolveSortValue = (article: CatalogArticle) => {
+            switch (sortField) {
+              case "article":
+                return Number(article.article) || article.article;
+              case "name":
+                return String(article.name || "");
+              case "stock":
+                return toNumber(article.stock) ?? Number.NEGATIVE_INFINITY;
+              case "turnover":
+                return computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)) ?? Number.NEGATIVE_INFINITY;
+              case "campaigns":
+                return article.campaign_states.length;
+              case "spend":
+                return toNumber(article.expense_sum) ?? Number.NEGATIVE_INFINITY;
+              case "views":
+                return toNumber(article.views) ?? Number.NEGATIVE_INFINITY;
+              case "clicks":
+                return toNumber(article.clicks) ?? Number.NEGATIVE_INFINITY;
+              case "orders":
+                return toNumber(article.orders) ?? Number.NEGATIVE_INFINITY;
+              case "ctr":
+                return toNumber(article.ctr) ?? Number.NEGATIVE_INFINITY;
+              case "cr":
+              default:
+                return toNumber(article.cr) ?? Number.NEGATIVE_INFINITY;
+            }
+          };
+
+          const leftValue = resolveSortValue(left);
+          const rightValue = resolveSortValue(right);
+          let result = 0;
+          if (typeof leftValue === "string" || typeof rightValue === "string") {
+            result = String(leftValue || "").localeCompare(String(rightValue || ""), "ru");
+          } else {
+            result = (leftValue as number) - (rightValue as number);
+          }
+          if (result === 0) {
+            result = left.article.localeCompare(right.article, "ru");
+          }
+          return sortDirection === "asc" ? result : -result;
+        });
+
+      if (!nextArticles.length) {
+        return null;
+      }
+
+      return {
+        ...shop,
+        articles: nextArticles,
+      };
+    })
+    .filter(Boolean) as CatalogShop[];
   const issueShopOptions = buildShopOptionsFromShops(visibleShops);
   const issueShopOptionKey = issueShopOptions.map((option) => option.value).join(",");
   const issueScopedShops = visibleShops.filter(
     (shop) => !selectedIssueShopIds.length || selectedIssueShopIds.includes(String(shop.id)),
-  );
-  const turnoverOrdersByRef = new Map(
-    (turnoverPayload?.shops || []).flatMap((shop) =>
-      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
-    ),
   );
   const visibleIssueTargets = [...new Map(
     issueScopedShops.flatMap((shop) =>
@@ -611,6 +987,12 @@ export function CatalogPage() {
   const preset = getRangePreset(start, end);
   const catalogSearch = buildCatalogSearch(start, end);
   const issueScopeShopCount = issueScopedShops.length;
+  const visibleIssueCachedEntries = visibleIssueTargetRefs
+    .map((ref) => articleIssueCacheByRef[ref])
+    .filter((item): item is CatalogIssueCacheEntry => Boolean(item));
+  const articleIssueRows = visibleIssueCachedEntries.length ? mapCatalogIssueRows(visibleIssueCachedEntries, visibleIssueTargetMetaByRef) : null;
+  const articleIssuesCompletedCount = visibleIssueTargetRefs.filter((ref) => Boolean(articleIssueCacheByRef[ref])).length;
+  const articleIssuesTotalCount = visibleIssueTargetRefs.length;
 
   const handleRangeChange = (next: { start: string; end: string }) => {
     navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
@@ -631,28 +1013,19 @@ export function CatalogPage() {
   };
 
   useEffect(() => {
-    const node = toolbarRef.current;
-    if (!node || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const syncHeight = () => {
-      const nextHeight = Math.max(Math.round(node.getBoundingClientRect().height) - 1, 0);
-      setToolbarHeight(nextHeight);
-    };
-
-    syncHeight();
-    const observer = new ResizeObserver(syncHeight);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
     return () => {
       chartFetchAbortRef.current?.abort();
       articleIssuesAbortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    writeCatalogIssuesCache(yesterdayIso, articleIssueCacheByRef);
+  }, [articleIssueCacheByRef, yesterdayIso]);
+
+  useEffect(() => {
+    setArticleIssueCacheByRef(readCatalogIssuesCache(yesterdayIso));
+  }, [yesterdayIso]);
 
   useEffect(() => {
     const allowedValues = new Set(issueShopOptions.map((option) => option.value));
@@ -666,9 +1039,6 @@ export function CatalogPage() {
     articleIssuesAbortRef.current?.abort();
     setArticleIssuesLoading(false);
     setArticleIssuesError(null);
-    setArticleIssueRows(null);
-    setArticleIssuesCompletedCount(0);
-    setArticleIssuesTotalCount(0);
   }, [visibleIssueTargetRefsKey]);
 
   useEffect(() => {
@@ -770,16 +1140,19 @@ export function CatalogPage() {
     setSelectedIssueShopIds([]);
     setSelectedCategories([]);
     setSelectedSkus([]);
+    setStockFrom("");
+    setStockTo("");
+    setTurnoverFrom("");
+    setTurnoverTo("");
+    setSortField("stock");
+    setSortDirection("desc");
   };
 
   const collectArticleIssues = async () => {
     articleIssuesAbortRef.current?.abort();
     if (!visibleIssueTargetRefs.length) {
-      setArticleIssueRows([]);
       setArticleIssuesError(null);
       setArticleIssuesLoading(false);
-      setArticleIssuesCompletedCount(0);
-      setArticleIssuesTotalCount(0);
       return;
     }
 
@@ -787,14 +1160,14 @@ export function CatalogPage() {
     articleIssuesAbortRef.current = controller;
     setArticleIssuesLoading(true);
     setArticleIssuesError(null);
-    setArticleIssueRows([]);
-    setArticleIssuesCompletedCount(0);
-    setArticleIssuesTotalCount(visibleIssueTargetRefs.length);
 
     try {
-      const issueRowsByRef = new Map<string, { product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>();
       const partialErrorMessages = new Set<string>();
-      let completedCount = 0;
+      const missingRefs = visibleIssueTargetRefs.filter((ref) => !articleIssueCacheByRef[ref]);
+      if (!missingRefs.length) {
+        setArticleIssuesLoading(false);
+        return;
+      }
 
       const fetchIssueRowsChunk = async (refs: string[]): Promise<Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>> => {
         const response = await fetchCatalogIssues({
@@ -813,6 +1186,15 @@ export function CatalogPage() {
             estimatedGap: issue.estimated_gap,
             campaignIds: issue.campaign_ids,
             campaignLabels: issue.campaign_labels,
+            campaigns: issue.campaigns.map((campaign) => ({
+              id: campaign.id,
+              label: campaign.label,
+              paymentType: campaign.payment_type,
+              zoneKind: campaign.zone_kind,
+              statusCode: campaign.status_code,
+              statusLabel: campaign.status_label,
+              displayStatus: campaign.display_status,
+            })),
           })),
         }));
       };
@@ -834,27 +1216,25 @@ export function CatalogPage() {
         }
       };
 
-      const chunks = chunkItems(visibleIssueTargetRefs, 20);
+      const chunks = chunkItems(missingRefs, 20);
       for (const chunk of chunks) {
         const rows = await fetchIssueRowsAdaptive(chunk);
         if (controller.signal.aborted) {
           return;
         }
-        rows.forEach((row) => issueRowsByRef.set(row.product_ref, row));
-        completedCount += chunk.length;
-        setArticleIssuesCompletedCount(completedCount);
-        setArticleIssueRows(mapCatalogIssueRows([...issueRowsByRef.values()], visibleIssueTargetMetaByRef));
+        const rowsByRef = new Map(rows.map((row) => [row.product_ref, row]));
+        setArticleIssueCacheByRef((current) => {
+          const next = { ...current };
+          chunk.forEach((ref) => {
+            next[ref] = rowsByRef.get(ref) || { product_ref: ref, issues: [] };
+          });
+          return next;
+        });
       }
 
-      const nextRows = mapCatalogIssueRows([...issueRowsByRef.values()], visibleIssueTargetMetaByRef);
-      setArticleIssueRows(nextRows);
       if (partialErrorMessages.size) {
         const [firstMessage] = [...partialErrorMessages];
-        setArticleIssuesError(
-          nextRows.length
-            ? `Часть артикулов не загрузилась. Уже показаны найденные ошибки. ${firstMessage}`
-            : firstMessage || "Не удалось собрать ошибки по артикулам.",
-        );
+        setArticleIssuesError(`Часть артикулов не загрузилась. Уже показаны найденные ошибки. ${firstMessage || "Не удалось собрать ошибки по артикулам."}`);
       }
     } catch (error) {
       if (controller.signal.aborted) {
@@ -890,15 +1270,122 @@ export function CatalogPage() {
         }
       />
 
-      <div ref={toolbarRef} className="catalog-range-toolbar-sticky">
-        <RangeToolbar
-          start={start}
-          end={end}
-          preset={preset}
-          onPresetChange={handlePresetChange}
-          onRangeChange={handleRangeChange}
-        />
-      </div>
+      <CatalogStickyFilterShell
+        onHeightChange={setToolbarHeight}
+        toolbar={
+          <RangeToolbar
+            start={start}
+            end={end}
+            preset={preset}
+            onPresetChange={handlePresetChange}
+            onRangeChange={handleRangeChange}
+            extra={
+              <button
+                type="button"
+                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+              >
+                <ArrowUpDown className="size-4 rotate-90" />
+                Наверх
+              </button>
+            }
+          />
+        }
+        filters={
+          <div className="glass-panel rounded-[30px] p-4 sm:p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1">
+                <h3 className="font-display text-lg font-semibold text-[var(--color-ink)]">Фильтры списка артикулов</h3>
+                <p className="text-sm text-[var(--color-muted)]">Поиск, кабинеты, остаток, оборачиваемость и сортировка таблиц по кабинетам.</p>
+              </div>
+              <button
+                type="button"
+                onClick={clearLocalFilters}
+                className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+              >
+                Сбросить фильтры
+              </button>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
+              <div className="min-w-0">
+                <SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />
+              </div>
+              <SearchableMultiSelect
+                label="Кабинет"
+                allLabel="Все кабинеты"
+                options={shopOptions}
+                selectedValues={selectedShopIds}
+                onChange={setSelectedShopIds}
+                emptyText="Кабинеты не найдены"
+              />
+              <SearchableMultiSelect
+                label="Категория"
+                allLabel="Все категории"
+                options={categoryOptions}
+                selectedValues={selectedCategories}
+                onChange={setSelectedCategories}
+                emptyText="Категории не найдены"
+              />
+              <SearchableMultiSelect
+                label="SKU"
+                allLabel="Все SKU"
+                options={skuOptions}
+                selectedValues={selectedSkus}
+                onChange={setSelectedSkus}
+                emptyText="SKU не найдены"
+              />
+            </div>
+
+            <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+              <NumericRangeField
+                label="Остаток"
+                fromValue={stockFrom}
+                toValue={stockTo}
+                onFromChange={setStockFrom}
+                onToChange={setStockTo}
+                step="1"
+              />
+              <NumericRangeField
+                label="Оборачиваемость, дн"
+                fromValue={turnoverFrom}
+                toValue={turnoverTo}
+                onFromChange={setTurnoverFrom}
+                onToChange={setTurnoverTo}
+              />
+              <FilterField label="Сортировать по">
+                <select
+                  value={sortField}
+                  onChange={(event) => setSortField(event.target.value as CatalogSortField)}
+                  className="bg-transparent text-sm text-[var(--color-ink)] outline-none"
+                >
+                  <option value="stock">Остаток</option>
+                  <option value="turnover">Оборачиваемость</option>
+                  <option value="campaigns">Кол-во РК</option>
+                  <option value="spend">Расход</option>
+                  <option value="views">Показы</option>
+                  <option value="clicks">Клики</option>
+                  <option value="orders">Заказы</option>
+                  <option value="ctr">CTR</option>
+                  <option value="cr">CR</option>
+                  <option value="article">Артикул</option>
+                  <option value="name">Название</option>
+                </select>
+              </FilterField>
+              <FilterField label="Направление">
+                <select
+                  value={sortDirection}
+                  onChange={(event) => setSortDirection(event.target.value as CatalogSortDirection)}
+                  className="bg-transparent text-sm text-[var(--color-ink)] outline-none"
+                >
+                  <option value="desc">По убыванию</option>
+                  <option value="asc">По возрастанию</option>
+                </select>
+              </FilterField>
+            </div>
+          </div>
+        }
+      />
 
       <SectionCard
         title="График каталога"
@@ -927,36 +1414,6 @@ export function CatalogPage() {
           </div>
         }
       >
-        <div className="mb-5 grid w-full gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
-          <div className="min-w-0">
-            <SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />
-          </div>
-          <SearchableMultiSelect
-            label="Кабинет"
-            allLabel="Все кабинеты"
-            options={shopOptions}
-            selectedValues={selectedShopIds}
-            onChange={setSelectedShopIds}
-            emptyText="Кабинеты не найдены"
-          />
-          <SearchableMultiSelect
-            label="Категория"
-            allLabel="Все категории"
-            options={categoryOptions}
-            selectedValues={selectedCategories}
-            onChange={setSelectedCategories}
-            emptyText="Категории не найдены"
-          />
-          <SearchableMultiSelect
-            label="SKU"
-            allLabel="Все SKU"
-            options={skuOptions}
-            selectedValues={selectedSkus}
-            onChange={setSelectedSkus}
-            emptyText="SKU не найдены"
-          />
-        </div>
-
         {!chartCollapsed ? (
           <CatalogSelectionChart
             rows={chartData?.rows ?? []}
@@ -1095,26 +1552,26 @@ export function CatalogPage() {
           ) : null}
 
           {articleIssueRows?.length ? (
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
               {articleIssueRows.map((item) => (
-                <article key={item.article} className="rounded-[24px] border border-[var(--color-line)] bg-white/90 p-4 shadow-[0_12px_30px_rgba(44,35,66,0.06)]">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
+                <article key={item.article} className="rounded-[20px] border border-[var(--color-line)] bg-white/92 p-3 shadow-[0_10px_24px_rgba(44,35,66,0.05)]">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <Link
                           to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                          className="font-display text-lg font-semibold text-[var(--color-ink)] hover:text-brand-200"
+                          className="font-display text-base font-semibold text-[var(--color-ink)] hover:text-brand-200"
                         >
                           Артикул {item.article}
                         </Link>
-                        <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">
+                        <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
                           {formatNumber(getArticleIssueHoursTotal(item), 1)} ч простоя
                         </span>
-                        <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">
+                        <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
                           {formatIssueIncidents(getArticleIssueIncidentsTotal(item))}
                         </span>
                       </div>
-                      <p className="truncate text-sm text-[var(--color-muted)]" title={item.name}>
+                      <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
                         {item.name}
                       </p>
                     </div>
@@ -1122,42 +1579,47 @@ export function CatalogPage() {
                       href={item.productUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-2xl border border-[var(--color-line)] px-3 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
+                      className="inline-flex items-center gap-1 rounded-2xl border border-[var(--color-line)] px-2.5 py-1.5 text-xs text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
                     >
                       XWAY
                       <ExternalLink className="size-3.5" />
                     </a>
                   </div>
 
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-3 space-y-2">
                     {item.issues.map((issue) => (
                       <div
                         key={`${item.article}-${issue.kind}`}
                         className={cn(
-                          "rounded-[20px] border px-4 py-3",
+                          "rounded-[16px] border px-3 py-2.5",
                           issue.kind === "budget" ? "border-rose-200 bg-rose-50/70" : "border-amber-200 bg-amber-50/70",
                         )}
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="font-medium text-[var(--color-ink)]">{issue.title}</p>
-                          <span
-                            className={cn(
-                              "rounded-full px-2.5 py-1 text-xs font-medium",
-                              issue.kind === "budget" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700",
-                            )}
-                          >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={cn(
+                            "rounded-full px-2 py-1 text-[11px] font-semibold",
+                            issue.kind === "budget" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700",
+                          )}>
+                            {issue.title}
+                          </span>
+                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                            {formatNumber(issue.hours, 1)} ч
+                          </span>
+                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
                             {formatIssueIncidents(issue.incidents)}
                           </span>
+                          {issue.estimatedGap !== null ? (
+                            <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                              ≈ {formatMoney(issue.estimatedGap)}
+                            </span>
+                          ) : null}
                         </div>
-                        <div className="mt-3 flex flex-wrap gap-2 text-sm text-[var(--color-muted)]">
-                          <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issue.hours, 1)} ч</span>
-                          {issue.estimatedGap !== null ? <span className="metric-chip rounded-2xl px-3 py-2">≈ {formatMoney(issue.estimatedGap)}</span> : null}
-                          <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issue.campaignIds.length)} РК</span>
-                        </div>
-                        {issue.campaignLabels.length ? (
-                          <p className="mt-3 text-xs leading-5 text-[var(--color-muted)]">
-                            {issue.campaignLabels.join(", ")}
-                          </p>
+                        {issue.campaigns.length ? (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {issue.campaigns.map((campaign) => (
+                              <CatalogIssueCampaignPill key={`${item.article}-${issue.kind}-${campaign.id}`} campaign={campaign} />
+                            ))}
+                          </div>
                         ) : null}
                       </div>
                     ))}

@@ -317,6 +317,106 @@ function formatIssueCampaignName(campaign) {
   return name ? `РК ${campaign.id} · ${name}` : `РК ${campaign.id}`;
 }
 
+function resolveCampaignPaymentType(campaign) {
+  const paymentTypeRaw = String(campaign?.payment_type || "").trim().toLowerCase();
+  const campaignName = String(campaign?.name || "").trim().toLowerCase();
+  const auctionMode = String(campaign?.auction_mode || "").trim().toLowerCase();
+  const autoType = String(campaign?.auto_type || "").trim().toLowerCase();
+  if (["cpc", "click", "clicks"].includes(paymentTypeRaw)) {
+    return "cpc";
+  }
+  if (["cpm", "view", "views"].includes(paymentTypeRaw)) {
+    return "cpm";
+  }
+  if (/оплата\s+за\s+клики|cpc|click|клик/i.test([campaignName, auctionMode, autoType].join(" "))) {
+    return "cpc";
+  }
+  return "cpm";
+}
+
+function resolveCampaignZoneKind(campaign) {
+  const auctionMode = String(campaign?.auction_mode || "").trim().toLowerCase();
+  const autoType = String(campaign?.auto_type || "").trim().toLowerCase();
+  const name = String(campaign?.name || "").trim().toLowerCase();
+  const paymentType = String(campaign?.payment_type || "").trim().toLowerCase();
+  const searchSignal = toNumber(campaign?.min_cpm) !== null || toNumber(campaign?.mp_bid) !== null;
+  const recomSignal = toNumber(campaign?.min_cpm_recom) !== null || toNumber(campaign?.mp_recom_bid) !== null;
+  const source = [auctionMode, autoType, name].filter(Boolean).join(" ");
+
+  let hasSearch = false;
+  let hasRecom = false;
+
+  if (campaign?.unified) {
+    hasSearch = true;
+    hasRecom = true;
+  } else if (/search[_\s-]*recom|recom[_\s-]*search|searchrecom|поиск.*реком|реком.*поиск/.test(auctionMode)) {
+    hasSearch = true;
+    hasRecom = true;
+  } else if (/recom|recommend|реком/.test(auctionMode)) {
+    hasRecom = true;
+  } else if (/search|поиск/.test(auctionMode)) {
+    hasSearch = true;
+  } else if (paymentType.includes("cpc") || paymentType.includes("click") || paymentType.includes("клик")) {
+    hasSearch = true;
+  } else {
+    hasSearch = searchSignal || /search|поиск/.test(source);
+    hasRecom = recomSignal || /recom|recommend|реком/.test(source);
+  }
+
+  if (hasSearch && hasRecom) {
+    return "both";
+  }
+  if (hasRecom) {
+    return "recom";
+  }
+  return "search";
+}
+
+function normalizeCampaignStatusCode(campaign) {
+  const raw = campaign?.status_xway ?? campaign?.status ?? null;
+  const normalized = String(raw || "").trim().toUpperCase();
+  return normalized || null;
+}
+
+function formatCampaignStatusLabel(statusCode) {
+  const normalized = String(statusCode || "").trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+  return {
+    ACTIVE: "Активна",
+    PAUSED: "Пауза",
+    FROZEN: "Заморожена",
+  }[normalized] || normalized;
+}
+
+function resolveCampaignDisplayStatus(statusCode) {
+  const normalized = String(statusCode || "").trim().toUpperCase();
+  if (normalized === "ACTIVE") {
+    return "active";
+  }
+  if (normalized === "FROZEN") {
+    return "freeze";
+  }
+  if (normalized === "PAUSED") {
+    return "paused";
+  }
+  return "muted";
+}
+
+function buildIssueCampaignMeta(campaign) {
+  const statusCode = normalizeCampaignStatusCode(campaign);
+  return {
+    id: Number(campaign?.id),
+    label: formatIssueCampaignName(campaign),
+    payment_type: resolveCampaignPaymentType(campaign),
+    zone_kind: resolveCampaignZoneKind(campaign),
+    status_code: statusCode,
+    status_label: formatCampaignStatusLabel(statusCode),
+    display_status: resolveCampaignDisplayStatus(statusCode),
+  };
+}
+
 function aggregateCatalogIssueSummaries(campaigns, yesterday) {
   const aggregated = new Map();
   for (const campaign of campaigns || []) {
@@ -335,6 +435,7 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
         estimated_gap: 0,
         campaign_ids: [],
         campaign_labels: [],
+        campaigns: [],
         campaignIdSet: new Set(),
         campaignLabelSet: new Set(),
       };
@@ -346,6 +447,7 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
       if (!current.campaignIdSet.has(campaign.id)) {
         current.campaignIdSet.add(campaign.id);
         current.campaign_ids.push(campaign.id);
+        current.campaigns.push(buildIssueCampaignMeta(campaign));
       }
       const campaignLabel = formatIssueCampaignName(campaign);
       if (!current.campaignLabelSet.has(campaignLabel)) {
@@ -391,6 +493,16 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
       return {
         id: campaignId,
         name: campaign?.name ?? null,
+        status: campaign?.status ?? null,
+        status_xway: campaign?.status_xway ?? null,
+        payment_type: campaign?.payment_type ?? null,
+        auction_mode: campaign?.auction_mode ?? null,
+        auto_type: campaign?.auto_type ?? null,
+        unified: Boolean(campaign?.unified),
+        min_cpm: campaign?.min_cpm ?? null,
+        mp_bid: campaign?.mp_bid ?? null,
+        min_cpm_recom: campaign?.min_cpm_recom ?? null,
+        mp_recom_bid: campaign?.mp_recom_bid ?? null,
         daily_exact: dailyExactPayload?.[String(campaignId)] || [],
         status_logs: {
           pause_history: normalizeStatusPauseHistory(pausePayload || {}),

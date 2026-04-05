@@ -570,6 +570,17 @@ export interface CatalogIssuesIssue {
   estimated_gap: number | null;
   campaign_ids: number[];
   campaign_labels: string[];
+  campaigns: CatalogIssuesIssueCampaign[];
+}
+
+export interface CatalogIssuesIssueCampaign {
+  id: number;
+  label: string;
+  payment_type: "cpm" | "cpc" | null;
+  zone_kind: "search" | "recom" | "both" | null;
+  status_code: string | null;
+  status_label: string | null;
+  display_status: "active" | "paused" | "freeze" | "muted";
 }
 
 export interface CatalogIssuesRow {
