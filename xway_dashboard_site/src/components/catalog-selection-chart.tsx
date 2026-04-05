@@ -577,6 +577,9 @@ export function CatalogSelectionChart({
   totals,
   selectionCount,
   loadedProductsCount,
+  chunkCount,
+  loadedChunkCount,
+  errorCount,
   isLoading,
   error,
   rangeLabel,
@@ -586,6 +589,9 @@ export function CatalogSelectionChart({
   totals: CatalogChartTotals | null;
   selectionCount: number;
   loadedProductsCount?: number | null;
+  chunkCount?: number | null;
+  loadedChunkCount?: number | null;
+  errorCount?: number | null;
   isLoading: boolean;
   error?: string | null;
   rangeLabel: string;
@@ -638,7 +644,19 @@ export function CatalogSelectionChart({
           {isLoading ? (
             <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5">
               <LoaderCircle className="size-4 animate-spin text-brand-200" />
-              Обновляем график
+              {loadedProductsCount !== undefined && loadedProductsCount !== null
+                ? `Загружено ${formatNumber(loadedProductsCount)} / ${formatNumber(selectionCount)}`
+                : "Обновляем график"}
+            </span>
+          ) : null}
+          {!isLoading && chunkCount && chunkCount > 0 ? (
+            <span className="inline-flex items-center gap-2 rounded-full bg-white/72 px-3 py-1.5 text-xs">
+              Чанки {formatNumber(loadedChunkCount ?? chunkCount)} / {formatNumber(chunkCount)}
+            </span>
+          ) : null}
+          {errorCount ? (
+            <span className="inline-flex items-center gap-2 rounded-full bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+              Ошибок: {formatNumber(errorCount)}
             </span>
           ) : null}
         </div>

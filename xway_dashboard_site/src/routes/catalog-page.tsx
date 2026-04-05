@@ -67,6 +67,15 @@ interface CatalogIssueCachePayload {
   updatedAt: string;
 }
 
+interface CatalogChartProgressState {
+  cacheKey: string;
+  selectionCount: number;
+  loadedProductsCount: number;
+  chunkCount: number;
+  loadedChunkCount: number;
+  errorCount: number;
+}
+
 function CatalogCampaignColumnsHeader() {
   const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string; subtitle: string }> = [
     { key: "unified", title: "кампания", subtitle: "Единая ставка" },
@@ -337,8 +346,123 @@ function writeCatalogIssuesCache(day: string, rowsByRef: Record<string, CatalogI
 }
 
 function parseNumericFilterValue(value: string) {
-  const numeric = Number(String(value || "").replace(",", ".").trim());
+  const normalized = String(value || "").replace(",", ".").trim();
+  if (!normalized) {
+    return null;
+  }
+  const numeric = Number(normalized);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function catalogChartRate(numerator: number, denominator: number) {
+  return denominator > 0 ? (numerator / denominator) * 100 : null;
+}
+
+function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
+  const views = toNumber(row.views) ?? 0;
+  const clicks = toNumber(row.clicks) ?? 0;
+  const atbs = toNumber(row.atbs) ?? 0;
+  const orders = toNumber(row.orders) ?? 0;
+  const expenseSum = toNumber(row.expense_sum) ?? 0;
+  const spentSkuCount = toNumber(row.spent_sku_count) ?? 0;
+
+  return {
+    ...row,
+    views,
+    clicks,
+    atbs,
+    orders,
+    expense_sum: expenseSum,
+    spent_sku_count: spentSkuCount,
+    ctr: catalogChartRate(clicks, views),
+    cr1: catalogChartRate(atbs, clicks),
+    cr2: catalogChartRate(orders, atbs),
+    crf: catalogChartRate(orders, clicks),
+  };
+}
+
+function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogChartResponse["totals"] {
+  const totals = rows.reduce(
+    (accumulator, row) => {
+      accumulator.views += toNumber(row.views) ?? 0;
+      accumulator.clicks += toNumber(row.clicks) ?? 0;
+      accumulator.atbs += toNumber(row.atbs) ?? 0;
+      accumulator.orders += toNumber(row.orders) ?? 0;
+      accumulator.expense_sum += toNumber(row.expense_sum) ?? 0;
+      return accumulator;
+    },
+    {
+      views: 0,
+      clicks: 0,
+      atbs: 0,
+      orders: 0,
+      expense_sum: 0,
+    },
+  );
+
+  return {
+    ...totals,
+    ctr: catalogChartRate(totals.clicks, totals.views),
+    cr1: catalogChartRate(totals.atbs, totals.clicks),
+    cr2: catalogChartRate(totals.orders, totals.atbs),
+    crf: catalogChartRate(totals.orders, totals.clicks),
+  };
+}
+
+function mergeCatalogChartResponses(
+  current: CatalogChartResponse | null,
+  incoming: CatalogChartResponse,
+  selectionCount: number,
+): CatalogChartResponse {
+  const rowsByDay = new Map<string, CatalogChartResponse["rows"][number]>();
+  const seedRows = current?.rows.length ? current.rows : incoming.rows;
+
+  seedRows.forEach((row) => {
+    rowsByDay.set(row.day, {
+      ...row,
+      views: 0,
+      clicks: 0,
+      atbs: 0,
+      orders: 0,
+      expense_sum: 0,
+      spent_sku_count: 0,
+      ctr: null,
+      cr1: null,
+      cr2: null,
+      crf: null,
+    });
+  });
+
+  [current?.rows ?? [], incoming.rows].forEach((sourceRows) => {
+    sourceRows.forEach((row) => {
+      const target = rowsByDay.get(row.day);
+      if (!target) {
+        rowsByDay.set(row.day, finalizeCatalogChartRow(row));
+        return;
+      }
+      target.views += toNumber(row.views) ?? 0;
+      target.clicks += toNumber(row.clicks) ?? 0;
+      target.atbs += toNumber(row.atbs) ?? 0;
+      target.orders += toNumber(row.orders) ?? 0;
+      target.expense_sum += toNumber(row.expense_sum) ?? 0;
+      target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
+    });
+  });
+
+  const rows = [...rowsByDay.values()]
+    .map((row) => finalizeCatalogChartRow(row))
+    .sort((left, right) => left.day.localeCompare(right.day));
+
+  return {
+    ok: true,
+    generated_at: incoming.generated_at,
+    range: incoming.range,
+    selection_count: selectionCount,
+    loaded_products_count: (current?.loaded_products_count ?? 0) + (incoming.loaded_products_count ?? 0),
+    rows,
+    totals: buildCatalogChartTotals(rows),
+    errors: [...(current?.errors ?? []), ...(incoming.errors ?? [])],
+  };
 }
 
 function matchesNumericRange(value: number | null | undefined, from: string, to: string) {
@@ -884,6 +1008,7 @@ export function CatalogPage() {
   const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [chartProgress, setChartProgress] = useState<CatalogChartProgressState | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
@@ -891,6 +1016,7 @@ export function CatalogPage() {
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const chartFetchAbortRef = useRef<AbortController | null>(null);
+  const chartCacheRef = useRef<Map<string, CatalogChartResponse>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
 
   const shopOptions = buildShopOptions(payload);
@@ -989,18 +1115,24 @@ export function CatalogPage() {
   const visibleArticleCodes = [...new Set(visibleShops.flatMap((shop) => shop.articles.map((article) => article.article)))].sort((left, right) => left.localeCompare(right, "ru"));
   const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
   const visibleIssueTargetMetaByRef = new Map(visibleIssueTargets.map((item) => [item.ref, item]));
-  const visibleArticles = visibleShops.flatMap((shop) =>
-    shop.articles.map((article) => ({
-      shopId: shop.id,
-      productId: article.product_id,
-    })),
-  );
+  const visibleArticles = [...new Map(
+    visibleShops.flatMap((shop) =>
+      shop.articles.map((article) => [
+        `${shop.id}:${article.product_id}`,
+        {
+          shopId: shop.id,
+          productId: article.product_id,
+        },
+      ]),
+    ),
+  ).values()];
   const visibleIssueTargetRefsKey = visibleIssueTargetRefs.join(",");
   const chartSelectionCount = visibleArticles.length;
   const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
   const chartProductRefsKey = chartProductRefs.join(",");
   const chartRangeEnd = payload.range.current_end;
   const chartRangeStart = shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
+  const chartCacheKey = `${chartRangeStart}|${chartRangeEnd}|${chartProductRefsKey}`;
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
@@ -1066,12 +1198,30 @@ export function CatalogPage() {
     if (chartCollapsed) {
       setChartLoading(false);
       setChartError(null);
+      setChartProgress(null);
       return;
     }
     if (!chartSelectionCount) {
       setChartLoading(false);
       setChartError(null);
       setChartData(null);
+      setChartProgress(null);
+      return;
+    }
+
+    const cached = chartCacheRef.current.get(chartCacheKey);
+    if (cached) {
+      setChartLoading(false);
+      setChartError(null);
+      setChartData(cached);
+      setChartProgress({
+        cacheKey: chartCacheKey,
+        selectionCount: cached.selection_count,
+        loadedProductsCount: cached.loaded_products_count,
+        chunkCount: 0,
+        loadedChunkCount: 0,
+        errorCount: cached.errors.length,
+      });
       return;
     }
 
@@ -1081,36 +1231,62 @@ export function CatalogPage() {
       setChartLoading(true);
       setChartError(null);
       setChartData(null);
-      fetchCatalogChart({
-        productRefs: chartProductRefs,
-        start: chartRangeStart,
-        end: chartRangeEnd,
-        signal: controller.signal,
-      })
-        .then((response) => {
-          if (controller.signal.aborted) {
-            return;
+      const productChunks = chunkItems(chartProductRefs, 24);
+      setChartProgress({
+        cacheKey: chartCacheKey,
+        selectionCount: chartSelectionCount,
+        loadedProductsCount: 0,
+        chunkCount: productChunks.length,
+        loadedChunkCount: 0,
+        errorCount: 0,
+      });
+
+      (async () => {
+        try {
+          let nextResponse: CatalogChartResponse | null = null;
+          for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
+            const chunkResponse = await fetchCatalogChart({
+              productRefs: productChunks[chunkIndex]!,
+              start: chartRangeStart,
+              end: chartRangeEnd,
+              signal: controller.signal,
+            });
+            if (controller.signal.aborted) {
+              return;
+            }
+            nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, chartSelectionCount);
+            setChartData(nextResponse);
+            setChartProgress({
+              cacheKey: chartCacheKey,
+              selectionCount: chartSelectionCount,
+              loadedProductsCount: nextResponse.loaded_products_count,
+              chunkCount: productChunks.length,
+              loadedChunkCount: chunkIndex + 1,
+              errorCount: nextResponse.errors.length,
+            });
           }
-          setChartData(response);
-        })
-        .catch((error) => {
+
+          if (nextResponse) {
+            chartCacheRef.current.set(chartCacheKey, nextResponse);
+          }
+        } catch (error) {
           if (controller.signal.aborted) {
             return;
           }
           setChartError(error instanceof Error ? error.message : "Не удалось загрузить агрегированный график.");
-        })
-        .finally(() => {
+        } finally {
           if (!controller.signal.aborted) {
             setChartLoading(false);
           }
-        });
+        }
+      })();
     }, 260);
 
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [chartCollapsed, chartProductRefsKey, chartSelectionCount, chartRangeEnd, chartRangeStart]);
+  }, [chartCacheKey, chartCollapsed, chartProductRefsKey, chartSelectionCount, chartRangeEnd, chartRangeStart]);
 
   const ctr = payload.totals.views > 0 ? (payload.totals.clicks / payload.totals.views) * 100 : 0;
   const cr = payload.totals.clicks > 0 ? (payload.totals.orders / payload.totals.clicks) * 100 : 0;
@@ -1480,7 +1656,10 @@ export function CatalogPage() {
             rows={chartData?.rows ?? []}
             totals={chartData?.totals ?? null}
             selectionCount={chartSelectionCount}
-            loadedProductsCount={chartData?.loaded_products_count ?? null}
+            loadedProductsCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedProductsCount : chartData?.loaded_products_count ?? null}
+            chunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.chunkCount : null}
+            loadedChunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedChunkCount : null}
+            errorCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
             isLoading={chartLoading}
             error={chartError}
             rangeLabel={chartRangeLabel}
