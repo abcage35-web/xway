@@ -1621,6 +1621,8 @@ export function CatalogPage() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Link
                           to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+                          target="_blank"
+                          rel="noreferrer"
                           className="font-display text-base font-semibold text-[var(--color-ink)] hover:text-brand-200"
                         >
                           Артикул {item.article}
@@ -1836,6 +1838,8 @@ export function CatalogPage() {
                         render: (article) => (
                           <Link
                             to={`/product${buildProductSearch(article.article, start, end)}`}
+                            target="_blank"
+                            rel="noreferrer"
                             className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-ink)] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#342f49]"
                           >
                             Детали
@@ -1862,7 +1866,7 @@ export function CatalogPage() {
               Очистить локальные фильтры
             </button>
             <span>или</span>
-            <Link to={`/catalog${catalogSearch}`} className="text-brand-200 underline underline-offset-4">
+            <Link to={`/catalog${catalogSearch}`} target="_blank" rel="noreferrer" className="text-brand-200 underline underline-offset-4">
               вернуться к полному периоду
             </Link>
           </div>
