@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json && vite build",
+    "build": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json && vite build && node scripts/postbuild.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

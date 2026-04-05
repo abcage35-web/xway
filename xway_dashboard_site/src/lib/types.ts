@@ -535,6 +535,44 @@ export interface CatalogResponse {
   shops: CatalogShop[];
 }
 
+export interface CatalogChartRow {
+  day: string;
+  day_label: string;
+  views: number;
+  clicks: number;
+  atbs: number;
+  orders: number;
+  expense_sum: number;
+  spent_sku_count: number;
+  ctr: number | null;
+  cr1: number | null;
+  cr2: number | null;
+  crf: number | null;
+}
+
+export interface CatalogChartTotals {
+  views: number;
+  clicks: number;
+  atbs: number;
+  orders: number;
+  expense_sum: number;
+  ctr: number | null;
+  cr1: number | null;
+  cr2: number | null;
+  crf: number | null;
+}
+
+export interface CatalogChartResponse {
+  ok: boolean;
+  generated_at: string;
+  range: DateRange;
+  selection_count: number;
+  loaded_products_count: number;
+  rows: CatalogChartRow[];
+  totals: CatalogChartTotals;
+  errors: Array<{ product: string; error: string }>;
+}
+
 export interface ClusterDetailResponse {
   ok: boolean;
   range: DateRange;
@@ -542,4 +580,5 @@ export interface ClusterDetailResponse {
   bid_history: Array<{ ts: string; bid: number; author: string }>;
   daily: Record<string, ClusterDailyRow>;
   position: number | null;
+  errors?: Record<string, string | null>;
 }
