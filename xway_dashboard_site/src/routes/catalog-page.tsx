@@ -294,14 +294,18 @@ function formatCategoryLabel(value: string | null | undefined) {
   return String(value || "").trim() || "Без категории";
 }
 
-function buildShopOptions(payload: CatalogResponse): SearchableMultiSelectOption[] {
-  return payload.shops
+function buildShopOptionsFromShops(shops: CatalogShop[]): SearchableMultiSelectOption[] {
+  return shops
     .map((shop) => ({
       value: String(shop.id),
       label: shop.name,
       searchText: [shop.marketplace, shop.tariff_code, shop.name].filter(Boolean).join(" "),
     }))
     .sort((left, right) => left.label.localeCompare(right.label, "ru"));
+}
+
+function buildShopOptions(payload: CatalogResponse): SearchableMultiSelectOption[] {
+  return buildShopOptionsFromShops(payload.shops);
 }
 
 function buildCategoryOptions(payload: CatalogResponse): SearchableMultiSelectOption[] {
@@ -427,6 +431,37 @@ function getArticleIssueIncidentsTotal(item: CatalogArticleYesterdayIssues) {
   return item.issues.reduce((sum, issue) => sum + issue.incidents, 0);
 }
 
+function mapCatalogIssueRows(
+  rows: Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>,
+  metaByRef: Map<string, { article: string; name: string; productUrl: string; stock: number | string | null | undefined }>,
+) {
+  return rows
+    .map((row) => {
+      const meta = metaByRef.get(row.product_ref);
+      if (!meta || !row.issues.length) {
+        return null;
+      }
+      return {
+        article: meta.article,
+        name: meta.name,
+        productUrl: meta.productUrl,
+        issues: row.issues,
+      };
+    })
+    .filter((item): item is CatalogArticleYesterdayIssues => Boolean(item))
+    .sort((left, right) => {
+      const hoursDiff = getArticleIssueHoursTotal(right) - getArticleIssueHoursTotal(left);
+      if (hoursDiff !== 0) {
+        return hoursDiff;
+      }
+      const incidentsDiff = getArticleIssueIncidentsTotal(right) - getArticleIssueIncidentsTotal(left);
+      if (incidentsDiff !== 0) {
+        return incidentsDiff;
+      }
+      return left.article.localeCompare(right.article, "ru");
+    });
+}
+
 async function readApiErrorMessage(error: unknown) {
   if (error instanceof Response) {
     const text = await error.text();
@@ -502,6 +537,7 @@ export function CatalogPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
+  const [selectedIssueShopIds, setSelectedIssueShopIds] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
   const [chartCollapsed, setChartCollapsed] = useState(false);
@@ -512,6 +548,8 @@ export function CatalogPage() {
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssueRows, setArticleIssueRows] = useState<CatalogArticleYesterdayIssues[] | null>(null);
+  const [articleIssuesCompletedCount, setArticleIssuesCompletedCount] = useState(0);
+  const [articleIssuesTotalCount, setArticleIssuesTotalCount] = useState(0);
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -528,13 +566,18 @@ export function CatalogPage() {
     selectedCategories,
     selectedSkus,
   });
+  const issueShopOptions = buildShopOptionsFromShops(visibleShops);
+  const issueShopOptionKey = issueShopOptions.map((option) => option.value).join(",");
+  const issueScopedShops = visibleShops.filter(
+    (shop) => !selectedIssueShopIds.length || selectedIssueShopIds.includes(String(shop.id)),
+  );
   const turnoverOrdersByRef = new Map(
     (turnoverPayload?.shops || []).flatMap((shop) =>
       shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
     ),
   );
   const visibleIssueTargets = [...new Map(
-    visibleShops.flatMap((shop) =>
+    issueScopedShops.flatMap((shop) =>
       shop.articles.map((article) => [
         `${shop.id}:${article.product_id}`,
         {
@@ -567,6 +610,7 @@ export function CatalogPage() {
   const yesterdayLabel = formatDate(yesterdayIso);
   const preset = getRangePreset(start, end);
   const catalogSearch = buildCatalogSearch(start, end);
+  const issueScopeShopCount = issueScopedShops.length;
 
   const handleRangeChange = (next: { start: string; end: string }) => {
     navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
@@ -611,10 +655,20 @@ export function CatalogPage() {
   }, []);
 
   useEffect(() => {
+    const allowedValues = new Set(issueShopOptions.map((option) => option.value));
+    setSelectedIssueShopIds((current) => {
+      const next = current.filter((value) => allowedValues.has(value));
+      return next.length === current.length ? current : next;
+    });
+  }, [issueShopOptionKey]);
+
+  useEffect(() => {
     articleIssuesAbortRef.current?.abort();
     setArticleIssuesLoading(false);
     setArticleIssuesError(null);
     setArticleIssueRows(null);
+    setArticleIssuesCompletedCount(0);
+    setArticleIssuesTotalCount(0);
   }, [visibleIssueTargetRefsKey]);
 
   useEffect(() => {
@@ -713,6 +767,7 @@ export function CatalogPage() {
   const clearLocalFilters = () => {
     setQuery("");
     setSelectedShopIds([]);
+    setSelectedIssueShopIds([]);
     setSelectedCategories([]);
     setSelectedSkus([]);
   };
@@ -723,6 +778,8 @@ export function CatalogPage() {
       setArticleIssueRows([]);
       setArticleIssuesError(null);
       setArticleIssuesLoading(false);
+      setArticleIssuesCompletedCount(0);
+      setArticleIssuesTotalCount(0);
       return;
     }
 
@@ -730,8 +787,15 @@ export function CatalogPage() {
     articleIssuesAbortRef.current = controller;
     setArticleIssuesLoading(true);
     setArticleIssuesError(null);
+    setArticleIssueRows([]);
+    setArticleIssuesCompletedCount(0);
+    setArticleIssuesTotalCount(visibleIssueTargetRefs.length);
 
     try {
+      const issueRowsByRef = new Map<string, { product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>();
+      const partialErrorMessages = new Set<string>();
+      let completedCount = 0;
+
       const fetchIssueRowsChunk = async (refs: string[]): Promise<Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>> => {
         const response = await fetchCatalogIssues({
           productRefs: refs,
@@ -763,47 +827,35 @@ export function CatalogPage() {
             const right = await fetchIssueRowsAdaptive(refs.slice(middle));
             return [...left, ...right];
           }
-          throw error;
+          if (!controller.signal.aborted) {
+            partialErrorMessages.add(await readApiErrorMessage(error));
+          }
+          return [];
         }
       };
 
       const chunks = chunkItems(visibleIssueTargetRefs, 20);
-      const issueRows = [];
       for (const chunk of chunks) {
         const rows = await fetchIssueRowsAdaptive(chunk);
         if (controller.signal.aborted) {
           return;
         }
-        issueRows.push(...rows);
+        rows.forEach((row) => issueRowsByRef.set(row.product_ref, row));
+        completedCount += chunk.length;
+        setArticleIssuesCompletedCount(completedCount);
+        setArticleIssueRows(mapCatalogIssueRows([...issueRowsByRef.values()], visibleIssueTargetMetaByRef));
       }
 
-      const nextRows = issueRows
-        .map((row) => {
-          const meta = visibleIssueTargetMetaByRef.get(row.product_ref);
-          if (!meta || !row.issues.length) {
-            return null;
-          }
-          return {
-            article: meta.article,
-            name: meta.name,
-            productUrl: meta.productUrl,
-            issues: row.issues,
-          };
-        })
-        .filter((item): item is CatalogArticleYesterdayIssues => Boolean(item))
-        .sort((left, right) => {
-          const hoursDiff = getArticleIssueHoursTotal(right) - getArticleIssueHoursTotal(left);
-          if (hoursDiff !== 0) {
-            return hoursDiff;
-          }
-          const incidentsDiff = getArticleIssueIncidentsTotal(right) - getArticleIssueIncidentsTotal(left);
-          if (incidentsDiff !== 0) {
-            return incidentsDiff;
-          }
-          return left.article.localeCompare(right.article, "ru");
-        });
-
+      const nextRows = mapCatalogIssueRows([...issueRowsByRef.values()], visibleIssueTargetMetaByRef);
       setArticleIssueRows(nextRows);
+      if (partialErrorMessages.size) {
+        const [firstMessage] = [...partialErrorMessages];
+        setArticleIssuesError(
+          nextRows.length
+            ? `Часть артикулов не загрузилась. Уже показаны найденные ошибки. ${firstMessage}`
+            : firstMessage || "Не удалось собрать ошибки по артикулам.",
+        );
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -979,25 +1031,42 @@ export function CatalogPage() {
         title="Ошибки по артикулам"
         caption={`Сбор бюджетных и лимитных остановок только по видимым артикулам с остатком > 0 за вчера, ${yesterdayLabel}. По кнопке запрашиваются детальные кампании так же, как в ошибках внутри товара по всем РК.`}
         actions={
-          <button
-            type="button"
-            onClick={collectArticleIssues}
-            disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
-            className={cn(
-              "metric-chip rounded-2xl px-4 py-2 text-sm transition",
-              articleIssuesLoading || !visibleIssueTargetRefs.length
-                ? "cursor-not-allowed text-[var(--color-muted)] opacity-70"
-                : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
-            )}
-          >
-            {articleIssuesLoading ? "Собираем ошибки..." : "Собрать ошибки за вчера"}
-          </button>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+            <SearchableMultiSelect
+              label="Кабинеты для сбора"
+              allLabel="Все кабинеты"
+              options={issueShopOptions}
+              selectedValues={selectedIssueShopIds}
+              onChange={setSelectedIssueShopIds}
+              emptyText="Кабинеты в текущей выборке не найдены"
+              className="min-w-[280px]"
+            />
+            <button
+              type="button"
+              onClick={collectArticleIssues}
+              disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
+              className={cn(
+                "metric-chip rounded-2xl px-4 py-2 text-sm transition",
+                articleIssuesLoading || !visibleIssueTargetRefs.length
+                  ? "cursor-not-allowed text-[var(--color-muted)] opacity-70"
+                  : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
+              )}
+            >
+              {articleIssuesLoading ? "Собираем ошибки..." : "Собрать ошибки за вчера"}
+            </button>
+          </div>
         }
       >
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-muted)]">
             <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleArticleCodes.length)} артикулов в текущей выборке</span>
+            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issueScopeShopCount)} кабинетов для сбора</span>
             <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleIssueTargetRefs.length)} с остатком &gt; 0</span>
+            {articleIssuesTotalCount ? (
+              <span className="metric-chip rounded-2xl px-3 py-2">
+                Обработано {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
+              </span>
+            ) : null}
             {articleIssueRows ? (
               <span className="metric-chip rounded-2xl px-3 py-2">
                 {formatNumber(articleIssueRows.length)} с ошибками за {yesterdayLabel}
@@ -1011,9 +1080,11 @@ export function CatalogPage() {
             </div>
           ) : null}
 
-          {articleIssuesLoading && !articleIssueRows ? (
+          {articleIssuesLoading ? (
             <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-              Загружаю вчерашние ошибки по {formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком &gt; 0.
+              {articleIssueRows?.length
+                ? `Обработано ${formatNumber(articleIssuesCompletedCount)} из ${formatNumber(articleIssuesTotalCount)} артикулов. Уже показаны найденные ошибки.`
+                : `Загружаю вчерашние ошибки по ${formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком > 0.`}
             </div>
           ) : null}
 

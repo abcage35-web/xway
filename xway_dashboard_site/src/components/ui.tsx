@@ -168,39 +168,128 @@ export function MetricTable<T>({
   stickyHeader?: boolean;
   headerStickyTop?: number | string;
 }) {
-  if (!rows.length) {
-    return <EmptyState title="Пока пусто" text={emptyText} />;
-  }
-
   const tableViewportRef = useRef<HTMLDivElement | null>(null);
   const tableElementRef = useRef<HTMLTableElement | null>(null);
-  const [hasHorizontalOverflow, setHasHorizontalOverflow] = useState(false);
+  const [headerCloneState, setHeaderCloneState] = useState<{
+    columnWidths: number[];
+    tableWidth: number;
+    scrollLeft: number;
+  }>({
+    columnWidths: [],
+    tableWidth: 0,
+    scrollLeft: 0,
+  });
+  const columnKeys = columns.map((column) => column.key).join("|");
 
   useEffect(() => {
     const viewportNode = tableViewportRef.current;
     const tableNode = tableElementRef.current;
-    if (!viewportNode || !tableNode || typeof ResizeObserver === "undefined") {
+    if (!viewportNode || !tableNode) {
       return;
     }
 
-    // Native sticky headers stop pinning to the page when they live inside an
-    // unconditional overflow-x container, because that wrapper becomes the
-    // sticky containing block. We only opt into horizontal scrolling when the
-    // table really overflows; otherwise sticky stays viewport-based.
-    const syncOverflowState = () => {
-      const next = tableNode.scrollWidth - viewportNode.clientWidth > 1;
-      setHasHorizontalOverflow((current) => (current === next ? current : next));
+    const syncScrollLeft = () => {
+      const nextScrollLeft = Math.round(viewportNode.scrollLeft);
+      setHeaderCloneState((current) => (current.scrollLeft === nextScrollLeft ? current : { ...current, scrollLeft: nextScrollLeft }));
     };
 
-    syncOverflowState();
-    const observer = new ResizeObserver(syncOverflowState);
+    const syncHeaderMetrics = () => {
+      const headerCells = [...tableNode.querySelectorAll<HTMLTableCellElement>("thead tr:first-child > th")].slice(0, columns.length);
+      const nextColumnWidths = headerCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
+      const nextTableWidth = Math.round(tableNode.getBoundingClientRect().width);
+      syncScrollLeft();
+      setHeaderCloneState((current) => {
+        const sameWidths =
+          current.columnWidths.length === nextColumnWidths.length &&
+          current.columnWidths.every((value, index) => value === nextColumnWidths[index]);
+        if (sameWidths && current.tableWidth === nextTableWidth) {
+          return current;
+        }
+        return {
+          ...current,
+          columnWidths: nextColumnWidths,
+          tableWidth: nextTableWidth,
+        };
+      });
+    };
+
+    syncHeaderMetrics();
+    viewportNode.addEventListener("scroll", syncScrollLeft, { passive: true });
+
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        viewportNode.removeEventListener("scroll", syncScrollLeft);
+      };
+    }
+
+    const observer = new ResizeObserver(syncHeaderMetrics);
     observer.observe(viewportNode);
     observer.observe(tableNode);
-    return () => observer.disconnect();
-  }, [columns.length, rows.length]);
+    [...tableNode.querySelectorAll<HTMLTableCellElement>("thead th")].forEach((cell) => observer.observe(cell));
+    return () => {
+      viewportNode.removeEventListener("scroll", syncScrollLeft);
+      observer.disconnect();
+    };
+  }, [columnKeys, columns.length, rows.length, stickyHeader]);
 
-  const enableStickyHeader = stickyHeader && !hasHorizontalOverflow;
+  if (!rows.length) {
+    return <EmptyState title="Пока пусто" text={emptyText} />;
+  }
+
+  const showStickyHeaderClone = stickyHeader && headerCloneState.columnWidths.length === columns.length && headerCloneState.tableWidth > 0;
   const hasHeaderSummary = columns.some((column) => column.headerSummary !== undefined);
+  const colgroup = headerCloneState.columnWidths.length === columns.length ? (
+    <colgroup>
+      {headerCloneState.columnWidths.map((width, index) => (
+        <col key={`${columns[index]?.key || index}-width`} style={{ width: `${width}px`, minWidth: `${width}px` }} />
+      ))}
+    </colgroup>
+  ) : null;
+
+  const renderHeader = ({ clone = false, hidden = false }: { clone?: boolean; hidden?: boolean } = {}) => (
+    <thead className={cn("bg-[var(--color-surface-soft)]", hidden && "invisible")}>
+      <tr>
+        {columns.map((column) => (
+          <th
+            key={column.key}
+            style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+            className={cn(
+              "bg-[var(--color-surface-soft)] px-4 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[var(--color-muted)]",
+              column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head",
+              column.dividerBefore && "border-l border-[var(--color-line)]",
+              column.align === "right" ? "text-right" : "text-left",
+              !clone && column.stickyLeft !== undefined && "sticky z-[12]",
+              clone && column.stickyLeft !== undefined && "z-[12]",
+              column.headerClassName,
+            )}
+          >
+            {column.header}
+          </th>
+        ))}
+      </tr>
+      {hasHeaderSummary ? (
+        <tr className="metric-table-summary-row">
+          {columns.map((column) => (
+            <th
+              key={`${column.key}-summary`}
+              style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+              className={cn(
+                "metric-table-summary-head bg-[var(--color-surface-soft)] px-4 py-2 text-[0.8rem] font-semibold normal-case tracking-normal text-[var(--color-ink)]",
+                column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head",
+                column.dividerBefore && "border-l border-[var(--color-line)]",
+                column.align === "right" ? "text-right" : "text-left",
+                !clone && column.stickyLeft !== undefined && "sticky z-[12]",
+                clone && column.stickyLeft !== undefined && "z-[12]",
+                column.headerClassName,
+              )}
+            >
+              {column.headerSummary}
+            </th>
+          ))}
+        </tr>
+      ) : null}
+    </thead>
+  );
 
   return (
     <div
@@ -211,62 +300,30 @@ export function MetricTable<T>({
         className,
       )}
     >
-      <div
-        ref={tableViewportRef}
-        className={cn(
-          hasHorizontalOverflow || !stickyHeader ? "overflow-x-auto" : "overflow-visible",
-          variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible",
-        )}
-      >
-        <table ref={tableElementRef} className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm">
-          <thead className="bg-[var(--color-surface-soft)]">
-            <tr>
-              {columns.map((column) => (
-                <th
-                  key={column.key}
-                  style={{
-                    ...(enableStickyHeader ? { top: headerStickyTop } : null),
-                    ...(column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : null),
-                  }}
-                  className={cn(
-                    "bg-[var(--color-surface-soft)] px-4 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[var(--color-muted)]",
-                    (enableStickyHeader || column.stickyLeft !== undefined) && "sticky",
-                    enableStickyHeader && "z-10",
-                    column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head z-[12]",
-                    column.dividerBefore && "border-l border-[var(--color-line)]",
-                    column.align === "right" ? "text-right" : "text-left",
-                    column.headerClassName,
-                  )}
-                >
-                  {column.header}
-                </th>
-              ))}
-            </tr>
-            {hasHeaderSummary ? (
-              <tr className="metric-table-summary-row">
-                {columns.map((column) => (
-                  <th
-                    key={`${column.key}-summary`}
-                    style={{
-                      ...(enableStickyHeader ? { top: headerStickyTop } : null),
-                      ...(column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : null),
-                    }}
-                    className={cn(
-                      "metric-table-summary-head bg-[var(--color-surface-soft)] px-4 py-2 text-[0.8rem] font-semibold normal-case tracking-normal text-[var(--color-ink)]",
-                      (enableStickyHeader || column.stickyLeft !== undefined) && "sticky",
-                      enableStickyHeader && "z-10",
-                      column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head z-[12]",
-                      column.dividerBefore && "border-l border-[var(--color-line)]",
-                      column.align === "right" ? "text-right" : "text-left",
-                      column.headerClassName,
-                    )}
-                  >
-                    {column.headerSummary}
-                  </th>
-                ))}
-              </tr>
-            ) : null}
-          </thead>
+      {showStickyHeaderClone ? (
+        <div className="sticky z-20 overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ top: headerStickyTop }}>
+          <table
+            aria-hidden="true"
+            className="data-table text-sm"
+            style={{
+              width: `${headerCloneState.tableWidth}px`,
+              transform: `translateX(-${headerCloneState.scrollLeft}px)`,
+            }}
+          >
+            {colgroup}
+            {renderHeader({ clone: true })}
+          </table>
+        </div>
+      ) : null}
+
+      <div ref={tableViewportRef} className={cn("overflow-x-auto", variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible")}>
+        <table
+          ref={tableElementRef}
+          className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm"
+          style={showStickyHeaderClone && headerCloneState.tableWidth ? { width: `${headerCloneState.tableWidth}px` } : undefined}
+        >
+          {colgroup}
+          {renderHeader({ hidden: showStickyHeaderClone })}
           <tbody className="divide-y divide-[var(--color-line)] bg-white">
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex} className="transition hover:bg-[var(--color-surface-soft)]">
