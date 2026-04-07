@@ -29,7 +29,7 @@
 
 .campaign-inline-heatmap.is-compact .schedule-header,
 .campaign-inline-heatmap.is-compact .schedule-row {
-  grid-template-columns: 28px minmax(0, 1fr);
+  --schedule-day-label-width: 28px;
 }
 
 .campaign-inline-heatmap.is-compact .schedule-hours,
@@ -80,7 +80,7 @@
 
 .product-hero-heatmap.is-inline-row .schedule-header,
 .product-hero-heatmap.is-inline-row .schedule-row {
-  grid-template-columns: 28px minmax(0, 1fr);
+  --schedule-day-label-width: 28px;
 }
 
 .product-hero-heatmap.is-inline-row .schedule-day {
@@ -114,7 +114,7 @@
 
 .product-overview-heatmap.product-hero-heatmap.is-inline-row .schedule-header,
 .product-overview-heatmap.product-hero-heatmap.is-inline-row .schedule-row {
-  grid-template-columns: 30px minmax(0, 1fr);
+  --schedule-day-label-width: 30px;
 }
 
 .product-overview-heatmap.product-hero-heatmap.is-inline-row .schedule-header {
@@ -3046,7 +3046,7 @@
 .schedule-header,
 .schedule-row {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-columns: var(--schedule-day-label-width, 56px) minmax(0, 1fr);
   gap: 0;
   align-items: center;
 }

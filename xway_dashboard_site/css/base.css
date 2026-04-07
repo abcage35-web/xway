@@ -3669,7 +3669,7 @@ body.page-view-articles .article-nav-inline {
 
 .campaign-inline-heatmap .schedule-header,
 .campaign-inline-heatmap .schedule-row {
-  grid-template-columns: 34px minmax(0, 1fr);
+  --schedule-day-label-width: 34px;
 }
 
 .campaign-inline-heatmap.is-inline-row {
