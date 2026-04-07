@@ -581,6 +581,9 @@ export interface CatalogIssuesIssueCampaign {
   status_code: string | null;
   status_label: string | null;
   display_status: "active" | "paused" | "freeze" | "muted";
+  hours: number;
+  incidents: number;
+  estimated_gap: number | null;
 }
 
 export interface CatalogIssuesRow {

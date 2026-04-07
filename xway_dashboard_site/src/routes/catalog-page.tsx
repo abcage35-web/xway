@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUpDown, ChevronDown, ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, SlidersHorizontal, Snowflake, ThumbsUp } from "lucide-react";
+import { ArrowUpDown, ChevronDown, ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -39,10 +39,39 @@ const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: st
 
 const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
 const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
-const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v2";
+const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v3";
+const CATALOG_ISSUES_SETTINGS_STORAGE_KEY = "xway-catalog-issues-settings-v1";
+const CATALOG_ISSUES_COLLAPSED_STORAGE_KEY = "xway-catalog-issues-collapsed-v1";
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
+const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
+const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "turnover"] as const;
+
+type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
+type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "turnover">, boolean>;
+
+interface CatalogIssueSettingsState {
+  turnoverThreshold: number;
+  visibleKinds: CatalogIssueVisibilityState;
+}
+
+interface CatalogIssueTargetMeta {
+  ref: string;
+  article: string;
+  name: string;
+  productUrl: string;
+  imageUrl?: string | null;
+  stock: number | string | null | undefined;
+  turnoverDays: number | null;
+  campaignSlots: CatalogCampaignSlot[];
+}
+
+const DEFAULT_CATALOG_ISSUE_VISIBILITY: CatalogIssueVisibilityState = {
+  budget: true,
+  limit: true,
+  turnover: true,
+};
 
 type CatalogSortField =
   | "article"
@@ -126,6 +155,20 @@ function resolveCatalogCampaignDisplayStatus(statusCode: string | null | undefin
     return "paused";
   }
   return "muted";
+}
+
+function resolveCatalogCampaignStatusLabel(statusCode: string | null | undefined) {
+  const normalized = String(statusCode || "").trim().toUpperCase();
+  if (normalized === "ACTIVE") {
+    return "Активна";
+  }
+  if (normalized === "PAUSED") {
+    return "Пауза";
+  }
+  if (normalized === "FROZEN") {
+    return "Заморожена";
+  }
+  return normalized || "Статус не задан";
 }
 
 function resolveCatalogCampaignSlotStatus(states: CatalogCampaignState[]): string | null {
@@ -213,45 +256,262 @@ function CatalogCampaignZonePill({
   );
 }
 
-function CatalogIssueCampaignPill({
+function resolveCatalogIssueKindLabel(kind: CatalogIssueKind) {
+  if (kind === "budget") {
+    return "Нет бюджета";
+  }
+  if (kind === "limit") {
+    return "Израсходован лимит";
+  }
+  return "Низкая оборачиваемость";
+}
+
+function resolveCatalogIssueKindCaption(kind: CatalogIssueKind) {
+  if (kind === "budget") {
+    return "Остановки из-за нехватки бюджета";
+  }
+  if (kind === "limit") {
+    return "Остановки из-за дневного лимита";
+  }
+  return "Активная реклама при низкой оборачиваемости";
+}
+
+function resolveCatalogIssueKindTone(kind: CatalogIssueKind) {
+  if (kind === "budget") {
+    return {
+      shell: "border-rose-200 bg-rose-50/70",
+      badge: "bg-rose-100 text-rose-700",
+      metric: "border-rose-200/80 bg-white/70 text-rose-700",
+    };
+  }
+  if (kind === "limit") {
+    return {
+      shell: "border-amber-200 bg-amber-50/70",
+      badge: "bg-amber-100 text-amber-700",
+      metric: "border-amber-200/80 bg-white/70 text-amber-700",
+    };
+  }
+  return {
+    shell: "border-sky-200 bg-sky-50/70",
+    badge: "bg-sky-100 text-sky-700",
+    metric: "border-sky-200/80 bg-white/70 text-sky-700",
+  };
+}
+
+function CatalogIssueCampaignEntry({
   campaign,
+  issueKind,
 }: {
   campaign: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>[number];
+  issueKind: CatalogIssueKind;
 }) {
+  const tone = resolveCatalogIssueKindTone(issueKind);
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-2xl border px-2.5 py-1.5 text-[11px] font-medium leading-none",
-        campaign.displayStatus === "active"
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : campaign.displayStatus === "freeze"
-            ? "border-sky-200 bg-sky-50 text-sky-700"
-            : campaign.displayStatus === "paused"
-              ? "border-amber-200 bg-amber-50 text-amber-700"
-              : "border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)]",
-      )}
+    <div
+      className="flex flex-col gap-2 rounded-[18px] border border-[var(--color-line)] bg-white/88 px-3 py-2.5 shadow-[0_8px_18px_rgba(44,35,66,0.04)]"
       title={`${campaign.label}${campaign.statusLabel ? ` · ${campaign.statusLabel}` : ""}`}
     >
-      <CatalogCampaignStatusIconBadge status={campaign.displayStatus} label={campaign.statusLabel || "Статус не задан"} />
-      <span className={cn("catalog-campaign-kind-badge", campaign.paymentType === "cpc" ? "is-cpc" : "is-manual")}>
-        {campaign.paymentType === "cpc" ? "CPC" : "CPM"}
-      </span>
-      {campaign.zoneKind ? (
-        <CatalogCampaignZonePill
-          label={
-            campaign.zoneKind === "both"
-              ? "Поиск + Рекомендации"
-              : campaign.zoneKind === "recom"
-                ? "Рекомендации"
-                : "Поиск"
-          }
-          kind={campaign.zoneKind}
-          iconOnly
-        />
+      <div className="flex flex-wrap items-center gap-2">
+        <CatalogCampaignStatusIconBadge status={campaign.displayStatus} label={campaign.statusLabel || "Статус не задан"} />
+        <span className={cn("catalog-campaign-kind-badge", campaign.paymentType === "cpc" ? "is-cpc" : "is-manual")}>
+          {campaign.paymentType === "cpc" ? "CPC" : "CPM"}
+        </span>
+        {campaign.zoneKind ? (
+          <CatalogCampaignZonePill
+            label={
+              campaign.zoneKind === "both"
+                ? "Поиск + Рекомендации"
+                : campaign.zoneKind === "recom"
+                  ? "Рекомендации"
+                  : "Поиск"
+            }
+            kind={campaign.zoneKind}
+            iconOnly
+          />
+        ) : null}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--color-ink)]">{campaign.label.replace(/^РК\s*/, "")}</span>
+      </div>
+      {campaign.hours > 0 || campaign.incidents > 0 || campaign.estimatedGap !== null ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {campaign.hours > 0 ? (
+            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+              {formatNumber(campaign.hours, 1)} ч
+            </span>
+          ) : null}
+          {campaign.incidents > 0 ? (
+            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+              {formatIssueIncidents(campaign.incidents)}
+            </span>
+          ) : null}
+          {campaign.estimatedGap !== null ? (
+            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+              ≈ {formatMoney(campaign.estimatedGap)}
+            </span>
+          ) : null}
+        </div>
       ) : null}
-      <span className="truncate">{campaign.label.replace(/^РК\s*/, "")}</span>
-      {campaign.statusLabel ? <span className="text-[var(--color-muted)]">· {campaign.statusLabel}</span> : null}
-    </span>
+    </div>
+  );
+}
+
+function CatalogIssueCell({
+  issue,
+}: {
+  issue: CatalogArticleYesterdayIssues["issues"][number] | null;
+}) {
+  if (!issue) {
+    return <div className="min-h-[72px]" aria-hidden="true" />;
+  }
+
+  const tone = resolveCatalogIssueKindTone(issue.kind);
+
+  return (
+    <div className={cn("flex h-full flex-col gap-2 rounded-[20px] border p-3", tone.shell)}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", tone.badge)}>
+          {issue.title}
+        </span>
+        {issue.kind === "turnover" ? (
+          <>
+            {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                {formatTurnoverDays(issue.turnoverDays)}
+              </span>
+            ) : null}
+            {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                ≤ {formatTurnoverDays(issue.thresholdDays)}
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {issue.hours > 0 ? (
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                {formatNumber(issue.hours, 1)} ч
+              </span>
+            ) : null}
+            {issue.incidents > 0 ? (
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                {formatIssueIncidents(issue.incidents)}
+              </span>
+            ) : null}
+            {issue.estimatedGap !== null ? (
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                ≈ {formatMoney(issue.estimatedGap)}
+              </span>
+            ) : null}
+          </>
+        )}
+      </div>
+      {issue.campaigns.length ? (
+        <div className="space-y-2">
+          {issue.campaigns.map((campaign) => (
+            <CatalogIssueCampaignEntry key={`${issue.kind}-${campaign.id}`} campaign={campaign} issueKind={issue.kind} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CatalogIssuesSettingsDialog({
+  open,
+  onClose,
+  turnoverThreshold,
+  onTurnoverThresholdChange,
+  visibleKinds,
+  onToggleKind,
+}: {
+  open: boolean;
+  onClose: () => void;
+  turnoverThreshold: number;
+  onTurnoverThresholdChange: (value: number) => void;
+  visibleKinds: CatalogIssueVisibilityState;
+  onToggleKind: (kind: keyof CatalogIssueVisibilityState) => void;
+}) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
+      <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
+      <div className="glass-panel relative z-[5001] w-full max-w-[720px] overflow-hidden rounded-[34px]">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-brand-200">Ошибки каталога</p>
+            <h2 className="mt-2 font-display text-2xl font-semibold text-[var(--color-ink)]">Настройки блока</h2>
+            <p className="mt-2 text-sm text-[var(--color-muted)]">Бюджет и лимиты приходят из детальных РК, оборачиваемость считается локально по текущей выборке.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="metric-chip rounded-2xl p-3 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+        <div className="space-y-5 px-6 py-5">
+          <label className="metric-chip flex flex-col gap-2 rounded-[24px] px-4 py-3">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Порог оборачиваемости</span>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={String(turnoverThreshold)}
+                onChange={(event) => {
+                  const nextValue = Number(event.target.value);
+                  if (Number.isFinite(nextValue) && nextValue > 0) {
+                    onTurnoverThresholdChange(nextValue);
+                  }
+                }}
+                className="w-full min-w-0 bg-transparent text-base font-semibold text-[var(--color-ink)] outline-none"
+              />
+              <span className="text-sm text-[var(--color-muted)]">дней</span>
+            </div>
+          </label>
+
+          <div className="space-y-2">
+            {CATALOG_ISSUE_KIND_ORDER.map((kind) => (
+              <label key={kind} className="metric-chip flex items-center justify-between gap-4 rounded-[22px] px-4 py-3">
+                <div className="space-y-1">
+                  <strong className="text-sm text-[var(--color-ink)]">{resolveCatalogIssueKindLabel(kind)}</strong>
+                  <p className="text-xs text-[var(--color-muted)]">{resolveCatalogIssueKindCaption(kind)}</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={visibleKinds[kind]}
+                  onChange={() => onToggleKind(kind)}
+                  className="h-4 w-4 accent-[var(--color-brand-500)]"
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -324,6 +584,48 @@ function buildProductSearch(article: string, start?: string | null, end?: string
     params.set("end", end);
   }
   return `?${params.toString()}`;
+}
+
+function readCatalogIssueSettings(): CatalogIssueSettingsState {
+  if (typeof window === "undefined") {
+    return {
+      turnoverThreshold: CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+      visibleKinds: { ...DEFAULT_CATALOG_ISSUE_VISIBILITY },
+    };
+  }
+  try {
+    const raw = window.localStorage.getItem(CATALOG_ISSUES_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return {
+        turnoverThreshold: CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+        visibleKinds: { ...DEFAULT_CATALOG_ISSUE_VISIBILITY },
+      };
+    }
+    const parsed = JSON.parse(raw) as Partial<CatalogIssueSettingsState> & {
+      visibleKinds?: Partial<CatalogIssueVisibilityState>;
+    };
+    const threshold = Number(parsed.turnoverThreshold);
+    return {
+      turnoverThreshold: Number.isFinite(threshold) && threshold > 0 ? threshold : CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+      visibleKinds: {
+        budget: parsed.visibleKinds?.budget ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.budget,
+        limit: parsed.visibleKinds?.limit ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.limit,
+        turnover: parsed.visibleKinds?.turnover ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.turnover,
+      },
+    };
+  } catch {
+    return {
+      turnoverThreshold: CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+      visibleKinds: { ...DEFAULT_CATALOG_ISSUE_VISIBILITY },
+    };
+  }
+}
+
+function readCatalogIssuesCollapsed() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(CATALOG_ISSUES_COLLAPSED_STORAGE_KEY) === "1";
 }
 
 function readCatalogIssuesCache(day: string): Record<string, CatalogIssueCacheEntry> {
@@ -657,12 +959,6 @@ function CatalogStickyFilterShell({
   }, [detailsExpanded]);
 
   useEffect(() => {
-    if (activeFiltersCount > 0 && !collapsed && !detailsExpanded) {
-      setDetailsExpanded(true);
-    }
-  }, [activeFiltersCount, collapsed, detailsExpanded]);
-
-  useEffect(() => {
     if (!rootRef.current || !innerRef.current) {
       return;
     }
@@ -959,26 +1255,80 @@ function getArticleIssueIncidentsTotal(item: CatalogArticleYesterdayIssues) {
   return item.issues.reduce((sum, issue) => sum + issue.incidents, 0);
 }
 
+function getArticleIssueKindsCount(item: CatalogArticleYesterdayIssues) {
+  return item.issues.length;
+}
+
+function getArticleIssueByKind(item: CatalogArticleYesterdayIssues, kind: CatalogIssueKind) {
+  return item.issues.find((issue) => issue.kind === kind) || null;
+}
+
+function buildCatalogTurnoverIssue(meta: CatalogIssueTargetMeta, turnoverThreshold: number): CatalogArticleYesterdayIssues["issues"][number] | null {
+  if (!Number.isFinite(turnoverThreshold) || turnoverThreshold <= 0) {
+    return null;
+  }
+  if (meta.turnoverDays === null || !Number.isFinite(meta.turnoverDays) || meta.turnoverDays > turnoverThreshold) {
+    return null;
+  }
+  const activeSlots = meta.campaignSlots.filter((slot) => slot.displayStatus === "active");
+  if (!activeSlots.length) {
+    return null;
+  }
+  return {
+    kind: "turnover",
+    title: "Низкая оборачиваемость",
+    hours: 0,
+    incidents: 0,
+    estimatedGap: null,
+    campaignIds: activeSlots.map((slot) => `slot-${slot.key}`),
+    campaignLabels: activeSlots.map((slot) => slot.headline),
+    turnoverDays: meta.turnoverDays,
+    thresholdDays: turnoverThreshold,
+    campaigns: activeSlots.map((slot) => ({
+      id: `slot-${slot.key}`,
+      label: slot.headline,
+      paymentType: slot.key === "cpc" ? "cpc" : "cpm",
+      zoneKind: slot.zoneKind,
+      statusCode: slot.statusCode,
+      statusLabel: resolveCatalogCampaignStatusLabel(slot.statusCode),
+      displayStatus: slot.displayStatus,
+      hours: 0,
+      incidents: 0,
+      estimatedGap: null,
+    })),
+  };
+}
+
 type CatalogIssueDisplayRow = CatalogArticleYesterdayIssues & {
+  ref: string;
   imageUrl: string | null;
+  turnoverDays: number | null;
 };
 
 function mapCatalogIssueRows(
-  rows: Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>,
-  metaByRef: Map<string, { article: string; name: string; productUrl: string; imageUrl?: string | null; stock: number | string | null | undefined }>,
+  targets: CatalogIssueTargetMeta[],
+  rowsByRef: Record<string, CatalogIssueCacheEntry>,
+  options: CatalogIssueSettingsState,
 ) {
-  return rows
-    .map((row) => {
-      const meta = metaByRef.get(row.product_ref);
-      if (!meta || !row.issues.length) {
+  return targets
+    .map((meta) => {
+      const cached = rowsByRef[meta.ref];
+      const remoteIssues = cached?.issues || [];
+      const turnoverIssue = options.visibleKinds.turnover ? buildCatalogTurnoverIssue(meta, options.turnoverThreshold) : null;
+      const issues = [...remoteIssues, ...(turnoverIssue ? [turnoverIssue] : [])].filter((issue) => options.visibleKinds[issue.kind]);
+      if (!issues.length) {
         return null;
       }
       return {
+        ref: meta.ref,
         article: meta.article,
         name: meta.name,
         productUrl: meta.productUrl,
         imageUrl: meta.imageUrl || null,
-        issues: row.issues,
+        turnoverDays: meta.turnoverDays,
+        issues: issues.sort(
+          (left, right) => CATALOG_ISSUE_KIND_ORDER.indexOf(left.kind as (typeof CATALOG_ISSUE_KIND_ORDER)[number]) - CATALOG_ISSUE_KIND_ORDER.indexOf(right.kind as (typeof CATALOG_ISSUE_KIND_ORDER)[number]),
+        ),
       };
     })
     .filter((item): item is CatalogIssueDisplayRow => item !== null)
@@ -990,6 +1340,15 @@ function mapCatalogIssueRows(
       const incidentsDiff = getArticleIssueIncidentsTotal(right) - getArticleIssueIncidentsTotal(left);
       if (incidentsDiff !== 0) {
         return incidentsDiff;
+      }
+      const kindsDiff = getArticleIssueKindsCount(right) - getArticleIssueKindsCount(left);
+      if (kindsDiff !== 0) {
+        return kindsDiff;
+      }
+      const leftTurnover = getArticleIssueByKind(left, "turnover")?.turnoverDays ?? Number.POSITIVE_INFINITY;
+      const rightTurnover = getArticleIssueByKind(right, "turnover")?.turnoverDays ?? Number.POSITIVE_INFINITY;
+      if (leftTurnover !== rightTurnover) {
+        return leftTurnover - rightTurnover;
       }
       return left.article.localeCompare(right.article, "ru");
     });
@@ -1128,6 +1487,9 @@ export function CatalogPage() {
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
+  const [articleIssuesCollapsed, setArticleIssuesCollapsed] = useState(() => readCatalogIssuesCollapsed());
+  const [articleIssueSettingsOpen, setArticleIssueSettingsOpen] = useState(false);
+  const [articleIssueSettings, setArticleIssueSettings] = useState<CatalogIssueSettingsState>(() => readCatalogIssueSettings());
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -1225,13 +1587,14 @@ export function CatalogPage() {
           productUrl: article.product_url,
           imageUrl: article.image_url || null,
           stock: article.stock,
+          turnoverDays: computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)),
+          campaignSlots: buildCatalogCampaignSlots(article),
         },
       ]),
     ),
-  ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0);
+  ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0) as CatalogIssueTargetMeta[];
   const visibleArticleCodes = [...new Set(visibleShops.flatMap((shop) => shop.articles.map((article) => article.article)))].sort((left, right) => left.localeCompare(right, "ru"));
   const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
-  const visibleIssueTargetMetaByRef = new Map(visibleIssueTargets.map((item) => [item.ref, item]));
   const visibleArticles = [...new Map(
     visibleShops.flatMap((shop) =>
       shop.articles.map((article) => [
@@ -1256,13 +1619,15 @@ export function CatalogPage() {
   const preset = getRangePreset(start, end);
   const catalogSearch = buildCatalogSearch(start, end);
   const issueScopeShopCount = issueScopedShops.length;
-  const visibleIssueCachedEntries = visibleIssueTargetRefs
-    .map((ref) => articleIssueCacheByRef[ref])
-    .filter((item): item is CatalogIssueCacheEntry => Boolean(item));
-  const articleIssueRows = visibleIssueCachedEntries.length ? mapCatalogIssueRows(visibleIssueCachedEntries, visibleIssueTargetMetaByRef) : null;
+  const articleIssueRows = mapCatalogIssueRows(visibleIssueTargets, articleIssueCacheByRef, articleIssueSettings);
+  const enabledIssueKinds = CATALOG_ISSUE_KIND_ORDER.filter((kind) => articleIssueSettings.visibleKinds[kind]);
   const articleIssuesCompletedCount = visibleIssueTargetRefs.filter((ref) => Boolean(articleIssueCacheByRef[ref])).length;
   const articleIssuesTotalCount = visibleIssueTargetRefs.length;
   const articleIssuesPendingCount = Math.max(articleIssuesTotalCount - articleIssuesCompletedCount, 0);
+  const articleIssueGridTemplate =
+    enabledIssueKinds.length > 0
+      ? `minmax(280px,1.1fr) repeat(${enabledIssueKinds.length}, minmax(250px,1fr))`
+      : "minmax(280px,1fr)";
 
   const handleRangeChange = (next: { start: string; end: string }) => {
     navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
@@ -1292,6 +1657,20 @@ export function CatalogPage() {
   useEffect(() => {
     writeCatalogIssuesCache(yesterdayIso, articleIssueCacheByRef);
   }, [articleIssueCacheByRef, yesterdayIso]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_ISSUES_COLLAPSED_STORAGE_KEY, articleIssuesCollapsed ? "1" : "0");
+  }, [articleIssuesCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_ISSUES_SETTINGS_STORAGE_KEY, JSON.stringify(articleIssueSettings));
+  }, [articleIssueSettings]);
 
   useEffect(() => {
     setArticleIssueCacheByRef(readCatalogIssuesCache(yesterdayIso));
@@ -1525,6 +1904,9 @@ export function CatalogPage() {
               statusCode: campaign.status_code,
               statusLabel: campaign.status_label,
               displayStatus: campaign.display_status,
+              hours: campaign.hours,
+              incidents: campaign.incidents,
+              estimatedGap: campaign.estimated_gap,
             })),
           })),
         }));
@@ -1890,7 +2272,7 @@ export function CatalogPage() {
 
       <SectionCard
         title="Ошибки по артикулам"
-        caption={`Сбор бюджетных и лимитных остановок только по видимым артикулам с остатком > 0 за вчера, ${yesterdayLabel}. По кнопке запрашиваются детальные кампании так же, как в ошибках внутри товара по всем РК.`}
+        caption={`Бюджет и лимиты догружаются по видимым артикулам с остатком > 0 за ${yesterdayLabel}. Оборачиваемость считается сразу по текущей выборке, порог сейчас ${formatTurnoverDays(articleIssueSettings.turnoverThreshold)}.`}
         actions={
           <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
             <SearchableMultiSelect
@@ -1902,6 +2284,14 @@ export function CatalogPage() {
               emptyText="Кабинеты в текущей выборке не найдены"
               className="min-w-[280px]"
             />
+            <button
+              type="button"
+              onClick={() => setArticleIssueSettingsOpen(true)}
+              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
+            >
+              <SlidersHorizontal className="size-4" />
+              Настройки
+            </button>
             <button
               type="button"
               onClick={collectArticleIssues}
@@ -1919,6 +2309,14 @@ export function CatalogPage() {
                   ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
                   : "Собрать ошибки за вчера"}
             </button>
+            <button
+              type="button"
+              onClick={() => setArticleIssuesCollapsed((current) => !current)}
+              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+            >
+              <span>{articleIssuesCollapsed ? "Развернуть блок" : "Свернуть блок"}</span>
+              <ChevronDown className={cn("size-4 transition-transform", !articleIssuesCollapsed && "rotate-180")} />
+            </button>
           </div>
         }
       >
@@ -1932,9 +2330,17 @@ export function CatalogPage() {
                 Обработано {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
               </span>
             ) : null}
-            {articleIssueRows ? (
+            <span className="metric-chip rounded-2xl px-3 py-2">
+              Порог оборачиваемости {formatTurnoverDays(articleIssueSettings.turnoverThreshold)}
+            </span>
+            {enabledIssueKinds.map((kind) => (
+              <span key={kind} className="metric-chip rounded-2xl px-3 py-2">
+                {resolveCatalogIssueKindLabel(kind)}
+              </span>
+            ))}
+            {articleIssueRows.length ? (
               <span className="metric-chip rounded-2xl px-3 py-2">
-                {formatNumber(articleIssueRows.length)} с ошибками за {yesterdayLabel}
+                {formatNumber(articleIssueRows.length)} с ошибками в блоке
               </span>
             ) : null}
           </div>
@@ -1945,112 +2351,121 @@ export function CatalogPage() {
             </div>
           ) : null}
 
-          {articleIssuesLoading ? (
-            <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-              {articleIssueRows?.length
-                ? `Обработано ${formatNumber(articleIssuesCompletedCount)} из ${formatNumber(articleIssuesTotalCount)} артикулов. Уже показаны найденные ошибки.`
-                : `Загружаю вчерашние ошибки по ${formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком > 0.`}
-            </div>
-          ) : null}
+          {!articleIssuesCollapsed ? (
+            <>
+              {articleIssuesLoading ? (
+                <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
+                  {articleIssueRows.length
+                    ? `Обработано ${formatNumber(articleIssuesCompletedCount)} из ${formatNumber(articleIssuesTotalCount)} артикулов. Уже показаны найденные ошибки.`
+                    : `Загружаю вчерашние ошибки по ${formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком > 0.`}
+                </div>
+              ) : null}
 
-          {!articleIssuesLoading && !articleIssuesError && articleIssueRows && !articleIssueRows.length ? (
-            <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
-              За {yesterdayLabel} по текущей выборке не найдено ошибок бюджета и лимитов.
-            </div>
-          ) : null}
+              {!enabledIssueKinds.length ? (
+                <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
+                  Все типы ошибок скрыты в настройках блока.
+                </div>
+              ) : null}
 
-          {articleIssueRows?.length ? (
-            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-              {articleIssueRows.map((item) => (
-                <article key={item.article} className="rounded-[20px] border border-[var(--color-line)] bg-white/92 p-3 shadow-[0_10px_24px_rgba(44,35,66,0.05)]">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex flex-1 items-start gap-3">
-                      <Link
-                        to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="h-[74px] w-[56px] shrink-0 overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] shadow-[0_8px_20px_rgba(44,35,66,0.06)]"
-                        aria-label={`Открыть товар ${item.name}`}
-                      >
-                        {item.imageUrl ? (
-                          <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" />
-                        ) : null}
-                      </Link>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Link
-                            to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="min-w-0 font-display text-[1.05rem] font-semibold leading-tight text-[var(--color-ink)] hover:text-brand-200"
-                            title={item.name}
-                          >
-                            <span className="line-clamp-2">{item.name}</span>
-                          </Link>
-                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                            {formatNumber(getArticleIssueHoursTotal(item), 1)} ч простоя
-                          </span>
-                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                            {formatIssueIncidents(getArticleIssueIncidentsTotal(item))}
-                          </span>
-                        </div>
-                        <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
-                          Артикул {item.article}
-                        </p>
-                      </div>
-                    </div>
-                    <a
-                      href={item.productUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-2xl border border-[var(--color-line)] px-2.5 py-1.5 text-xs text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
+              {!articleIssuesLoading && !articleIssuesError && enabledIssueKinds.length > 0 && !articleIssueRows.length ? (
+                <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
+                  За {yesterdayLabel} по текущей выборке не найдено ошибок по выбранным типам.
+                </div>
+              ) : null}
+
+              {articleIssueRows.length ? (
+                <div className="overflow-x-auto pb-1">
+                  <div className="space-y-2" style={{ minWidth: `${280 + enabledIssueKinds.length * 250}px` }}>
+                    <div
+                      className="grid gap-3 px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]"
+                      style={{ gridTemplateColumns: articleIssueGridTemplate }}
                     >
-                      XWAY
-                      <ExternalLink className="size-3.5" />
-                    </a>
-                  </div>
-
-                  <div className="mt-3 space-y-2">
-                    {item.issues.map((issue) => (
-                      <div
-                        key={`${item.article}-${issue.kind}`}
-                        className={cn(
-                          "rounded-[16px] border px-3 py-2.5",
-                          issue.kind === "budget" ? "border-rose-200 bg-rose-50/70" : "border-amber-200 bg-amber-50/70",
-                        )}
-                      >
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className={cn(
-                            "rounded-full px-2 py-1 text-[11px] font-semibold",
-                            issue.kind === "budget" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700",
-                          )}>
-                            {issue.title}
-                          </span>
-                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                            {formatNumber(issue.hours, 1)} ч
-                          </span>
-                          <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                            {formatIssueIncidents(issue.incidents)}
-                          </span>
-                          {issue.estimatedGap !== null ? (
-                            <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                              ≈ {formatMoney(issue.estimatedGap)}
-                            </span>
-                          ) : null}
+                      <div>Товар</div>
+                      {enabledIssueKinds.map((kind) => (
+                        <div key={`issue-header-${kind}`} className="px-1">
+                          <div>{resolveCatalogIssueKindLabel(kind)}</div>
+                          <div className="mt-1 text-[10px] font-normal normal-case tracking-normal text-[var(--color-muted)]">
+                            {resolveCatalogIssueKindCaption(kind)}
+                          </div>
                         </div>
-                        {issue.campaigns.length ? (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {issue.campaigns.map((campaign) => (
-                              <CatalogIssueCampaignPill key={`${item.article}-${issue.kind}-${campaign.id}`} campaign={campaign} />
+                      ))}
+                    </div>
+
+                    {articleIssueRows.map((item) => {
+                      const totalHours = getArticleIssueHoursTotal(item);
+                      const totalIncidents = getArticleIssueIncidentsTotal(item);
+                      const turnoverIssue = getArticleIssueByKind(item, "turnover");
+                      return (
+                        <article
+                          key={item.ref}
+                          className="rounded-[22px] border border-[var(--color-line)] bg-white/92 p-3 shadow-[0_10px_24px_rgba(44,35,66,0.05)]"
+                        >
+                          <div className="grid gap-3" style={{ gridTemplateColumns: articleIssueGridTemplate }}>
+                            <div className="min-w-0">
+                              <div className="flex items-start gap-3">
+                                <Link
+                                  to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="h-[86px] w-[64px] shrink-0 overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] shadow-[0_8px_20px_rgba(44,35,66,0.06)]"
+                                  aria-label={`Открыть товар ${item.name}`}
+                                >
+                                  {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" /> : null}
+                                </Link>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <Link
+                                      to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="min-w-0 font-display text-[1.05rem] font-semibold leading-tight text-[var(--color-ink)] hover:text-brand-200"
+                                      title={item.name}
+                                    >
+                                      <span className="line-clamp-2">{item.name}</span>
+                                    </Link>
+                                    {totalHours > 0 ? (
+                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                                        {formatNumber(totalHours, 1)} ч простоя
+                                      </span>
+                                    ) : null}
+                                    {totalIncidents > 0 ? (
+                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                                        {formatIssueIncidents(totalIncidents)}
+                                      </span>
+                                    ) : null}
+                                    {turnoverIssue?.turnoverDays !== undefined && turnoverIssue?.turnoverDays !== null ? (
+                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                                        {formatTurnoverDays(turnoverIssue.turnoverDays)}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
+                                    Артикул {item.article}
+                                  </p>
+                                </div>
+                                <a
+                                  href={item.productUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-[var(--color-line)] px-2.5 py-1.5 text-xs text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
+                                >
+                                  XWAY
+                                  <ExternalLink className="size-3.5" />
+                                </a>
+                              </div>
+                            </div>
+
+                            {enabledIssueKinds.map((kind) => (
+                              <CatalogIssueCell key={`${item.ref}-${kind}`} issue={getArticleIssueByKind(item, kind)} />
                             ))}
                           </div>
-                        ) : null}
-                      </div>
-                    ))}
+                        </article>
+                      );
+                    })}
                   </div>
-                </article>
-              ))}
-            </div>
+                </div>
+              ) : null}
+            </>
           ) : null}
         </div>
       </SectionCard>
@@ -2233,6 +2648,28 @@ export function CatalogPage() {
           </div>
         </SectionCard>
       ) : null}
+
+      <CatalogIssuesSettingsDialog
+        open={articleIssueSettingsOpen}
+        onClose={() => setArticleIssueSettingsOpen(false)}
+        turnoverThreshold={articleIssueSettings.turnoverThreshold}
+        onTurnoverThresholdChange={(value) =>
+          setArticleIssueSettings((current) => ({
+            ...current,
+            turnoverThreshold: value > 0 ? value : CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+          }))
+        }
+        visibleKinds={articleIssueSettings.visibleKinds}
+        onToggleKind={(kind) =>
+          setArticleIssueSettings((current) => ({
+            ...current,
+            visibleKinds: {
+              ...current.visibleKinds,
+              [kind]: !current.visibleKinds[kind],
+            },
+          }))
+        }
+      />
     </div>
   );
 }

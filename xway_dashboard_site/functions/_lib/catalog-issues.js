@@ -404,7 +404,7 @@ function resolveCampaignDisplayStatus(statusCode) {
   return "muted";
 }
 
-function buildIssueCampaignMeta(campaign) {
+function buildIssueCampaignMeta(campaign, metrics = {}) {
   const statusCode = normalizeCampaignStatusCode(campaign);
   return {
     id: Number(campaign?.id),
@@ -414,6 +414,9 @@ function buildIssueCampaignMeta(campaign) {
     status_code: statusCode,
     status_label: formatCampaignStatusLabel(statusCode),
     display_status: resolveCampaignDisplayStatus(statusCode),
+    hours: Number.isFinite(metrics.hours) ? metrics.hours : 0,
+    incidents: Number.isFinite(metrics.incidents) ? metrics.incidents : 0,
+    estimated_gap: Number.isFinite(metrics.estimated_gap) && metrics.estimated_gap > 0 ? metrics.estimated_gap : null,
   };
 }
 
@@ -447,7 +450,21 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
       if (!current.campaignIdSet.has(campaign.id)) {
         current.campaignIdSet.add(campaign.id);
         current.campaign_ids.push(campaign.id);
-        current.campaigns.push(buildIssueCampaignMeta(campaign));
+        current.campaigns.push(buildIssueCampaignMeta(campaign, {
+          hours: dayEntry.hours,
+          incidents: dayEntry.incidents,
+          estimated_gap: dayEntry.estimatedGap,
+        }));
+      } else {
+        const currentCampaign = current.campaigns.find((item) => item.id === Number(campaign.id));
+        if (currentCampaign) {
+          currentCampaign.hours += dayEntry.hours;
+          currentCampaign.incidents += dayEntry.incidents;
+          currentCampaign.estimated_gap =
+            dayEntry.estimatedGap !== null
+              ? (currentCampaign.estimated_gap || 0) + dayEntry.estimatedGap
+              : currentCampaign.estimated_gap;
+        }
       }
       const campaignLabel = formatIssueCampaignName(campaign);
       if (!current.campaignLabelSet.has(campaignLabel)) {
@@ -464,6 +481,25 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
     .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, ...item }) => ({
       ...item,
       estimated_gap: typeof item.estimated_gap === "number" && Number.isFinite(item.estimated_gap) && item.estimated_gap > 0 ? item.estimated_gap : null,
+      campaigns: item.campaigns
+        .map((campaign) => ({
+          ...campaign,
+          estimated_gap:
+            typeof campaign.estimated_gap === "number" && Number.isFinite(campaign.estimated_gap) && campaign.estimated_gap > 0
+              ? campaign.estimated_gap
+              : null,
+        }))
+        .sort((left, right) => {
+          const hoursDiff = right.hours - left.hours;
+          if (hoursDiff !== 0) {
+            return hoursDiff;
+          }
+          const incidentsDiff = right.incidents - left.incidents;
+          if (incidentsDiff !== 0) {
+            return incidentsDiff;
+          }
+          return String(left.label || "").localeCompare(String(right.label || ""), "ru");
+        }),
     }));
 }
 

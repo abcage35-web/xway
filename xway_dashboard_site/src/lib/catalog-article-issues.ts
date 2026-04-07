@@ -1,25 +1,33 @@
 import { buildCampaignIssueSummaries, type CampaignOverviewStatusDay, type CampaignOverviewStatusEntry } from "../components/charts";
 import type { CampaignPauseHistoryEntry, CampaignSummary, ProductSummary } from "./types";
 
+export type CatalogArticleIssueKind = "budget" | "limit" | "turnover";
+export type CatalogArticleIssueCampaignId = number | string;
+
 export interface CatalogArticleIssueSummary {
-  kind: "budget" | "limit";
+  kind: CatalogArticleIssueKind;
   title: string;
   hours: number;
   incidents: number;
   estimatedGap: number | null;
-  campaignIds: number[];
+  campaignIds: CatalogArticleIssueCampaignId[];
   campaignLabels: string[];
   campaigns: CatalogArticleIssueCampaign[];
+  turnoverDays?: number | null;
+  thresholdDays?: number | null;
 }
 
 export interface CatalogArticleIssueCampaign {
-  id: number;
+  id: CatalogArticleIssueCampaignId;
   label: string;
   paymentType: "cpm" | "cpc" | null;
   zoneKind: "search" | "recom" | "both" | null;
   statusCode: string | null;
   statusLabel: string | null;
   displayStatus: "active" | "paused" | "freeze" | "muted";
+  hours: number;
+  incidents: number;
+  estimatedGap: number | null;
 }
 
 export interface CatalogArticleYesterdayIssues {
@@ -335,7 +343,7 @@ function buildCampaignYesterdayStatusDay(campaign: CampaignSummary, yesterday: s
 export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yesterday: string): CatalogArticleYesterdayIssues | null {
   const aggregated = new Map<
     CatalogArticleIssueSummary["kind"],
-    CatalogArticleIssueSummary & { campaignIdSet: Set<number>; campaignLabelSet: Set<string> }
+    CatalogArticleIssueSummary & { campaignIdSet: Set<CatalogArticleIssueCampaignId>; campaignLabelSet: Set<string> }
   >();
 
   product.campaigns.forEach((campaign) => {
@@ -346,7 +354,7 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
       if (!dayEntry) {
         return;
       }
-      const current: CatalogArticleIssueSummary & { campaignIdSet: Set<number>; campaignLabelSet: Set<string> } =
+      const current: CatalogArticleIssueSummary & { campaignIdSet: Set<CatalogArticleIssueCampaignId>; campaignLabelSet: Set<string> } =
         aggregated.get(summary.kind) ||
         {
           kind: summary.kind,
@@ -354,10 +362,10 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
           hours: 0,
           incidents: 0,
           estimatedGap: 0,
-          campaignIds: [] as number[],
+          campaignIds: [] as CatalogArticleIssueCampaignId[],
           campaignLabels: [] as string[],
           campaigns: [] as CatalogArticleIssueCampaign[],
-          campaignIdSet: new Set<number>(),
+          campaignIdSet: new Set<CatalogArticleIssueCampaignId>(),
           campaignLabelSet: new Set<string>(),
         };
       current.hours += dayEntry.hours;
@@ -368,6 +376,26 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
       if (!current.campaignIdSet.has(campaign.id)) {
         current.campaignIdSet.add(campaign.id);
         current.campaignIds.push(campaign.id);
+        current.campaigns.push({
+          id: campaign.id,
+          label: formatIssueCampaignName(campaign),
+          paymentType: campaign.payment_type === "cpc" ? "cpc" : "cpm",
+          zoneKind: campaign.unified ? "both" : campaign.payment_type === "cpc" ? "search" : null,
+          statusCode: campaign.status_xway ?? campaign.status ?? null,
+          statusLabel: campaign.status_xway ?? campaign.status ?? null,
+          displayStatus: "muted",
+          hours: dayEntry.hours,
+          incidents: dayEntry.incidents,
+          estimatedGap: dayEntry.estimatedGap,
+        });
+      } else {
+        const currentCampaign = current.campaigns.find((item) => item.id === campaign.id);
+        if (currentCampaign) {
+          currentCampaign.hours += dayEntry.hours;
+          currentCampaign.incidents += dayEntry.incidents;
+          currentCampaign.estimatedGap =
+            dayEntry.estimatedGap !== null ? (currentCampaign.estimatedGap ?? 0) + dayEntry.estimatedGap : currentCampaign.estimatedGap;
+        }
       }
       const campaignLabel = formatIssueCampaignName(campaign);
       if (!current.campaignLabelSet.has(campaignLabel)) {
@@ -384,6 +412,13 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
     .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, ...item }) => ({
       ...item,
       estimatedGap: typeof item.estimatedGap === "number" && Number.isFinite(item.estimatedGap) && item.estimatedGap > 0 ? item.estimatedGap : null,
+      campaigns: item.campaigns.map((campaign) => ({
+        ...campaign,
+        estimatedGap:
+          typeof campaign.estimatedGap === "number" && Number.isFinite(campaign.estimatedGap) && campaign.estimatedGap > 0
+            ? campaign.estimatedGap
+            : null,
+      })),
     }));
 
   if (!issues.length) {
