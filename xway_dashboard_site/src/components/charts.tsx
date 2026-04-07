@@ -376,31 +376,32 @@ function toggleLegendKey(current: string[], key: string) {
   return current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
 }
 
-function buildCampaignOverviewRows(campaign: CampaignSummary) {
-  const bidByDay = new Map(buildDailyBidRows(campaign).map((row) => [row.day, row.bid]));
+function buildCampaignOverviewRows(campaign: CampaignSummary, statusDays: CampaignOverviewStatusDay[] = []) {
+  const periodBidRows = buildDailyBidRows(campaign);
+  const historyBidRows = buildDailyBidRows(campaign, { mode: "history" });
+  const bidByDay = new Map([...historyBidRows, ...periodBidRows].map((row) => [row.day, row.bid]));
   const dailyRows = [...(campaign.daily_exact || [])].sort((left, right) => left.day.localeCompare(right.day));
+  const dailyRowsByDay = new Map(dailyRows.map((row) => [row.day, row]));
+  const dayKeys = new Set<string>();
 
-  if (!dailyRows.length) {
-    return buildDailyBidRows(campaign).map((row) => ({
-      day: row.day,
-      label: row.label,
-      views: 0,
-      orders: 0,
-      spend: 0,
-      bid: row.bid,
-      drr: null as number | null,
-    }));
-  }
+  dailyRows.forEach((row) => dayKeys.add(row.day));
+  periodBidRows.forEach((row) => dayKeys.add(row.day));
+  statusDays.forEach((row) => dayKeys.add(row.day));
 
-  return dailyRows.map((row) => ({
-    day: row.day,
-    label: formatDayLabel(row.day),
-    views: toNumber(row.views) ?? 0,
-    orders: toNumber(row.orders) ?? 0,
-    spend: toNumber(row.expense_sum) ?? 0,
-    bid: bidByDay.get(row.day) ?? toNumber(campaign.bid),
-    drr: computeDrr(toNumber(row.expense_sum), toNumber(row.sum_price)),
-  }));
+  return [...dayKeys]
+    .sort((left, right) => left.localeCompare(right))
+    .map((day) => {
+      const dailyRow = dailyRowsByDay.get(day);
+      return {
+        day,
+        label: formatDayLabel(day),
+        views: dailyRow ? (toNumber(dailyRow.views) ?? 0) : null,
+        orders: dailyRow ? (toNumber(dailyRow.orders) ?? 0) : null,
+        spend: dailyRow ? (toNumber(dailyRow.expense_sum) ?? 0) : null,
+        bid: bidByDay.get(day) ?? toNumber(campaign.bid),
+        drr: dailyRow ? computeDrr(toNumber(dailyRow.expense_sum), toNumber(dailyRow.sum_price)) : null,
+      };
+    });
 }
 
 function CampaignStatusDayGlyph({ statusKey }: { statusKey: CampaignOverviewStatusKey }) {
@@ -426,9 +427,9 @@ function buildCampaignStatusTooltipAriaLabel(day: string, entry: CampaignOvervie
 interface CampaignOverviewChartRow {
   day: string;
   label: string;
-  views: number;
-  orders: number;
-  spend: number;
+  views: number | null;
+  orders: number | null;
+  spend: number | null;
   bid: number | null;
   drr: number | null;
 }
@@ -1328,7 +1329,7 @@ export function CampaignInlineOverviewChart({
   const bidKind = resolveBidKind(campaign);
   const bidLabel = resolveBidLabel(campaign);
   const isOverlayDensity = density === "overlay";
-  const chartRows = useMemo(() => buildCampaignOverviewRows(campaign), [campaign]);
+  const chartRows = useMemo(() => buildCampaignOverviewRows(campaign, statusDays), [campaign, statusDays]);
   const statusDaysByDay = useMemo(() => new Map(statusDays.map((day) => [day.day, day])), [statusDays]);
   const visibleRows = sliceByWindow(chartRows, activeWindow);
   const visibleRowsByDay = useMemo(() => new Map(visibleRows.map((row) => [row.day, row])), [visibleRows]);
@@ -1344,9 +1345,9 @@ export function CampaignInlineOverviewChart({
   const statusDateGap = isOverlayDensity ? 10 : 12;
   const chartBottomReserve = statusOverlayHeight - 18 + statusDateGap;
   const chartHeight = (isOverlayDensity ? 176 : 208) + statusOverlayHeight + statusDateGap;
-  const viewsTotal = visibleRows.reduce((sum, row) => sum + row.views, 0);
-  const ordersTotal = visibleRows.reduce((sum, row) => sum + row.orders, 0);
-  const spendTotal = visibleRows.reduce((sum, row) => sum + row.spend, 0);
+  const viewsTotal = visibleRows.reduce((sum, row) => sum + (row.views ?? 0), 0);
+  const ordersTotal = visibleRows.reduce((sum, row) => sum + (row.orders ?? 0), 0);
+  const spendTotal = visibleRows.reduce((sum, row) => sum + (row.spend ?? 0), 0);
   const latestBid = visibleRows[visibleRows.length - 1]?.bid ?? toNumber(campaign.bid);
   const latestDrr = visibleRows[visibleRows.length - 1]?.drr ?? null;
   const ordersLabel = bidKind === "cpc" ? "Заказы CPC" : "Заказы CPM";

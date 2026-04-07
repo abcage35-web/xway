@@ -50,6 +50,7 @@ import {
 import type {
   BudgetRuleConfig,
   CampaignPauseHistoryEntry,
+  CampaignPauseHistoryPayload,
   CampaignDailyExactRow,
   CampaignScheduleConfig,
   CampaignSpendLimitItem,
@@ -2288,6 +2289,99 @@ function resolveCampaignStatusHistoryStart(campaign: CampaignSummary) {
 
   const earliest = candidates.reduce((currentEarliest, item) => (item.getTime() < currentEarliest.getTime() ? item : currentEarliest));
   return toIsoDateValue(earliest);
+}
+
+function countPauseHistoryEntries(payload?: CampaignPauseHistoryPayload) {
+  if (!payload) {
+    return 0;
+  }
+  return Math.max(
+    Array.isArray(payload.merged_intervals) ? payload.merged_intervals.length : 0,
+    Array.isArray(payload.intervals) ? payload.intervals.length : 0,
+    Array.isArray(payload.tooltips) ? payload.tooltips.length : 0,
+  );
+}
+
+function mergeUniquePauseHistoryEntries(left: CampaignPauseHistoryEntry[] = [], right: CampaignPauseHistoryEntry[] = []) {
+  const seen = new Set<string>();
+  const merged: CampaignPauseHistoryEntry[] = [];
+
+  [...left, ...right].forEach((item) => {
+    const key = JSON.stringify([
+      item.start || "",
+      item.end || "",
+      item.status || "",
+      Boolean(item.is_freeze),
+      Boolean(item.is_unfreeze),
+      item.paused_user || "",
+      item.unpaused_user || "",
+      item.stopped_user || "",
+      item.paused_limiter || "",
+      [...(item.pause_reasons || [])].sort(),
+    ]);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(item);
+  });
+
+  merged.sort((left, right) => {
+    const leftAt = parseStatusDateTimeValue(left.start)?.getTime() ?? 0;
+    const rightAt = parseStatusDateTimeValue(right.start)?.getTime() ?? 0;
+    return leftAt - rightAt;
+  });
+
+  return merged;
+}
+
+function mergeCampaignStatusLogs(base?: CampaignSummary["status_logs"], extended?: CampaignSummary["status_logs"]) {
+  if (!base) {
+    return extended;
+  }
+  if (!extended) {
+    return base;
+  }
+
+  const primaryPauseHistory =
+    countPauseHistoryEntries(extended.pause_history) >= countPauseHistoryEntries(base.pause_history)
+      ? extended.pause_history
+      : base.pause_history;
+  const secondaryPauseHistory = primaryPauseHistory === extended.pause_history ? base.pause_history : extended.pause_history;
+  const mergedIntervals = mergeUniquePauseHistoryEntries(primaryPauseHistory?.intervals || [], secondaryPauseHistory?.intervals || []);
+  const mergedMergedIntervals = mergeUniquePauseHistoryEntries(
+    primaryPauseHistory?.merged_intervals || [],
+    secondaryPauseHistory?.merged_intervals || [],
+  );
+
+  return {
+    mp_history: (extended.mp_history?.length ? extended.mp_history : base.mp_history) || [],
+    mp_next_page: extended.mp_next_page ?? base.mp_next_page ?? null,
+    mp_error: extended.mp_error ?? base.mp_error ?? null,
+    pause_error: extended.pause_error ?? base.pause_error ?? null,
+    pause_history: {
+      labels: (primaryPauseHistory?.labels?.length ? primaryPauseHistory.labels : secondaryPauseHistory?.labels) || [],
+      header: (primaryPauseHistory?.header?.length ? primaryPauseHistory.header : secondaryPauseHistory?.header) || [],
+      series: (primaryPauseHistory?.series?.length ? primaryPauseHistory.series : secondaryPauseHistory?.series) || [],
+      next_page: primaryPauseHistory?.next_page ?? secondaryPauseHistory?.next_page ?? null,
+      tooltips: (primaryPauseHistory?.tooltips?.length ? primaryPauseHistory.tooltips : secondaryPauseHistory?.tooltips) || [],
+      intervals: mergedIntervals,
+      merged_intervals: mergedMergedIntervals.length ? mergedMergedIntervals : mergedIntervals,
+    },
+  };
+}
+
+function mergeCampaignChartSource(base: CampaignSummary, extended?: CampaignSummary | null): CampaignSummary {
+  if (!extended) {
+    return base;
+  }
+
+  return {
+    ...base,
+    ...extended,
+    daily_exact: extended.daily_exact?.length ? extended.daily_exact : base.daily_exact,
+    status_logs: mergeCampaignStatusLogs(base.status_logs, extended.status_logs),
+  };
 }
 
 function resolveEarlierIsoDate(left?: string | null, right?: string | null) {
@@ -4901,7 +4995,7 @@ function CampaignOverviewCard({
     absoluteTop: 0,
     absoluteLeft: 0,
   });
-  const chartSourceCampaign = chartCampaign ?? campaign;
+  const chartSourceCampaign = mergeCampaignChartSource(campaign, chartCampaign);
   const campaignSchedule = mapCampaignSchedule(campaign.schedule_config);
   const hasInlineHeatmap = campaignSchedule.days.some((day) => day.hours.length > 0);
   const spendLimit = resolveCampaignSpendLimit(campaign);
@@ -6950,7 +7044,7 @@ function CampaignChartsOverlayDialog({
           {product.campaigns.length ? (
             <div className="grid min-w-0 auto-rows-min items-start gap-4 2xl:grid-cols-2">
               {product.campaigns.map((campaign) => {
-                const chartSourceCampaign = chartCampaignById.get(campaign.id) || campaign;
+                const chartSourceCampaign = mergeCampaignChartSource(campaign, chartCampaignById.get(campaign.id) || null);
                 const statusDays = buildCampaignStatusDays(
                   chartSourceCampaign,
                   chartSourceProduct.period.current_start,
