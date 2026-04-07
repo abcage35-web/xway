@@ -46,6 +46,7 @@ const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
+const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
 const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "turnover"] as const;
 
 type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
@@ -53,6 +54,7 @@ type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "
 
 interface CatalogIssueSettingsState {
   turnoverThreshold: number;
+  downtimeThresholdHours: number;
   visibleKinds: CatalogIssueVisibilityState;
 }
 
@@ -442,6 +444,8 @@ function CatalogIssuesSettingsDialog({
   onClose,
   turnoverThreshold,
   onTurnoverThresholdChange,
+  downtimeThresholdHours,
+  onDowntimeThresholdHoursChange,
   visibleKinds,
   onToggleKind,
 }: {
@@ -449,6 +453,8 @@ function CatalogIssuesSettingsDialog({
   onClose: () => void;
   turnoverThreshold: number;
   onTurnoverThresholdChange: (value: number) => void;
+  downtimeThresholdHours: number;
+  onDowntimeThresholdHoursChange: (value: number) => void;
   visibleKinds: CatalogIssueVisibilityState;
   onToggleKind: (kind: keyof CatalogIssueVisibilityState) => void;
 }) {
@@ -495,6 +501,27 @@ function CatalogIssuesSettingsDialog({
           </button>
         </div>
         <div className="space-y-5 px-6 py-5">
+          <label className="metric-chip flex flex-col gap-2 rounded-[24px] px-4 py-3">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Минимальный простой для ошибки</span>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={String(downtimeThresholdHours)}
+                onChange={(event) => {
+                  const nextValue = Number(event.target.value);
+                  if (Number.isFinite(nextValue) && nextValue > 0) {
+                    onDowntimeThresholdHoursChange(nextValue);
+                  }
+                }}
+                className="w-full min-w-0 bg-transparent text-base font-semibold text-[var(--color-ink)] outline-none"
+              />
+              <span className="text-sm text-[var(--color-muted)]">часа</span>
+            </div>
+            <span className="text-xs text-[var(--color-muted)]">Простои короче этого порога не считаются ошибкой для бюджета и лимита в блоке каталога.</span>
+          </label>
+
           <label className="metric-chip flex flex-col gap-2 rounded-[24px] px-4 py-3">
             <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Порог оборачиваемости</span>
             <div className="flex items-center gap-3">
@@ -612,6 +639,7 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
   if (typeof window === "undefined") {
     return {
       turnoverThreshold: CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+      downtimeThresholdHours: CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT,
       visibleKinds: { ...DEFAULT_CATALOG_ISSUE_VISIBILITY },
     };
   }
@@ -620,6 +648,7 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
     if (!raw) {
       return {
         turnoverThreshold: CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+        downtimeThresholdHours: CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT,
         visibleKinds: { ...DEFAULT_CATALOG_ISSUE_VISIBILITY },
       };
     }
@@ -627,8 +656,13 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
       visibleKinds?: Partial<CatalogIssueVisibilityState>;
     };
     const threshold = Number(parsed.turnoverThreshold);
+    const downtimeThresholdHours = Number(parsed.downtimeThresholdHours);
     return {
       turnoverThreshold: Number.isFinite(threshold) && threshold > 0 ? threshold : CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+      downtimeThresholdHours:
+        Number.isFinite(downtimeThresholdHours) && downtimeThresholdHours > 0
+          ? downtimeThresholdHours
+          : CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT,
       visibleKinds: {
         budget: parsed.visibleKinds?.budget ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.budget,
         limit: parsed.visibleKinds?.limit ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.limit,
@@ -638,6 +672,7 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
   } catch {
     return {
       turnoverThreshold: CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+      downtimeThresholdHours: CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT,
       visibleKinds: { ...DEFAULT_CATALOG_ISSUE_VISIBILITY },
     };
   }
@@ -1341,6 +1376,39 @@ type CatalogIssueDisplayRow = CatalogArticleYesterdayIssues & {
   turnoverDays: number | null;
 };
 
+function applyCatalogIssueDowntimeThreshold(
+  issue: CatalogArticleYesterdayIssues["issues"][number],
+  downtimeThresholdHours: number,
+): CatalogArticleYesterdayIssues["issues"][number] | null {
+  if (issue.kind === "turnover") {
+    return issue;
+  }
+  if (!Number.isFinite(downtimeThresholdHours) || downtimeThresholdHours <= 0) {
+    return issue;
+  }
+  if (!issue.campaigns.length) {
+    return issue.hours >= downtimeThresholdHours ? issue : null;
+  }
+
+  const campaigns = issue.campaigns.filter((campaign) => campaign.hours >= downtimeThresholdHours);
+  if (!campaigns.length) {
+    return null;
+  }
+
+  const estimatedGapValues = campaigns.map((campaign) => campaign.estimatedGap).filter((value): value is number => value !== null);
+  return {
+    ...issue,
+    hours: campaigns.reduce((sum, campaign) => sum + campaign.hours, 0),
+    incidents: campaigns.reduce((sum, campaign) => sum + campaign.incidents, 0),
+    ordersAds: campaigns.reduce((sum, campaign) => sum + campaign.ordersAds, 0),
+    estimatedGap: estimatedGapValues.length ? estimatedGapValues.reduce((sum, value) => sum + value, 0) : null,
+    drrOverall: campaigns.length === issue.campaigns.length ? issue.drrOverall : null,
+    campaignIds: campaigns.map((campaign) => campaign.id),
+    campaignLabels: campaigns.map((campaign) => campaign.label),
+    campaigns,
+  };
+}
+
 function mapCatalogIssueRows(
   targets: CatalogIssueTargetMeta[],
   rowsByRef: Record<string, CatalogIssueCacheEntry>,
@@ -1349,7 +1417,9 @@ function mapCatalogIssueRows(
   return targets
     .map((meta) => {
       const cached = rowsByRef[meta.ref];
-      const remoteIssues = cached?.issues || [];
+      const remoteIssues = (cached?.issues || [])
+        .map((issue) => applyCatalogIssueDowntimeThreshold(issue, options.downtimeThresholdHours))
+        .filter((issue): issue is CatalogArticleYesterdayIssues["issues"][number] => issue !== null);
       const turnoverIssue = options.visibleKinds.turnover ? buildCatalogTurnoverIssue(meta, cached?.campaigns, options.turnoverThreshold) : null;
       const issues = [...remoteIssues, ...(turnoverIssue ? [turnoverIssue] : [])].filter((issue) => options.visibleKinds[issue.kind]);
       if (!issues.length) {
@@ -2440,7 +2510,7 @@ export function CatalogPage() {
 
       <SectionCard
         title="Ошибки по артикулам"
-        caption={`Бюджет и лимиты догружаются по видимым артикулам с остатком > 0 за ${yesterdayLabel}. Оборачиваемость считается сразу по текущей выборке, порог сейчас ${formatTurnoverDays(articleIssueSettings.turnoverThreshold)}.`}
+        caption={`Бюджет и лимиты догружаются по видимым артикулам с остатком > 0 за ${yesterdayLabel}. Простои короче ${formatNumber(articleIssueSettings.downtimeThresholdHours, 1)} ч в этом блоке не считаются ошибкой. Оборачиваемость считается сразу по текущей выборке, порог сейчас ${formatTurnoverDays(articleIssueSettings.turnoverThreshold)}.`}
         actions={
           <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
             <SearchableMultiSelect
@@ -2519,6 +2589,9 @@ export function CatalogPage() {
                 Обработано {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
               </span>
             ) : null}
+            <span className="metric-chip rounded-2xl px-3 py-2">
+              Порог простоя {formatNumber(articleIssueSettings.downtimeThresholdHours, 1)} ч
+            </span>
             <span className="metric-chip rounded-2xl px-3 py-2">
               Порог оборачиваемости {formatTurnoverDays(articleIssueSettings.turnoverThreshold)}
             </span>
@@ -2842,10 +2915,17 @@ export function CatalogPage() {
         open={articleIssueSettingsOpen}
         onClose={() => setArticleIssueSettingsOpen(false)}
         turnoverThreshold={articleIssueSettings.turnoverThreshold}
+        downtimeThresholdHours={articleIssueSettings.downtimeThresholdHours}
         onTurnoverThresholdChange={(value) =>
           setArticleIssueSettings((current) => ({
             ...current,
             turnoverThreshold: value > 0 ? value : CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT,
+          }))
+        }
+        onDowntimeThresholdHoursChange={(value) =>
+          setArticleIssueSettings((current) => ({
+            ...current,
+            downtimeThresholdHours: value > 0 ? value : CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT,
           }))
         }
         visibleKinds={articleIssueSettings.visibleKinds}
