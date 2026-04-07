@@ -660,17 +660,16 @@ export function PageHero({
 }
 
 export function ScheduleMatrix({
-  schedule,
-  compact = false,
-  showCounts = true,
-  showDayHeaderLabel = true,
-  autoWidth = false,
-  hourColumnWidth,
-  dayLabelWidth,
-  hourLabelStep = 1,
-  responsiveResetKey,
-  stretchToFitHeight = false,
-}: {
+  ...props
+}: ScheduleMatrixProps) {
+  if (props.compact && !props.showCounts) {
+    return <CompactScheduleMatrix {...props} />;
+  }
+
+  return <SvgScheduleMatrix {...props} />;
+}
+
+type ScheduleMatrixProps = {
   schedule: ScheduleAggregate;
   compact?: boolean;
   showCounts?: boolean;
@@ -681,7 +680,177 @@ export function ScheduleMatrix({
   hourLabelStep?: number;
   responsiveResetKey?: string | number;
   stretchToFitHeight?: boolean;
-}) {
+};
+
+function compactDayLabelValue(key: string, label: string) {
+  const normalizedKey = String(key || "").toLowerCase();
+  const normalizedLabel = String(label || "").toLowerCase();
+  const mapping: Record<string, string> = {
+    mon: "ПН",
+    monday: "ПН",
+    tue: "ВТ",
+    tuesday: "ВТ",
+    wed: "СР",
+    wednesday: "СР",
+    thu: "ЧТ",
+    thursday: "ЧТ",
+    fri: "ПТ",
+    friday: "ПТ",
+    sat: "СБ",
+    saturday: "СБ",
+    sun: "ВС",
+    sunday: "ВС",
+  };
+
+  return mapping[normalizedKey] || mapping[normalizedLabel] || label.slice(0, 2).toUpperCase();
+}
+
+function tooltipDayLabelValue(key: string, label: string) {
+  const normalizedKey = String(key || "").toLowerCase();
+  const normalizedLabel = String(label || "").toLowerCase();
+  const mapping: Record<string, string> = {
+    mon: "Пн",
+    monday: "Пн",
+    tue: "Вт",
+    tuesday: "Вт",
+    wed: "Ср",
+    wednesday: "Ср",
+    thu: "Чт",
+    thursday: "Чт",
+    fri: "Пт",
+    friday: "Пт",
+    sat: "Сб",
+    saturday: "Сб",
+    sun: "Вс",
+    sunday: "Вс",
+  };
+
+  return mapping[normalizedKey] || mapping[normalizedLabel] || `${label.slice(0, 1).toUpperCase()}${label.slice(1, 2).toLowerCase()}`;
+}
+
+function resolveScheduleCellTone(count: number, active: boolean, maxCount: number) {
+  if (!active || count <= 0) {
+    return {
+      fill: "rgba(236, 240, 250, 0.72)",
+      stroke: "rgba(214, 220, 236, 0.82)",
+      count: "rgba(132, 140, 166, 0.78)",
+    };
+  }
+
+  const intensity = Math.max(0, Math.min(count / maxCount, 1));
+  if (intensity >= 0.66) {
+    return {
+      fill: "rgba(51, 184, 126, 0.96)",
+      stroke: "rgba(28, 154, 103, 0.98)",
+      count: "rgba(247, 255, 250, 0.98)",
+    };
+  }
+  if (intensity >= 0.33) {
+    return {
+      fill: "rgba(118, 220, 170, 0.92)",
+      stroke: "rgba(86, 192, 142, 0.96)",
+      count: "rgba(18, 89, 63, 0.92)",
+    };
+  }
+  return {
+    fill: "rgba(197, 241, 219, 0.94)",
+    stroke: "rgba(157, 220, 190, 0.96)",
+    count: "rgba(28, 101, 72, 0.88)",
+  };
+}
+
+function CompactScheduleMatrix({
+  schedule,
+  compact = false,
+  showCounts = true,
+  showDayHeaderLabel = true,
+  dayLabelWidth,
+}: ScheduleMatrixProps) {
+  if (!schedule.days.length) {
+    return <EmptyState title="Расписание не пришло" text="По этому периоду у кампаний пока нет часовой раскладки." />;
+  }
+
+  const maxCount = Math.max(schedule.max_count || 1, 1);
+  const resolvedDayLabelWidth = dayLabelWidth ?? (compact ? 30 : 56);
+  const cellRadius = compact ? 4 : 6;
+
+  return (
+    <div className="schedule-grid-card-wrapper relative z-0 overflow-visible">
+      <div
+        className={cn("schedule-grid-card is-dom-compact w-full", compact ? "min-w-0 is-compact" : "min-w-0")}
+        style={{ ["--schedule-day-label-width" as string]: `${resolvedDayLabelWidth}px` }}
+        role="img"
+        aria-label="Тепловая карта активности расписания по дням и часам"
+      >
+        <div className="schedule-header">
+          <span
+            className="schedule-day title"
+            style={!showDayHeaderLabel ? { visibility: "hidden" } : undefined}
+            aria-hidden={!showDayHeaderLabel}
+          >
+            День
+          </span>
+          <div className="schedule-hours">
+            {Array.from({ length: 24 }, (_, hour) => (
+              <span key={`schedule-hour-${hour}`}>{hour}</span>
+            ))}
+          </div>
+        </div>
+
+        {schedule.days.map((day) => (
+          <div key={day.key} className="schedule-row">
+            <span className="schedule-day">{compactDayLabelValue(day.key, day.label)}</span>
+            <div className="schedule-cells">
+              {day.hours.map((slot) => {
+                const count = Number(slot.count || 0);
+                const active = Boolean(slot.active || count > 0);
+                const tone = resolveScheduleCellTone(count, active, maxCount);
+                const tooltipTitle = `${tooltipDayLabelValue(day.key, day.label)}, ${slot.hour}:00`;
+
+                return (
+                  <div
+                    key={`${day.key}-${slot.hour}`}
+                    className={cn("schedule-cell", active && "active", showCounts && count > 0 && "has-count", showCounts && count <= 0 && "is-no-count")}
+                    style={{
+                      background: tone.fill,
+                      boxShadow: `inset 0 0 0 1px ${tone.stroke}`,
+                      borderRadius: `${cellRadius}px`,
+                    }}
+                  >
+                    {showCounts && count > 0 ? <span className="schedule-cell-count" style={{ color: tone.count }}>{String(count)}</span> : null}
+                    <span className="schedule-cell-tooltip">
+                      <strong>{tooltipTitle}</strong>
+                      <span>
+                        {active
+                          ? count > 1
+                            ? `${count} РК активно`
+                            : "Активно"
+                          : "Неактивно"}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SvgScheduleMatrix({
+  schedule,
+  compact = false,
+  showCounts = true,
+  showDayHeaderLabel = true,
+  autoWidth = false,
+  hourColumnWidth,
+  dayLabelWidth,
+  hourLabelStep = 1,
+  responsiveResetKey,
+  stretchToFitHeight = false,
+}: ScheduleMatrixProps) {
   if (!schedule.days.length) {
     return <EmptyState title="Расписание не пришло" text="По этому периоду у кампаний пока нет часовой раскладки." />;
   }
@@ -757,83 +926,6 @@ export function ScheduleMatrix({
       observer.disconnect();
     };
   }, [responsiveResetKey]);
-
-  const compactDayLabel = (key: string, label: string) => {
-    const normalizedKey = String(key || "").toLowerCase();
-    const normalizedLabel = String(label || "").toLowerCase();
-    const mapping: Record<string, string> = {
-      mon: "ПН",
-      monday: "ПН",
-      tue: "ВТ",
-      tuesday: "ВТ",
-      wed: "СР",
-      wednesday: "СР",
-      thu: "ЧТ",
-      thursday: "ЧТ",
-      fri: "ПТ",
-      friday: "ПТ",
-      sat: "СБ",
-      saturday: "СБ",
-      sun: "ВС",
-      sunday: "ВС",
-    };
-
-    return mapping[normalizedKey] || mapping[normalizedLabel] || label.slice(0, 2).toUpperCase();
-  };
-
-  const tooltipDayLabel = (key: string, label: string) => {
-    const normalizedKey = String(key || "").toLowerCase();
-    const normalizedLabel = String(label || "").toLowerCase();
-    const mapping: Record<string, string> = {
-      mon: "Пн",
-      monday: "Пн",
-      tue: "Вт",
-      tuesday: "Вт",
-      wed: "Ср",
-      wednesday: "Ср",
-      thu: "Чт",
-      thursday: "Чт",
-      fri: "Пт",
-      friday: "Пт",
-      sat: "Сб",
-      saturday: "Сб",
-      sun: "Вс",
-      sunday: "Вс",
-    };
-
-    return mapping[normalizedKey] || mapping[normalizedLabel] || `${label.slice(0, 1).toUpperCase()}${label.slice(1, 2).toLowerCase()}`;
-  };
-
-  const resolveCellTone = (count: number, active: boolean) => {
-    if (!active || count <= 0) {
-      return {
-        fill: "rgba(236, 240, 250, 0.72)",
-        stroke: "rgba(214, 220, 236, 0.82)",
-        count: "rgba(132, 140, 166, 0.78)",
-      };
-    }
-
-    const intensity = Math.max(0, Math.min(count / maxCount, 1));
-    if (intensity >= 0.66) {
-      return {
-        fill: "rgba(51, 184, 126, 0.96)",
-        stroke: "rgba(28, 154, 103, 0.98)",
-        count: "rgba(247, 255, 250, 0.98)",
-      };
-    }
-    if (intensity >= 0.33) {
-      return {
-        fill: "rgba(118, 220, 170, 0.92)",
-        stroke: "rgba(86, 192, 142, 0.96)",
-        count: "rgba(18, 89, 63, 0.92)",
-      };
-    }
-    return {
-      fill: "rgba(197, 241, 219, 0.94)",
-      stroke: "rgba(157, 220, 190, 0.96)",
-      count: "rgba(28, 101, 72, 0.88)",
-    };
-  };
 
   const measuredWidth = Math.max(viewportBounds.width, 0);
   const measuredHeight = Math.max(viewportBounds.height, 0);
@@ -944,7 +1036,7 @@ export function ScheduleMatrix({
                           className="schedule-modern-day-text"
                           style={{ fontSize: responsiveDayFontSize, fontWeight: 700, letterSpacing: compact ? "0.06em" : "0.08em", textTransform: "uppercase" }}
                         >
-                          {compactDayLabel(day.key, day.label)}
+                          {compactDayLabelValue(day.key, day.label)}
                         </VisxText>
 
                         <rect
@@ -960,8 +1052,8 @@ export function ScheduleMatrix({
                           const x = responsiveDayLabelWidth + hourIndex * (computedHourWidth + responsiveHourGap);
                           const count = Number(slot.count || 0);
                           const active = Boolean(slot.active || count > 0);
-                          const tone = resolveCellTone(count, active);
-                          const tooltipTitle = `${tooltipDayLabel(day.key, day.label)}, ${slot.hour}:00`;
+                          const tone = resolveScheduleCellTone(count, active, maxCount);
+                          const tooltipTitle = `${tooltipDayLabelValue(day.key, day.label)}, ${slot.hour}:00`;
                           const slotTop = laneTop;
                           const slotBottom = laneTop + computedCellHeight;
                           const tooltipAnchorLeft = x + computedHourWidth / 2;
