@@ -39,7 +39,7 @@ const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: st
 
 const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
 const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
-const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v3";
+const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v4";
 const CATALOG_ISSUES_SETTINGS_STORAGE_KEY = "xway-catalog-issues-settings-v1";
 const CATALOG_ISSUES_COLLAPSED_STORAGE_KEY = "xway-catalog-issues-collapsed-v1";
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
@@ -307,6 +307,7 @@ function CatalogIssueCampaignEntry({
   issueKind: CatalogIssueKind;
 }) {
   const tone = resolveCatalogIssueKindTone(issueKind);
+  const showPerformanceMetrics = issueKind !== "turnover";
   return (
     <div
       className="flex flex-col gap-2 rounded-[18px] border border-[var(--color-line)] bg-white/88 px-3 py-2.5 shadow-[0_8px_18px_rgba(44,35,66,0.04)]"
@@ -332,7 +333,7 @@ function CatalogIssueCampaignEntry({
         ) : null}
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--color-ink)]">{campaign.label.replace(/^РК\s*/, "")}</span>
       </div>
-      {campaign.hours > 0 || campaign.incidents > 0 || campaign.estimatedGap !== null ? (
+      {campaign.hours > 0 || campaign.incidents > 0 || campaign.estimatedGap !== null || showPerformanceMetrics ? (
         <div className="flex flex-wrap items-center gap-1.5">
           {campaign.hours > 0 ? (
             <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
@@ -342,6 +343,16 @@ function CatalogIssueCampaignEntry({
           {campaign.incidents > 0 ? (
             <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
               {formatIssueIncidents(campaign.incidents)}
+            </span>
+          ) : null}
+          {showPerformanceMetrics ? (
+            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+              Заказы {formatNumber(campaign.ordersAds)}
+            </span>
+          ) : null}
+          {showPerformanceMetrics && campaign.drr !== null ? (
+            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+              ДРР {formatPercent(campaign.drr)}
             </span>
           ) : null}
           {campaign.estimatedGap !== null ? (
@@ -395,6 +406,16 @@ function CatalogIssueCell({
             {issue.incidents > 0 ? (
               <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
                 {formatIssueIncidents(issue.incidents)}
+              </span>
+            ) : null}
+            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+              {issue.totalOrders !== null
+                ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
+                : `Заказы ${formatNumber(issue.ordersAds)}`}
+            </span>
+            {issue.drrOverall !== null ? (
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                ДРР общ. {formatPercent(issue.drrOverall)}
               </span>
             ) : null}
             {issue.estimatedGap !== null ? (
@@ -1285,13 +1306,15 @@ function buildCatalogTurnoverIssue(
             label: slot.headline,
             paymentType: (slot.key === "cpc" ? "cpc" : "cpm") as "cpc" | "cpm",
             zoneKind: slot.zoneKind,
-            statusCode: slot.statusCode,
-            statusLabel: resolveCatalogCampaignStatusLabel(slot.statusCode),
-            displayStatus: slot.displayStatus,
-            hours: 0,
-            incidents: 0,
-            estimatedGap: null,
-          }));
+          statusCode: slot.statusCode,
+          statusLabel: resolveCatalogCampaignStatusLabel(slot.statusCode),
+          displayStatus: slot.displayStatus,
+          hours: 0,
+          incidents: 0,
+          ordersAds: 0,
+          drr: null,
+          estimatedGap: null,
+        }));
   if (!activeCampaigns.length) {
     return null;
   }
@@ -1300,6 +1323,9 @@ function buildCatalogTurnoverIssue(
     title: "Низкая оборачиваемость",
     hours: 0,
     incidents: 0,
+    ordersAds: 0,
+    totalOrders: null,
+    drrOverall: null,
     estimatedGap: null,
     campaignIds: activeCampaigns.map((campaign) => campaign.id),
     campaignLabels: activeCampaigns.map((campaign) => campaign.label),
@@ -1995,6 +2021,9 @@ export function CatalogPage() {
             title: issue.title,
             hours: issue.hours,
             incidents: issue.incidents,
+            ordersAds: issue.orders_ads,
+            totalOrders: issue.total_orders,
+            drrOverall: issue.drr_overall,
             estimatedGap: issue.estimated_gap,
             campaignIds: issue.campaign_ids,
             campaignLabels: issue.campaign_labels,
@@ -2008,6 +2037,8 @@ export function CatalogPage() {
               displayStatus: campaign.display_status,
               hours: campaign.hours,
               incidents: campaign.incidents,
+              ordersAds: campaign.orders_ads,
+              drr: campaign.drr,
               estimatedGap: campaign.estimated_gap,
             })),
           })),
@@ -2021,6 +2052,8 @@ export function CatalogPage() {
             displayStatus: campaign.display_status,
             hours: campaign.hours,
             incidents: campaign.incidents,
+            ordersAds: campaign.orders_ads,
+            drr: campaign.drr,
             estimatedGap: campaign.estimated_gap,
           })),
         }));

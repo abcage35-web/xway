@@ -1,4 +1,5 @@
 import { buildCampaignIssueSummaries, type CampaignOverviewStatusDay, type CampaignOverviewStatusEntry } from "../components/charts";
+import { toNumber } from "./format";
 import type { CampaignPauseHistoryEntry, CampaignSummary, ProductSummary } from "./types";
 
 export type CatalogArticleIssueKind = "budget" | "limit" | "turnover";
@@ -9,6 +10,9 @@ export interface CatalogArticleIssueSummary {
   title: string;
   hours: number;
   incidents: number;
+  ordersAds: number;
+  totalOrders: number | null;
+  drrOverall: number | null;
   estimatedGap: number | null;
   campaignIds: CatalogArticleIssueCampaignId[];
   campaignLabels: string[];
@@ -27,6 +31,8 @@ export interface CatalogArticleIssueCampaign {
   displayStatus: "active" | "paused" | "freeze" | "muted";
   hours: number;
   incidents: number;
+  ordersAds: number;
+  drr: number | null;
   estimatedGap: number | null;
 }
 
@@ -68,6 +74,15 @@ function splitStatusDateTime(value?: string | null): StatusDateTimeParts {
     };
   }
   return { date: text, time: "" };
+}
+
+function computeDrr(spend: number | null | undefined, revenue: number | null | undefined) {
+  const spendValue = toNumber(spend);
+  const revenueValue = toNumber(revenue);
+  if (spendValue === null || revenueValue === null || revenueValue <= 0) {
+    return null;
+  }
+  return (spendValue / revenueValue) * 100;
 }
 
 function parseRuDateLabel(value?: string | null) {
@@ -340,27 +355,63 @@ function buildCampaignYesterdayStatusDay(campaign: CampaignSummary, yesterday: s
   };
 }
 
+function collectCampaignDayMetrics(campaign: CampaignSummary, day: string) {
+  return [...(campaign.daily_exact || [])].reduce(
+    (totals, row) => {
+      if (String(row.day || "") !== day) {
+        return totals;
+      }
+      totals.ordersAds += toNumber(row.orders) ?? 0;
+      totals.spend += toNumber(row.expense_sum) ?? 0;
+      totals.revenueAds += toNumber(row.sum_price) ?? 0;
+      return totals;
+    },
+    { ordersAds: 0, spend: 0, revenueAds: 0 },
+  );
+}
+
+function collectProductDayMetrics(product: ProductSummary, day: string) {
+  return [...(product.daily_stats || [])].reduce(
+    (totals, row) => {
+      if (String(row.day || "") !== day) {
+        return totals;
+      }
+      totals.totalOrders += toNumber(row.ordered_total) ?? 0;
+      totals.totalRevenue += toNumber(row.ordered_sum_total) ?? 0;
+      return totals;
+    },
+    { totalOrders: 0, totalRevenue: 0 },
+  );
+}
+
 export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yesterday: string): CatalogArticleYesterdayIssues | null {
+  const productDayMetrics = collectProductDayMetrics(product, yesterday);
   const aggregated = new Map<
     CatalogArticleIssueSummary["kind"],
-    CatalogArticleIssueSummary & { campaignIdSet: Set<CatalogArticleIssueCampaignId>; campaignLabelSet: Set<string> }
+    CatalogArticleIssueSummary & { campaignIdSet: Set<CatalogArticleIssueCampaignId>; campaignLabelSet: Set<string>; spend: number }
   >();
 
   product.campaigns.forEach((campaign) => {
     const yesterdayStatusDay = buildCampaignYesterdayStatusDay(campaign, yesterday);
     const yesterdayIssueSummaries = buildCampaignIssueSummaries(campaign, [yesterdayStatusDay]);
+    const campaignDayMetrics = collectCampaignDayMetrics(campaign, yesterday);
+    const campaignDrr = computeDrr(campaignDayMetrics.spend, campaignDayMetrics.revenueAds);
     yesterdayIssueSummaries.forEach((summary) => {
       const dayEntry = summary.days.find((entry) => entry.day === yesterday);
       if (!dayEntry) {
         return;
       }
-      const current: CatalogArticleIssueSummary & { campaignIdSet: Set<CatalogArticleIssueCampaignId>; campaignLabelSet: Set<string> } =
+      const current: CatalogArticleIssueSummary & { campaignIdSet: Set<CatalogArticleIssueCampaignId>; campaignLabelSet: Set<string>; spend: number } =
         aggregated.get(summary.kind) ||
         {
           kind: summary.kind,
           title: summary.label,
           hours: 0,
           incidents: 0,
+          ordersAds: 0,
+          totalOrders: productDayMetrics.totalOrders,
+          drrOverall: null,
+          spend: 0,
           estimatedGap: 0,
           campaignIds: [] as CatalogArticleIssueCampaignId[],
           campaignLabels: [] as string[],
@@ -370,6 +421,8 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
         };
       current.hours += dayEntry.hours;
       current.incidents += dayEntry.incidents;
+      current.ordersAds += campaignDayMetrics.ordersAds;
+      current.spend += campaignDayMetrics.spend;
       if (dayEntry.estimatedGap !== null) {
         current.estimatedGap = (current.estimatedGap ?? 0) + dayEntry.estimatedGap;
       }
@@ -386,6 +439,8 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
           displayStatus: "muted",
           hours: dayEntry.hours,
           incidents: dayEntry.incidents,
+          ordersAds: campaignDayMetrics.ordersAds,
+          drr: campaignDrr,
           estimatedGap: dayEntry.estimatedGap,
         });
       } else {
@@ -393,6 +448,8 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
         if (currentCampaign) {
           currentCampaign.hours += dayEntry.hours;
           currentCampaign.incidents += dayEntry.incidents;
+          currentCampaign.ordersAds += campaignDayMetrics.ordersAds;
+          currentCampaign.drr = Number.isFinite(campaignDrr) ? campaignDrr : currentCampaign.drr;
           currentCampaign.estimatedGap =
             dayEntry.estimatedGap !== null ? (currentCampaign.estimatedGap ?? 0) + dayEntry.estimatedGap : currentCampaign.estimatedGap;
         }
@@ -409,11 +466,14 @@ export function buildCatalogArticleYesterdayIssues(product: ProductSummary, yest
   const issues = (["budget", "limit"] as const)
     .map((kind) => aggregated.get(kind))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, ...item }) => ({
+    .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, spend, ...item }) => ({
       ...item,
+      totalOrders: Number.isFinite(item.totalOrders) ? item.totalOrders : null,
+      drrOverall: computeDrr(spend, productDayMetrics.totalRevenue),
       estimatedGap: typeof item.estimatedGap === "number" && Number.isFinite(item.estimatedGap) && item.estimatedGap > 0 ? item.estimatedGap : null,
       campaigns: item.campaigns.map((campaign) => ({
         ...campaign,
+        drr: typeof campaign.drr === "number" && Number.isFinite(campaign.drr) ? campaign.drr : null,
         estimatedGap:
           typeof campaign.estimatedGap === "number" && Number.isFinite(campaign.estimatedGap) && campaign.estimatedGap > 0
             ? campaign.estimatedGap
