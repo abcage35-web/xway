@@ -1,5 +1,4 @@
 import { Group } from "@visx/group";
-import { ParentSize } from "@visx/responsive";
 import { Text as VisxText } from "@visx/text";
 import { useTooltip } from "@visx/tooltip";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -722,32 +721,41 @@ export function ScheduleMatrix({
     active: boolean;
     placement: "top" | "bottom";
   }>();
-  const layoutRef = useRef<HTMLDivElement | null>(null);
-  const [layoutBounds, setLayoutBounds] = useState({ width: 0, height: 0 });
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [viewportBounds, setViewportBounds] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
-    const node = layoutRef.current;
+    const node = viewportRef.current;
     if (!node || typeof ResizeObserver === "undefined") {
       return;
     }
 
     const updateBounds = () => {
-      const nextWidth = node.clientWidth;
-      const nextHeight = node.clientHeight;
-      setLayoutBounds((current) =>
+      const nextWidth = Math.round(node.getBoundingClientRect().width);
+      const nextHeight = Math.round(node.getBoundingClientRect().height);
+      setViewportBounds((current) =>
         current.width === nextWidth && current.height === nextHeight
           ? current
           : { width: nextWidth, height: nextHeight },
       );
     };
 
+    let frameId = window.requestAnimationFrame(updateBounds);
     updateBounds();
 
     const observer = new ResizeObserver(() => {
-      updateBounds();
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateBounds);
     });
     observer.observe(node);
-    return () => observer.disconnect();
+
+    window.addEventListener("resize", updateBounds);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", updateBounds);
+      observer.disconnect();
+    };
   }, [responsiveResetKey]);
 
   const compactDayLabel = (key: string, label: string) => {
@@ -827,195 +835,196 @@ export function ScheduleMatrix({
     };
   };
 
+  const measuredWidth = Math.max(viewportBounds.width, 0);
+  const measuredHeight = Math.max(viewportBounds.height, 0);
+  const svgWidth = autoWidth
+    ? chartNaturalWidth
+    : measuredWidth || chartNaturalWidth;
+  const svgHeight = stretchToFitHeight
+    ? Math.max(measuredHeight || chartNaturalHeight, chartNaturalHeight)
+    : chartNaturalHeight;
+  const responsiveDayLabelWidth = autoWidth
+    ? resolvedDayLabelWidth
+    : Math.min(resolvedDayLabelWidth, svgWidth * (compact ? 0.08 : 0.1));
+  const desiredRightEdgeGutter = autoWidth ? 0 : compact ? 6 : 8;
+  const availableHeatmapWidth = Math.max(svgWidth - responsiveDayLabelWidth, 0);
+  const desiredHourGap = autoWidth
+    ? hourGap
+    : availableHeatmapWidth < (compact ? 300 : 420)
+      ? compact
+        ? 1
+        : 2
+      : hourGap;
+  const rightEdgeGutter = Math.min(desiredRightEdgeGutter, availableHeatmapWidth);
+  const heatmapBudget = Math.max(availableHeatmapWidth - rightEdgeGutter, 0);
+  const responsiveHourGap = Math.min(desiredHourGap, heatmapBudget / 23 || 0);
+  const computedHourWidth = Math.max((heatmapBudget - responsiveHourGap * 23) / 24, 0);
+  const heatmapWidth = computedHourWidth * 24 + responsiveHourGap * 23;
+  const responsiveAxisFontSize = autoWidth
+    ? axisFontSize
+    : computedHourWidth < 8
+      ? Math.max(axisFontSize - 2, 6)
+      : computedHourWidth < 11
+        ? Math.max(axisFontSize - 1, 7)
+        : axisFontSize;
+  const responsiveDayFontSize = autoWidth
+    ? dayFontSize
+    : computedHourWidth < 9
+      ? Math.max(dayFontSize - 1, 8)
+      : dayFontSize;
+  const responsiveHourLabelStep = autoWidth
+    ? hourLabelStep
+    : computedHourWidth < 6
+      ? Math.max(hourLabelStep, 3)
+      : computedHourWidth < 8
+        ? Math.max(hourLabelStep, 2)
+        : hourLabelStep;
+  const rowPadding = Math.max((rowHeight - cellHeight) / 2, 0);
+  const availableRowsHeight = Math.max(svgHeight - headerHeight - Math.max(schedule.days.length - 1, 0) * rowGap, schedule.days.length * rowHeight);
+  const computedRowHeight = availableRowsHeight / schedule.days.length;
+  const computedCellHeight = Math.max(computedRowHeight - rowPadding * 2, cellHeight);
+
   return (
-    <div ref={layoutRef} className="schedule-grid-card-wrapper relative z-0 overflow-visible">
+    <div className="schedule-grid-card-wrapper relative z-0 overflow-visible">
       <div className={cn("schedule-grid-card w-full", compact ? "min-w-0 is-compact" : "min-w-0", autoWidth && "is-auto-width")}>
         <div className="schedule-modern-scroll">
-          <div className="schedule-modern-viewport">
+          <div ref={viewportRef} className="schedule-modern-viewport">
             <div className="schedule-modern-canvas">
-              <ParentSize key={responsiveResetKey ?? "default"} debounceTime={0}>
-                {({ width, height }) => {
-                  const measuredWidth = Math.max(width || layoutBounds.width || 0, 0);
-                  const measuredHeight = Math.max(height || layoutBounds.height || 0, 0);
-                  const svgWidth = autoWidth
-                    ? chartNaturalWidth
-                    : Math.max(measuredWidth || chartNaturalWidth, compact ? 220 : 320);
-                  const svgHeight = stretchToFitHeight
-                    ? Math.max(measuredHeight || chartNaturalHeight, chartNaturalHeight)
-                    : chartNaturalHeight;
-                  const responsiveDayLabelWidth = autoWidth
-                    ? resolvedDayLabelWidth
-                    : Math.max(compact ? 22 : 38, Math.min(resolvedDayLabelWidth, svgWidth * (compact ? 0.08 : 0.1)));
-                  const rightEdgeGutter = autoWidth ? 0 : compact ? 6 : 8;
-                  const availableHeatmapWidth = Math.max(svgWidth - responsiveDayLabelWidth, 24);
-                  const responsiveHourGap = autoWidth
-                    ? hourGap
-                    : availableHeatmapWidth < (compact ? 300 : 420)
-                      ? compact
-                        ? 1
-                        : 2
-                      : hourGap;
-                  const computedHourWidth = Math.max((availableHeatmapWidth - rightEdgeGutter - responsiveHourGap * 23) / 24, 1);
-                  const heatmapWidth = computedHourWidth * 24 + responsiveHourGap * 23;
-                  const responsiveAxisFontSize = autoWidth
-                    ? axisFontSize
-                    : computedHourWidth < 8
-                      ? Math.max(axisFontSize - 2, 6)
-                      : computedHourWidth < 11
-                        ? Math.max(axisFontSize - 1, 7)
-                        : axisFontSize;
-                  const responsiveDayFontSize = autoWidth
-                    ? dayFontSize
-                    : computedHourWidth < 9
-                      ? Math.max(dayFontSize - 1, 8)
-                      : dayFontSize;
-                  const responsiveHourLabelStep = autoWidth
-                    ? hourLabelStep
-                    : computedHourWidth < 6
-                      ? Math.max(hourLabelStep, 3)
-                      : computedHourWidth < 8
-                        ? Math.max(hourLabelStep, 2)
-                        : hourLabelStep;
-                  const rowPadding = Math.max((rowHeight - cellHeight) / 2, 0);
-                  const availableRowsHeight = Math.max(svgHeight - headerHeight - Math.max(schedule.days.length - 1, 0) * rowGap, schedule.days.length * rowHeight);
-                  const computedRowHeight = availableRowsHeight / schedule.days.length;
-                  const computedCellHeight = Math.max(computedRowHeight - rowPadding * 2, cellHeight);
-
-                  return (
-                    <svg
-                      width={svgWidth}
-                      height={svgHeight}
-                      viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                      className="schedule-modern-svg"
-                      role="img"
-                      aria-label="Тепловая карта активности расписания по дням и часам"
+              <svg
+                width={svgWidth}
+                height={svgHeight}
+                viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+                className="schedule-modern-svg"
+                style={{
+                  width: autoWidth ? `${svgWidth}px` : "100%",
+                  height: stretchToFitHeight ? "100%" : `${svgHeight}px`,
+                }}
+                role="img"
+                aria-label="Тепловая карта активности расписания по дням и часам"
+              >
+                <Group top={0} left={0}>
+                  {showDayHeaderLabel ? (
+                    <VisxText
+                      x={0}
+                      y={headerHeight - 6}
+                      verticalAnchor="end"
+                      className="schedule-modern-axis-title"
+                      style={{ fontSize: responsiveAxisFontSize, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}
                     >
-                      <Group top={0} left={0}>
-                        {showDayHeaderLabel ? (
-                          <VisxText
-                            x={0}
-                            y={headerHeight - 6}
-                            verticalAnchor="end"
-                            className="schedule-modern-axis-title"
-                            style={{ fontSize: responsiveAxisFontSize, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}
-                          >
-                            День
-                          </VisxText>
-                        ) : null}
+                      День
+                    </VisxText>
+                  ) : null}
 
-                        {Array.from({ length: 24 }, (_, index) => {
-                          const x = responsiveDayLabelWidth + index * (computedHourWidth + responsiveHourGap) + computedHourWidth / 2;
+                  {Array.from({ length: 24 }, (_, index) => {
+                    const x = responsiveDayLabelWidth + index * (computedHourWidth + responsiveHourGap) + computedHourWidth / 2;
+                    return (
+                      <VisxText
+                        key={`schedule-hour-${index}`}
+                        x={x}
+                        y={headerHeight - 6}
+                        textAnchor="middle"
+                        verticalAnchor="end"
+                        className="schedule-modern-axis-text"
+                        style={{ fontSize: responsiveAxisFontSize, fontWeight: 700 }}
+                      >
+                        {index % responsiveHourLabelStep === 0 ? String(index) : ""}
+                      </VisxText>
+                    );
+                  })}
+
+                  {schedule.days.map((day, dayIndex) => {
+                    const rowTop = headerHeight + dayIndex * (computedRowHeight + rowGap);
+                    const laneTop = rowTop + (computedRowHeight - computedCellHeight) / 2;
+                    return (
+                      <Group key={day.key} top={rowTop} left={0}>
+                        <VisxText
+                          x={0}
+                          y={computedRowHeight / 2}
+                          verticalAnchor="middle"
+                          className="schedule-modern-day-text"
+                          style={{ fontSize: responsiveDayFontSize, fontWeight: 700, letterSpacing: compact ? "0.06em" : "0.08em", textTransform: "uppercase" }}
+                        >
+                          {compactDayLabel(day.key, day.label)}
+                        </VisxText>
+
+                        <rect
+                          x={responsiveDayLabelWidth}
+                          y={(computedRowHeight - computedCellHeight) / 2}
+                          width={heatmapWidth}
+                          height={computedCellHeight}
+                          rx={cellRadius + 2}
+                          fill="rgba(247, 249, 253, 0.82)"
+                        />
+
+                        {day.hours.map((slot, hourIndex) => {
+                          const x = responsiveDayLabelWidth + hourIndex * (computedHourWidth + responsiveHourGap);
+                          const count = Number(slot.count || 0);
+                          const active = Boolean(slot.active || count > 0);
+                          const tone = resolveCellTone(count, active);
+                          const tooltipTitle = `${tooltipDayLabel(day.key, day.label)}, ${slot.hour}:00`;
+                          const slotTop = laneTop;
+                          const slotBottom = laneTop + computedCellHeight;
+                          const tooltipAnchorLeft = x + computedHourWidth / 2;
+                          const showBelow = slotTop < (compact ? 24 : 38);
+
                           return (
-                            <VisxText
-                              key={`schedule-hour-${index}`}
-                              x={x}
-                              y={headerHeight - 6}
-                              textAnchor="middle"
-                              verticalAnchor="end"
-                              className="schedule-modern-axis-text"
-                              style={{ fontSize: responsiveAxisFontSize, fontWeight: 700 }}
-                            >
-                              {index % responsiveHourLabelStep === 0 ? String(index) : ""}
-                            </VisxText>
-                          );
-                        })}
-
-                        {schedule.days.map((day, dayIndex) => {
-                          const rowTop = headerHeight + dayIndex * (computedRowHeight + rowGap);
-                          const laneTop = rowTop + (computedRowHeight - computedCellHeight) / 2;
-                          return (
-                            <Group key={day.key} top={rowTop} left={0}>
-                              <VisxText
-                                x={0}
-                                y={computedRowHeight / 2}
-                                verticalAnchor="middle"
-                                className="schedule-modern-day-text"
-                                style={{ fontSize: responsiveDayFontSize, fontWeight: 700, letterSpacing: compact ? "0.06em" : "0.08em", textTransform: "uppercase" }}
-                              >
-                                {compactDayLabel(day.key, day.label)}
-                              </VisxText>
-
+                            <Group key={`${day.key}-${slot.hour}`}>
                               <rect
-                                x={responsiveDayLabelWidth}
+                                x={x}
                                 y={(computedRowHeight - computedCellHeight) / 2}
-                                width={heatmapWidth}
+                                width={computedHourWidth}
                                 height={computedCellHeight}
-                                rx={cellRadius + 2}
-                                fill="rgba(247, 249, 253, 0.82)"
+                                rx={cellRadius}
+                                fill={tone.fill}
+                                stroke={tone.stroke}
+                                strokeWidth={1}
+                                onPointerEnter={() =>
+                                  showTooltip({
+                                    tooltipData: {
+                                      dayLabel: tooltipTitle,
+                                      hour: slot.hour,
+                                      count,
+                                      active,
+                                      placement: showBelow ? "bottom" : "top",
+                                    },
+                                    tooltipLeft: tooltipAnchorLeft,
+                                    tooltipTop: showBelow ? slotBottom : slotTop,
+                                  })
+                                }
+                                onPointerMove={() =>
+                                  showTooltip({
+                                    tooltipData: {
+                                      dayLabel: tooltipTitle,
+                                      hour: slot.hour,
+                                      count,
+                                      active,
+                                      placement: showBelow ? "bottom" : "top",
+                                    },
+                                    tooltipLeft: tooltipAnchorLeft,
+                                    tooltipTop: showBelow ? slotBottom : slotTop,
+                                  })
+                                }
+                                onPointerLeave={() => hideTooltip()}
                               />
-
-                              {day.hours.map((slot, hourIndex) => {
-                                const x = responsiveDayLabelWidth + hourIndex * (computedHourWidth + responsiveHourGap);
-                                const count = Number(slot.count || 0);
-                                const active = Boolean(slot.active || count > 0);
-                                const tone = resolveCellTone(count, active);
-                                const tooltipTitle = `${tooltipDayLabel(day.key, day.label)}, ${slot.hour}:00`;
-                                const slotTop = laneTop;
-                                const slotBottom = laneTop + cellHeight;
-                                const tooltipAnchorLeft = x + computedHourWidth / 2;
-                                const showBelow = slotTop < (compact ? 24 : 38);
-
-                                return (
-                                  <Group key={`${day.key}-${slot.hour}`}>
-                                    <rect
-                                      x={x}
-                                      y={(computedRowHeight - computedCellHeight) / 2}
-                                      width={computedHourWidth}
-                                      height={computedCellHeight}
-                                      rx={cellRadius}
-                                      fill={tone.fill}
-                                      stroke={tone.stroke}
-                                      strokeWidth={1}
-                                      onPointerEnter={() =>
-                                        showTooltip({
-                                          tooltipData: {
-                                            dayLabel: tooltipTitle,
-                                            hour: slot.hour,
-                                            count,
-                                            active,
-                                            placement: showBelow ? "bottom" : "top",
-                                          },
-                                          tooltipLeft: tooltipAnchorLeft,
-                                          tooltipTop: showBelow ? slotBottom : slotTop,
-                                        })
-                                      }
-                                      onPointerMove={() =>
-                                        showTooltip({
-                                          tooltipData: {
-                                            dayLabel: tooltipTitle,
-                                            hour: slot.hour,
-                                            count,
-                                            active,
-                                            placement: showBelow ? "bottom" : "top",
-                                          },
-                                          tooltipLeft: tooltipAnchorLeft,
-                                          tooltipTop: showBelow ? slotBottom : slotTop,
-                                        })
-                                      }
-                                      onPointerLeave={() => hideTooltip()}
-                                    />
-                                    {showCounts && count > 0 && computedHourWidth >= 14 ? (
-                                      <VisxText
-                                        x={x + computedHourWidth / 2}
-                                        y={computedRowHeight / 2}
-                                        textAnchor="middle"
-                                        verticalAnchor="middle"
-                                        style={{ fontSize: countFontSize, fontWeight: 700, fill: tone.count }}
-                                      >
-                                        {String(count)}
-                                      </VisxText>
-                                    ) : null}
-                                  </Group>
-                                );
-                              })}
+                              {showCounts && count > 0 && computedHourWidth >= 14 ? (
+                                <VisxText
+                                  x={x + computedHourWidth / 2}
+                                  y={computedRowHeight / 2}
+                                  textAnchor="middle"
+                                  verticalAnchor="middle"
+                                  style={{ fontSize: countFontSize, fontWeight: 700, fill: tone.count }}
+                                >
+                                  {String(count)}
+                                </VisxText>
+                              ) : null}
                             </Group>
                           );
                         })}
                       </Group>
-                    </svg>
-                  );
-                }}
-              </ParentSize>
+                    );
+                  })}
+                </Group>
+              </svg>
             </div>
           </div>
           {tooltipOpen && tooltipData ? (

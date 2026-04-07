@@ -24,7 +24,7 @@ const CHART_TOOLTIP = {
   background: "rgba(255,255,255,0.96)",
   boxShadow: "0 18px 40px rgba(44,35,66,0.12)",
 };
-const OVERVIEW_WINDOWS = [7, 14, 30] as const;
+const OVERVIEW_WINDOWS = [7, 14, 30, 60] as const;
 const DATE_TICK_PROPS = {
   fill: CHART_TICK,
   fontSize: 10,
@@ -86,6 +86,32 @@ type OverviewTooltipMetricConfig = {
   color: string;
   formatter: (value: ChartTooltipScalarValue) => string;
 };
+type CampaignTypeContributionMetricKey = "views" | "clicks" | "atbs" | "orders" | "spend";
+type CampaignTypeContributionType = {
+  key: string;
+  label: string;
+  color: string;
+  order: number;
+};
+type CampaignTypeContributionRow = {
+  day: string;
+  label: string;
+  total: number;
+  [key: string]: string | number;
+};
+
+const CAMPAIGN_TYPE_CONTRIBUTION_METRICS: Array<{
+  key: CampaignTypeContributionMetricKey;
+  label: string;
+  tooltipLabel: string;
+  formatter: (value: ChartTooltipScalarValue) => string;
+}> = [
+  { key: "views", label: "Показы", tooltipLabel: "Показы", formatter: (value) => formatNumber(value) },
+  { key: "clicks", label: "Клики", tooltipLabel: "Клики", formatter: (value) => formatNumber(value) },
+  { key: "atbs", label: "Корзины", tooltipLabel: "Корзины", formatter: (value) => formatNumber(value) },
+  { key: "orders", label: "Заказы", tooltipLabel: "Заказы", formatter: (value) => formatNumber(value) },
+  { key: "spend", label: "Расход", tooltipLabel: "Расход", formatter: (value) => formatMoney(value, true) },
+] as const;
 
 function chartTooltipFormatter(
   value: number | string | readonly (number | string)[] | undefined,
@@ -154,6 +180,17 @@ function computeDrr(spend: number | null | undefined, revenue: number | null | u
     return null;
   }
   return (spend / revenue) * 100;
+}
+
+function resolveCampaignTypeContributionType(campaign: CampaignSummary): CampaignTypeContributionType {
+  const bidKind = resolveBidKind(campaign);
+  if (bidKind === "cpc") {
+    return { key: "cpc", label: "СРС", color: "#8b64f6", order: 3 };
+  }
+  if (campaign.unified) {
+    return { key: "cpm-unified", label: "СРМ · Единая", color: "#4b7bff", order: 2 };
+  }
+  return { key: "cpm-manual", label: "СРМ · Ручная", color: "#2ea36f", order: 1 };
 }
 
 export function ChartWindowSwitch({
@@ -280,6 +317,61 @@ function ProductOverviewTooltip({
   );
 }
 
+function CampaignTypeContributionTooltip({
+  active,
+  label,
+  payload,
+  metricLabel,
+  metricFormatter,
+  types,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: readonly any[];
+  metricLabel: string;
+  metricFormatter: (value: ChartTooltipScalarValue) => string;
+  types: CampaignTypeContributionType[];
+}) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const row = payload[0]?.payload as CampaignTypeContributionRow | undefined;
+  if (!row) {
+    return null;
+  }
+
+  const total = toNumber(row.total) ?? 0;
+  return (
+    <div className="chart-tooltip chart-tooltip-inline chart-tooltip-embedded">
+      <strong>{String(label || row.label || "")}</strong>
+      <div className="mt-1 text-[11px] font-semibold text-[var(--color-muted)]">
+        {metricLabel}: {metricFormatter(total)}
+      </div>
+      <div className="chart-tooltip-metrics">
+        {types.map((type) => {
+          const absolute = toNumber(row[type.key]) ?? 0;
+          const share = total > 0 ? (absolute / total) * 100 : 0;
+          return (
+            <div
+              key={type.key}
+              className="chart-tooltip-metric-row"
+              style={{ ["--tooltip-accent-dot" as string]: type.color } as CSSProperties}
+            >
+              <span className="chart-tooltip-metric-label" style={{ color: type.color }}>
+                {type.label}
+              </span>
+              <span className="chart-tooltip-metric-value" style={{ color: type.color }}>
+                {metricFormatter(absolute)} · {formatPercent(share)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function toggleLegendKey(current: string[], key: string) {
   return current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
 }
@@ -294,6 +386,7 @@ function buildCampaignOverviewRows(campaign: CampaignSummary) {
       label: row.label,
       views: 0,
       orders: 0,
+      spend: 0,
       bid: row.bid,
       drr: null as number | null,
     }));
@@ -304,6 +397,7 @@ function buildCampaignOverviewRows(campaign: CampaignSummary) {
     label: formatDayLabel(row.day),
     views: toNumber(row.views) ?? 0,
     orders: toNumber(row.orders) ?? 0,
+    spend: toNumber(row.expense_sum) ?? 0,
     bid: bidByDay.get(row.day) ?? toNumber(campaign.bid),
     drr: computeDrr(toNumber(row.expense_sum), toNumber(row.sum_price)),
   }));
@@ -334,6 +428,7 @@ interface CampaignOverviewChartRow {
   label: string;
   views: number;
   orders: number;
+  spend: number;
   bid: number | null;
   drr: number | null;
 }
@@ -1036,6 +1131,10 @@ function renderCampaignInlineDayTooltipBody(
             <span className="chart-tooltip-metric-label">{ordersLabel}</span>
             <span className="chart-tooltip-metric-value">{formatNumber(row.orders)}</span>
           </div>
+          <div className="chart-tooltip-metric-row is-spend">
+            <span className="chart-tooltip-metric-label">Расход</span>
+            <span className="chart-tooltip-metric-value">{formatMoney(row.spend, true)}</span>
+          </div>
           <div className="chart-tooltip-metric-row is-bid">
             <span className="chart-tooltip-metric-label">{bidKind === "cpc" ? "Ставка CPC" : "Ставка CPM"}</span>
             <span className="chart-tooltip-metric-value">{formatBidMoney(row.bid, bidKind)}</span>
@@ -1247,6 +1346,7 @@ export function CampaignInlineOverviewChart({
   const chartHeight = (isOverlayDensity ? 176 : 208) + statusOverlayHeight + statusDateGap;
   const viewsTotal = visibleRows.reduce((sum, row) => sum + row.views, 0);
   const ordersTotal = visibleRows.reduce((sum, row) => sum + row.orders, 0);
+  const spendTotal = visibleRows.reduce((sum, row) => sum + row.spend, 0);
   const latestBid = visibleRows[visibleRows.length - 1]?.bid ?? toNumber(campaign.bid);
   const latestDrr = visibleRows[visibleRows.length - 1]?.drr ?? null;
   const ordersLabel = bidKind === "cpc" ? "Заказы CPC" : "Заказы CPM";
@@ -1299,7 +1399,7 @@ export function CampaignInlineOverviewChart({
     >
       <div className="chart-card-head">
         <div>
-          <h4 className="font-display font-semibold text-[var(--color-ink)]">Показы, заказы, ставка, ДРР и статусы</h4>
+          <h4 className="font-display font-semibold text-[var(--color-ink)]">Показы, заказы, расход, ставка, ДРР и статусы</h4>
           <p>{bidLabel} · по дням внутри периода</p>
         </div>
         <div className="flex items-center gap-2">
@@ -1384,9 +1484,11 @@ export function CampaignInlineOverviewChart({
                 tickFormatter={(value) => formatNumber(value)}
               />
               <YAxis yAxisId="drr" hide domain={["auto", "auto"]} />
+              <YAxis yAxisId="spend" hide domain={["auto", "auto"]} />
               <Tooltip cursor={false} content={() => null} isAnimationActive={false} />
               {!hiddenSeries.includes("views") ? <Bar yAxisId="views" dataKey="views" name="Показы" fill="rgba(117,114,213,0.42)" stroke="rgba(117,114,213,0.56)" radius={[8, 8, 0, 0]} barSize={isOverlayDensity ? 16 : 18} /> : null}
               {!hiddenSeries.includes("orders") ? <Line yAxisId="orders" dataKey="orders" name={ordersLabel} type="monotone" stroke="#14a6a1" strokeWidth={2.6} dot={{ r: 2.5, fill: "#14a6a1" }} activeDot={{ r: 4.5 }} connectNulls /> : null}
+              {!hiddenSeries.includes("spend") ? <Line yAxisId="spend" dataKey="spend" name="Расход" type="monotone" stroke="#e05b2a" strokeWidth={2.6} dot={{ r: 2.5, fill: "#e05b2a" }} activeDot={{ r: 4.5 }} connectNulls /> : null}
               {!hiddenSeries.includes("bid") ? <Line yAxisId="bid" dataKey="bid" name={bidLabel} type="monotone" stroke="#4b7bff" strokeWidth={2.6} dot={{ r: 2.5, fill: "#4b7bff" }} activeDot={{ r: 4.5 }} connectNulls /> : null}
               {!hiddenSeries.includes("drr") ? <Line yAxisId="drr" dataKey="drr" name="ДРР" type="monotone" stroke="#f17828" strokeWidth={2.6} dot={{ r: 2.5, fill: "#f17828" }} activeDot={{ r: 4.5 }} connectNulls /> : null}
               </ComposedChart>
@@ -1543,6 +1645,7 @@ export function CampaignInlineOverviewChart({
         items={[
           { key: "views", label: "Показы", value: formatCompactNumber(viewsTotal), color: "#7572d5", active: !hiddenSeries.includes("views"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "views")) },
           { key: "orders", label: ordersLabel, value: formatNumber(ordersTotal), color: "#14a6a1", active: !hiddenSeries.includes("orders"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "orders")) },
+          { key: "spend", label: "Расход", value: formatMoney(spendTotal, true), color: "#e05b2a", active: !hiddenSeries.includes("spend"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "spend")) },
           { key: "bid", label: bidLabel, value: formatBidMoney(latestBid, bidKind), color: "#4b7bff", active: !hiddenSeries.includes("bid"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "bid")) },
           { key: "drr", label: "ДРР", value: formatPercent(latestDrr), color: "#f17828", active: !hiddenSeries.includes("drr"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "drr")) },
           { key: "status-active", label: "Активна", color: "#3e9d69", active: true },
@@ -1734,7 +1837,16 @@ export function HourlyPerformanceChart({
     spent: row.spent,
     ctr: row.CTR,
     orders: ordersMap.get(row.hour) ?? 0,
+    cr: computeRate(ordersMap.get(row.hour) ?? 0, row.views),
   }));
+  const hourlyTooltipConfigs: OverviewTooltipMetricConfig[] = [
+    { key: "views", label: "Показы", color: "#4b7bff", formatter: (value) => formatCompactNumber(value) },
+    { key: "spent", label: "Расход", color: "#f17828", formatter: (value) => formatMoney(value, true) },
+    { key: "orders", label: "Заказы", color: "#8b64f6", formatter: (value) => formatNumber(value) },
+    { key: "cr", label: "CR", color: "#2ea36f", formatter: (value) => formatPercent(value) },
+  ];
+  const crAxisMax = Math.max(10, ...rows.map((row) => row.cr ?? 0));
+  const crDomainMax = Math.ceil(crAxisMax / 10) * 10;
 
   return (
     <div className="w-full">
@@ -1745,10 +1857,12 @@ export function HourlyPerformanceChart({
             <XAxis dataKey="hour" tick={{ fill: CHART_TICK, fontSize: 12 }} axisLine={false} tickLine={false} interval={1} angle={-35} height={56} textAnchor="end" />
             <YAxis yAxisId="traffic" tick={{ fill: CHART_TICK, fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
             <YAxis yAxisId="money" orientation="right" tick={{ fill: CHART_TICK, fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
-            <Tooltip formatter={chartTooltipFormatter} contentStyle={CHART_TOOLTIP} />
+            <YAxis yAxisId="ratio" hide orientation="right" domain={[0, crDomainMax]} />
+            <Tooltip content={(props) => <ProductOverviewTooltip {...props} configs={hourlyTooltipConfigs} />} />
             {!hiddenSeries.includes("views") ? <Area yAxisId="traffic" dataKey="views" name="Показы" type="monotone" stroke="#4b7bff" fill="rgba(75,123,255,0.16)" strokeWidth={2} /> : null}
             {!hiddenSeries.includes("spent") ? <Bar yAxisId="money" dataKey="spent" name="Расход" fill="rgba(241,120,40,0.32)" radius={[10, 10, 0, 0]} /> : null}
             {!hiddenSeries.includes("orders") ? <Line yAxisId="traffic" dataKey="orders" name="Заказы" type="monotone" stroke="#8b64f6" strokeWidth={2.2} dot={false} /> : null}
+            {!hiddenSeries.includes("cr") ? <Line yAxisId="ratio" dataKey="cr" name="CR" type="monotone" stroke="#2ea36f" strokeWidth={2.2} strokeDasharray="6 5" dot={{ r: 2.6, fill: "#2ea36f" }} activeDot={{ r: 4.2 }} connectNulls /> : null}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -1757,6 +1871,7 @@ export function HourlyPerformanceChart({
           { key: "views", label: "Показы", color: "#4b7bff", active: !hiddenSeries.includes("views"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "views")) },
           { key: "spent", label: "Расход", color: "#f17828", active: !hiddenSeries.includes("spent"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "spent")) },
           { key: "orders", label: "Заказы", color: "#8b64f6", active: !hiddenSeries.includes("orders"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "orders")) },
+          { key: "cr", label: "CR", color: "#2ea36f", active: !hiddenSeries.includes("cr"), onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, "cr")) },
         ]}
       />
     </div>
@@ -1868,6 +1983,7 @@ export function ProductOverviewCharts({
   const [hiddenStockSeries, setHiddenStockSeries] = useState<string[]>([]);
   const [hiddenEfficiencySeries, setHiddenEfficiencySeries] = useState<string[]>([]);
   const [hiddenClusterSeries, setHiddenClusterSeries] = useState<string[]>([]);
+  const [campaignTypeContributionMetric, setCampaignTypeContributionMetric] = useState<CampaignTypeContributionMetricKey>("views");
   const activeWindowProductKeyRef = useRef<string | null>(null);
   const activeWindow = controlledActiveWindow ?? internalActiveWindow;
   const setActiveWindow = onActiveWindowChange ?? setInternalActiveWindow;
@@ -1900,6 +2016,7 @@ export function ProductOverviewCharts({
     setHiddenStockSeries([]);
     setHiddenEfficiencySeries([]);
     setHiddenClusterSeries([]);
+    setCampaignTypeContributionMetric("views");
   }, [product.article]);
 
   const visibleDailyRows = sliceByWindow(sortDailyRows(product.daily_stats), activeWindow);
@@ -1927,6 +2044,85 @@ export function ProductOverviewCharts({
     label: formatDayLabel(row.day),
     avgStock: toNumber(row.avg_stock),
   }));
+  const campaignTypeContribution = useMemo(() => {
+    const dayRows = visibleDailyRows.map((row) => ({
+      day: row.day,
+      label: formatDayLabel(row.day),
+    }));
+    const dayLookup = new Map(dayRows.map((row) => [row.day, row]));
+    const typesMap = new Map<string, CampaignTypeContributionType>();
+    const metricMaps = {
+      views: new Map<string, Record<string, number>>(),
+      clicks: new Map<string, Record<string, number>>(),
+      atbs: new Map<string, Record<string, number>>(),
+      orders: new Map<string, Record<string, number>>(),
+      spend: new Map<string, Record<string, number>>(),
+    } satisfies Record<CampaignTypeContributionMetricKey, Map<string, Record<string, number>>>;
+
+    dayRows.forEach((row) => {
+      (Object.keys(metricMaps) as CampaignTypeContributionMetricKey[]).forEach((metricKey) => {
+        metricMaps[metricKey].set(row.day, {});
+      });
+    });
+
+    product.campaigns.forEach((campaign) => {
+      const type = resolveCampaignTypeContributionType(campaign);
+      typesMap.set(type.key, type);
+      (campaign.daily_exact || []).forEach((row) => {
+        if (!dayLookup.has(row.day)) {
+          return;
+        }
+        const viewsBucket = metricMaps.views.get(row.day);
+        const clicksBucket = metricMaps.clicks.get(row.day);
+        const atbsBucket = metricMaps.atbs.get(row.day);
+        const ordersBucket = metricMaps.orders.get(row.day);
+        const spendBucket = metricMaps.spend.get(row.day);
+        if (!viewsBucket || !clicksBucket || !atbsBucket || !ordersBucket || !spendBucket) {
+          return;
+        }
+        viewsBucket[type.key] = (viewsBucket[type.key] ?? 0) + (toNumber(row.views) ?? 0);
+        clicksBucket[type.key] = (clicksBucket[type.key] ?? 0) + (toNumber(row.clicks) ?? 0);
+        atbsBucket[type.key] = (atbsBucket[type.key] ?? 0) + (toNumber(row.atbs) ?? 0);
+        ordersBucket[type.key] = (ordersBucket[type.key] ?? 0) + (toNumber(row.orders) ?? 0);
+        spendBucket[type.key] = (spendBucket[type.key] ?? 0) + (toNumber(row.expense_sum) ?? 0);
+      });
+    });
+
+    const types = [...typesMap.values()].sort((left, right) => left.order - right.order);
+    const rowsByMetric = (Object.keys(metricMaps) as CampaignTypeContributionMetricKey[]).reduce(
+      (acc, metricKey) => {
+        acc[metricKey] = dayRows.map((dayRow) => {
+          const values = metricMaps[metricKey].get(dayRow.day) ?? {};
+          const total = types.reduce((sum, type) => sum + (toNumber(values[type.key]) ?? 0), 0);
+          const typeValues = Object.fromEntries(
+            types.map((type) => [type.key, toNumber(values[type.key]) ?? 0]),
+          );
+          return {
+            day: dayRow.day,
+            label: dayRow.label,
+            total,
+            ...typeValues,
+          };
+        });
+        return acc;
+      },
+      {} as Record<CampaignTypeContributionMetricKey, CampaignTypeContributionRow[]>,
+    );
+    const totalsByMetric = (Object.keys(metricMaps) as CampaignTypeContributionMetricKey[]).reduce(
+      (acc, metricKey) => {
+        acc[metricKey] = Object.fromEntries(
+          types.map((type) => [
+            type.key,
+            rowsByMetric[metricKey].reduce((sum, row) => sum + (toNumber(row[type.key]) ?? 0), 0),
+          ]),
+        );
+        return acc;
+      },
+      {} as Record<CampaignTypeContributionMetricKey, Record<string, number>>,
+    );
+
+    return { types, rowsByMetric, totalsByMetric };
+  }, [product.campaigns, visibleDailyRows]);
   const efficiencyRows = visibleDailyRows.map((row) => {
     const clicks = toNumber(row.clicks);
     const atbs = toNumber(row.atbs);
@@ -2006,6 +2202,15 @@ export function ProductOverviewCharts({
     { key: "atbs", label: "Корзины с РК", color: "#14a6a1", formatter: (value) => formatNumber(value) },
     { key: "ordersAds", label: "Заказы с РК", color: "#4ba66f", formatter: (value) => formatNumber(value) },
   ];
+  const activeCampaignTypeMetricConfig =
+    CAMPAIGN_TYPE_CONTRIBUTION_METRICS.find((item) => item.key === campaignTypeContributionMetric) ??
+    CAMPAIGN_TYPE_CONTRIBUTION_METRICS[0]!;
+  const campaignTypeContributionRows = campaignTypeContribution.rowsByMetric[campaignTypeContributionMetric] ?? [];
+  const campaignTypeContributionTotals = campaignTypeContribution.totalsByMetric[campaignTypeContributionMetric] ?? {};
+  const campaignTypeContributionGrandTotal = campaignTypeContribution.types.reduce(
+    (sum, type) => sum + (campaignTypeContributionTotals[type.key] ?? 0),
+    0,
+  );
   const stockTooltipConfigs: OverviewTooltipMetricConfig[] = [
     { key: "avgStock", label: "Средний остаток", color: "#2ea36f", formatter: (value) => `${formatNumber(value)} шт` },
   ];
@@ -2119,6 +2324,97 @@ export function ProductOverviewCharts({
             { key: "clicks", label: "Клики", value: formatNumber(trafficTotals.clicks), color: "#7e5cef", active: !hiddenTrafficSeries.includes("clicks"), onToggle: () => setHiddenTrafficSeries((current) => toggleLegendKey(current, "clicks")) },
             { key: "atbs", label: "Корзины", value: formatNumber(trafficTotals.atbs), color: "#2ea36f", active: !hiddenTrafficSeries.includes("atbs"), onToggle: () => setHiddenTrafficSeries((current) => toggleLegendKey(current, "atbs")) },
           ]}
+        />
+      </div>
+
+      <div
+        className={cn(
+          "chart-card border-[rgba(113,92,216,0.16)] bg-[linear-gradient(180deg,rgba(243,241,255,0.96),rgba(249,247,255,0.92))]",
+          "xl:col-span-2",
+          isOverlayLayout && "lg:col-span-2",
+        )}
+      >
+        <div className="chart-card-head">
+          <div>
+            <h4 className="font-display font-semibold text-[var(--color-ink)]">Вклад типов РК</h4>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="chart-window-switch">
+              {CAMPAIGN_TYPE_CONTRIBUTION_METRICS.map((metric) => (
+                <button
+                  key={metric.key}
+                  type="button"
+                  onClick={() => setCampaignTypeContributionMetric(metric.key)}
+                  className={metric.key === campaignTypeContributionMetric ? "chart-window-chip is-active" : "chart-window-chip"}
+                >
+                  {metric.label}
+                </button>
+              ))}
+            </div>
+            <ChartWindowSwitch activeWindow={activeWindow} onChange={setActiveWindow} />
+          </div>
+        </div>
+        <div className={cn("trend-chart", chartHeightClass)}>
+          {campaignTypeContributionRows.length && campaignTypeContribution.types.length ? (
+            <ResponsiveContainer>
+              <ComposedChart
+                data={campaignTypeContributionRows}
+                margin={{ top: 12, right: 10, left: 6, bottom: 8 }}
+                syncId={overviewSyncId}
+                syncMethod="value"
+              >
+                <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={true} horizontal={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={DATE_TICK_PROPS}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={0}
+                  minTickGap={0}
+                  angle={-35}
+                  height={48}
+                  textAnchor="end"
+                />
+                <YAxis hide />
+                <Tooltip
+                  content={(props) => (
+                    <CampaignTypeContributionTooltip
+                      {...props}
+                      metricLabel={activeCampaignTypeMetricConfig.tooltipLabel}
+                      metricFormatter={activeCampaignTypeMetricConfig.formatter}
+                      types={campaignTypeContribution.types}
+                    />
+                  )}
+                />
+                {campaignTypeContribution.types.map((type) => (
+                  <Bar
+                    key={type.key}
+                    dataKey={type.key}
+                    name={type.label}
+                    stackId="campaign-type-contribution"
+                    fill={type.color}
+                    radius={[10, 10, 0, 0]}
+                    barSize={18}
+                  />
+                ))}
+              </ComposedChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted)]">Нет дневных данных по типам РК.</div>
+          )}
+        </div>
+        <ChartLegend
+          items={campaignTypeContribution.types.map((type) => {
+            const absolute = campaignTypeContributionTotals[type.key] ?? 0;
+            const share = campaignTypeContributionGrandTotal > 0 ? (absolute / campaignTypeContributionGrandTotal) * 100 : 0;
+            return {
+              key: type.key,
+              label: type.label,
+              value: `${activeCampaignTypeMetricConfig.formatter(absolute)} · ${formatPercent(share)}`,
+              color: type.color,
+              active: true,
+            };
+          })}
         />
       </div>
 

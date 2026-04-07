@@ -2259,6 +2259,15 @@
   --tooltip-accent-dot: #7ce1dd;
 }
 
+.chart-tooltip-metric-row.is-spend .chart-tooltip-metric-value,
+.chart-tooltip-metric-row.is-spend .chart-tooltip-metric-label {
+  color: #e05b2a;
+}
+
+.chart-tooltip-metric-row.is-spend {
+  --tooltip-accent-dot: #e05b2a;
+}
+
 .chart-tooltip-metric-row.is-bid .chart-tooltip-metric-value,
 .chart-tooltip-metric-row.is-bid .chart-tooltip-metric-label {
   color: #78a0ff;
@@ -2266,6 +2275,38 @@
 
 .chart-tooltip-metric-row.is-bid {
   --tooltip-accent-dot: #78a0ff;
+}
+
+.campaign-zone-share {
+  display: flex;
+  min-height: 60px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+}
+
+.campaign-zone-share-bar {
+  display: flex;
+  height: 6px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(226, 232, 255, 0.55);
+}
+
+.campaign-zone-share-bar-segment {
+  display: block;
+  height: 100%;
+}
+
+.campaign-zone-share-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--color-muted);
 }
 
 .chart-tooltip-divider {
@@ -2911,18 +2952,24 @@
 .schedule-grid-card-wrapper {
   position: relative;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border-radius: inherit;
 }
 
 .schedule-modern-scroll {
   position: relative;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow: visible;
   border-radius: inherit;
 }
 
 .schedule-modern-viewport {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
   overflow-y: visible;
   border-radius: inherit;
@@ -2931,12 +2978,15 @@
 .schedule-modern-canvas {
   width: 100%;
   min-width: 100%;
+  max-width: 100%;
   overflow: hidden;
   border-radius: inherit;
 }
 
 .schedule-modern-svg {
   display: block;
+  min-width: 0;
+  max-width: 100%;
   border-radius: inherit;
 }
 

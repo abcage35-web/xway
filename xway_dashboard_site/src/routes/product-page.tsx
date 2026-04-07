@@ -78,7 +78,7 @@ const PANEL_CLASS = "rounded-[30px] border border-[var(--color-line)] bg-white s
 const SOFT_PANEL_CLASS = "rounded-[24px] border border-[var(--color-line)] bg-white shadow-[0_18px_46px_rgba(44,35,66,0.06)]";
 const EXTERNAL_PILL_LINK_CLASS =
   "inline-flex items-center gap-1.5 rounded-full border border-[rgba(61,130,216,0.18)] bg-[rgba(237,243,255,0.72)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#3d82d8] transition hover:border-[rgba(61,130,216,0.34)] hover:bg-[rgba(237,243,255,0.96)]";
-const CHART_PRELOAD_DAYS = 30;
+const CHART_PRELOAD_DAYS = 60;
 const CLUSTER_POSITION_TIMELINE_DAYS = 7;
 const COMPARE_ENABLED_STORAGE_KEY = "xway-product-compare-enabled";
 const CAMPAIGN_STATUS_SECTION_VIEW_STORAGE_KEY = "xway-campaign-status-section-view";
@@ -90,6 +90,7 @@ const HOURS_SECTION_WINDOWS = [
   { value: "7", label: "7" },
   { value: "14", label: "14" },
   { value: "30", label: "30" },
+  { value: "60", label: "60" },
 ] as const;
 
 const Marquee = ((MarqueeImport as unknown as { default?: ElementType }).default ?? MarqueeImport) as ElementType;
@@ -218,7 +219,10 @@ function resolveHoursSectionPreset(spanDays: number | null | undefined): HoursSe
   if (span <= 14) {
     return "14";
   }
-  return "30";
+  if (span <= 30) {
+    return "30";
+  }
+  return "60";
 }
 
 export async function productLoader({ request }: LoaderFunctionArgs) {
@@ -995,13 +999,17 @@ function clampMetricShare(value: number, total: number) {
   return Math.min(Math.max(value, 0), total);
 }
 
-function formatCampaignZoneShareHint(campaign: CampaignSummary, metric: CampaignZoneMetricKey, total: number | null) {
+function buildCampaignZoneShareData(campaign: CampaignSummary, metric: CampaignZoneMetricKey, total: number | null) {
   const totalValue = toNumber(total);
   if (totalValue === null || totalValue <= 0) {
     return null;
   }
 
   const zones = resolveCampaignZoneBadges(campaign);
+  if (!zones.length) {
+    return null;
+  }
+
   const hasSearch = zones.some((zone) => zone.key === "search");
   const hasRecom = zones.some((zone) => zone.key === "recom");
   const searchFromApi = hasSearch ? pickCampaignZoneMetricFromApi(campaign, "search", metric) : null;
@@ -1057,18 +1065,35 @@ function formatCampaignZoneShareHint(campaign: CampaignSummary, metric: Campaign
     recomCount = clampMetricShare(recomFromApi ?? totalValue, totalValue);
   }
 
-  const parts = zones
+  const items = zones
     .map((zone) => {
       const count = zone.key === "search" ? searchCount : recomCount;
       if (count === null) {
         return null;
       }
-      const share = (count / totalValue) * 100;
-      return `${zone.label} ${formatPercent(share, 1)}`;
+      const percent = (count / totalValue) * 100;
+      return {
+        key: zone.key,
+        label: zone.label,
+        percent,
+      };
     })
-    .filter((value): value is string => Boolean(value));
+    .filter((value): value is { key: CampaignZoneKey; label: string; percent: number } => Boolean(value));
 
-  return parts.length ? parts.join(" · ") : null;
+  if (!items.length) {
+    return null;
+  }
+
+  const normalized = items.map((item) => ({
+    ...item,
+    percent: item.percent,
+    color: item.key === "search" ? "#4f8dff" : "#7b78ff",
+  }));
+
+  return {
+    total: totalValue,
+    items: normalized,
+  };
 }
 
 function resolveCompareCampaign(campaign: CampaignSummary, compareProduct?: ProductSummary | null) {
@@ -1301,6 +1326,19 @@ function buildCampaignRemainingActivityForecastHours(campaign: CampaignSummary, 
   }
 
   return Math.max(1, Math.round(remainingHoursRaw));
+}
+
+function resolveOverviewHeatmapMinHeight(dayCount: number | null | undefined) {
+  const safeDayCount = Number(dayCount);
+  if (!Number.isFinite(safeDayCount) || safeDayCount <= 0) {
+    return 0;
+  }
+
+  const headerHeight = 18;
+  const rowHeight = 12;
+  const rowGap = 4;
+  const boxChromeHeight = 26;
+  return headerHeight + safeDayCount * rowHeight + Math.max(safeDayCount - 1, 0) * rowGap + boxChromeHeight;
 }
 
 function formatCampaignRemainingActivityForecast(hours: number | null) {
@@ -3902,10 +3940,33 @@ function SpendAccentCard({
   );
 }
 
-function BoardHintCard({ text }: { text: string | null }) {
+function BoardHintCard({
+  share,
+}: {
+  share: ReturnType<typeof buildCampaignZoneShareData> | null;
+}) {
+  if (!share) {
+    return <div className="min-h-[60px]" />;
+  }
+
   return (
-    <div className="flex min-h-[60px] items-center px-2 py-2">
-      {text ? <div className="text-[11px] leading-tight text-[var(--color-muted)]">{text}</div> : <div className="min-h-[24px]" />}
+    <div className="campaign-zone-share">
+      <div className="campaign-zone-share-bar">
+        {share.items.map((item) => (
+          <span
+            key={`zone-share-${item.key}`}
+            style={{ width: `${item.percent}%`, background: item.color }}
+            className="campaign-zone-share-bar-segment"
+          />
+        ))}
+      </div>
+      <div className="campaign-zone-share-labels">
+        {share.items.map((item) => (
+          <span key={`zone-share-label-${item.key}`}>
+            {item.label} {formatPercent(item.percent, 1)}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -3942,8 +4003,8 @@ function CampaignPerformanceBoard({
 }) {
   const current = buildCampaignMetrics(campaign);
   const previous = compareCampaign ? buildCampaignMetrics(compareCampaign) : null;
-  const viewsZoneHint = formatCampaignZoneShareHint(campaign, "views", current.views);
-  const clicksZoneHint = formatCampaignZoneShareHint(campaign, "clicks", current.clicks);
+  const viewsZoneHint = buildCampaignZoneShareData(campaign, "views", current.views);
+  const clicksZoneHint = buildCampaignZoneShareData(campaign, "clicks", current.clicks);
   const compareDiff = (currentValue: number | string | null | undefined, previousValue: number | string | null | undefined) => {
     if (!compareCampaign) {
       return null;
@@ -3973,7 +4034,7 @@ function CampaignPerformanceBoard({
         deltaGood: (compareDiff(current.cpm, previous?.cpm) ?? 0) <= 0,
       },
       rate: EMPTY_BOARD_CELL,
-      highlight: <BoardHintCard text={viewsZoneHint} />,
+      highlight: <BoardHintCard share={viewsZoneHint} />,
     },
     {
       stage: "Клики",
@@ -3996,7 +4057,7 @@ function CampaignPerformanceBoard({
         delta: formatSignedPercent(compareDiff(current.ctr, previous?.ctr)),
         deltaGood: (compareDiff(current.ctr, previous?.ctr) ?? 0) >= 0,
       },
-      highlight: <BoardHintCard text={clicksZoneHint} />,
+      highlight: <BoardHintCard share={clicksZoneHint} />,
     },
     {
       stage: "Корзины",
@@ -5489,9 +5550,10 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
     spent: row.spent,
     atbs: null,
     ctr: row.CTR,
+    cr: computeRate(ordersByHour.get(row.hour) ?? 0, row.views),
     cpc: row.CPC,
     orders: ordersByHour.get(row.hour) ?? 0,
-    orderedTotal: null,
+    orderedTotal: ordersByHour.get(row.hour) ?? 0,
     sumPrice:
       productAverageCheck !== null && productAverageCheck > 0 && (ordersByHour.get(row.hour) ?? 0) > 0
         ? (ordersByHour.get(row.hour) ?? 0) * productAverageCheck
@@ -5520,7 +5582,8 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
     },
     { key: "ctr", label: "CTR", renderValue: (day) => formatPercent(day.CTR) },
     { key: "cpc", label: "CPC", renderValue: (day) => formatMoney(day.CPC, true) },
-    { key: "cr", label: "CR", renderValue: (day) => formatPercent(day.CR) },
+    { key: "cr", label: "CR", renderValue: (day) => formatPercent(computeRate(day.ordered_total, day.views)) },
+    { key: "crf", label: "CRF", renderValue: (day) => formatPercent(day.CR) },
     { key: "cpo", label: "CPO", renderValue: (day) => formatMoney(day.CPO, true) },
   ];
 
@@ -5656,6 +5719,7 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
                   { key: "ctr", header: "CTR", align: "right", dividerBefore: true, render: (row) => formatPercent(row.CTR) },
                   { key: "cr1", header: "CR1", align: "right", render: (row) => formatPercent(computeRate(row.atbs, row.clicks)) },
                   { key: "cr2", header: "CR2", align: "right", render: (row) => formatPercent(computeRate(row.orders, row.atbs)) },
+                  { key: "cr", header: "CR", align: "right", render: (row) => formatPercent(computeRate(row.ordered_total, row.views)) },
                   { key: "cpm", header: "CPM", align: "right", dividerBefore: true, render: (row) => formatMoney(computeCpm(row.expense_sum, row.views), true) },
                   { key: "cpc", header: "CPC", align: "right", render: (row) => formatMoney(row.CPC, true) },
                   { key: "cpl", header: "CPL", align: "right", render: (row) => formatMoney(computeMoneyPer(row.expense_sum, row.atbs), true) },
@@ -5791,6 +5855,7 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
                   render: (row) => formatNumber(row.orderedTotal),
                 },
                 { key: "ctr", header: "CTR", align: "right", dividerBefore: true, render: (row) => formatPercent(row.ctr) },
+                { key: "cr", header: "CR", align: "right", render: (row) => formatPercent(row.cr) },
                 { key: "cr1", header: "CR1", align: "right", render: (row) => formatPercent(computeRate(row.atbs, row.clicks)) },
                 { key: "cr2", header: "CR2", align: "right", render: (row) => formatPercent(computeRate(row.orders, row.atbs)) },
                 { key: "cpm", header: "CPM", align: "right", dividerBefore: true, render: (row) => formatMoney(computeCpm(row.spent, row.views), true) },
@@ -7204,6 +7269,7 @@ export function ProductPage() {
   const chartFetchPromiseRef = useRef<Promise<ProductSummary | null> | null>(null);
 
   const currentProduct = payloadState.products[0] ?? null;
+  const overviewHeatmapMinHeight = resolveOverviewHeatmapMinHeight(currentProduct?.schedule_aggregate.days.length);
   const compareProduct = comparePayloadState?.products[0] ?? null;
   const effectiveCompareProduct = isCompareEnabled ? compareProduct : null;
   const appliedStart = start || currentProduct?.period.current_start || "";
@@ -7355,7 +7421,7 @@ export function ProductPage() {
       const budgetHeight = budgetNode.getBoundingClientRect().height;
       const styles = window.getComputedStyle(leftSideNode);
       const gap = Number.parseFloat(styles.rowGap || styles.gap || "0") || 0;
-      const nextHeight = Math.max(budgetHeight - signalsHeight - gap, 0);
+      const nextHeight = Math.max(budgetHeight - signalsHeight - gap, overviewHeatmapMinHeight);
 
       setOverviewHeatmapHeight((current) => (current !== null && Math.abs(current - nextHeight) < 0.5 ? current : nextHeight));
     };
@@ -7385,7 +7451,7 @@ export function ProductPage() {
       }
       observer?.disconnect();
     };
-  }, [currentProduct?.article, currentProduct?.period.current_start, currentProduct?.period.current_end, visibleCampaignIds.join(",")]);
+  }, [currentProduct?.article, currentProduct?.period.current_start, currentProduct?.period.current_end, overviewHeatmapMinHeight, visibleCampaignIds.join(",")]);
 
   useEffect(() => {
     if (!currentProduct) {
