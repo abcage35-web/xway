@@ -567,6 +567,9 @@ export interface CatalogIssuesIssue {
   title: string;
   hours: number;
   incidents: number;
+  orders_ads: number;
+  total_orders: number | null;
+  drr_overall: number | null;
   estimated_gap: number | null;
   campaign_ids: number[];
   campaign_labels: string[];
@@ -583,12 +586,15 @@ export interface CatalogIssuesIssueCampaign {
   display_status: "active" | "paused" | "freeze" | "muted";
   hours: number;
   incidents: number;
+  orders_ads: number;
+  drr: number | null;
   estimated_gap: number | null;
 }
 
 export interface CatalogIssuesRow {
   product_ref: string;
   issues: CatalogIssuesIssue[];
+  campaigns: CatalogIssuesIssueCampaign[];
 }
 
 export interface CatalogIssuesResponse {

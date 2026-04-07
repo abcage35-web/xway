@@ -10,6 +10,15 @@ function toNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function computeDrr(spend, revenue) {
+  const spendValue = toNumber(spend);
+  const revenueValue = toNumber(revenue);
+  if (spendValue === null || revenueValue === null || revenueValue <= 0) {
+    return null;
+  }
+  return (spendValue / revenueValue) * 100;
+}
+
 async function safeCall(fn, defaultValue) {
   try {
     return [await fn(), null];
@@ -404,6 +413,35 @@ function resolveCampaignDisplayStatus(statusCode) {
   return "muted";
 }
 
+function collectCampaignDayMetrics(campaign, day) {
+  return [...(campaign?.daily_exact || [])].reduce(
+    (totals, row) => {
+      if (String(row?.day || "") !== day) {
+        return totals;
+      }
+      totals.orders_ads += toNumber(row?.orders) ?? 0;
+      totals.spend += toNumber(row?.expense_sum) ?? 0;
+      totals.revenue_ads += toNumber(row?.sum_price) ?? 0;
+      return totals;
+    },
+    { orders_ads: 0, spend: 0, revenue_ads: 0 },
+  );
+}
+
+function collectProductDayMetrics(rows, day) {
+  return [...(rows || [])].reduce(
+    (totals, row) => {
+      if (String(row?.day || "") !== day) {
+        return totals;
+      }
+      totals.total_orders += toNumber(row?.ordered_total) ?? 0;
+      totals.total_revenue += toNumber(row?.ordered_sum_total) ?? 0;
+      return totals;
+    },
+    { total_orders: 0, total_revenue: 0 },
+  );
+}
+
 function buildIssueCampaignMeta(campaign, metrics = {}) {
   const statusCode = normalizeCampaignStatusCode(campaign);
   return {
@@ -416,15 +454,20 @@ function buildIssueCampaignMeta(campaign, metrics = {}) {
     display_status: resolveCampaignDisplayStatus(statusCode),
     hours: Number.isFinite(metrics.hours) ? metrics.hours : 0,
     incidents: Number.isFinite(metrics.incidents) ? metrics.incidents : 0,
+    orders_ads: Number.isFinite(metrics.orders_ads) ? metrics.orders_ads : 0,
+    drr: Number.isFinite(metrics.drr) ? metrics.drr : null,
     estimated_gap: Number.isFinite(metrics.estimated_gap) && metrics.estimated_gap > 0 ? metrics.estimated_gap : null,
   };
 }
 
-function aggregateCatalogIssueSummaries(campaigns, yesterday) {
+function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday) {
+  const productDayMetrics = collectProductDayMetrics(productDailyStats, yesterday);
   const aggregated = new Map();
   for (const campaign of campaigns || []) {
     const yesterdayStatusDay = buildCampaignYesterdayStatusDay(campaign, yesterday);
     const campaignIssues = buildCampaignIssueSummaries(campaign, [yesterdayStatusDay]);
+    const campaignDayMetrics = collectCampaignDayMetrics(campaign, yesterday);
+    const campaignDrr = computeDrr(campaignDayMetrics.spend, campaignDayMetrics.revenue_ads);
     for (const summary of campaignIssues) {
       const dayEntry = summary.days.find((entry) => entry.day === yesterday);
       if (!dayEntry) {
@@ -435,6 +478,10 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
         title: summary.label,
         hours: 0,
         incidents: 0,
+        orders_ads: 0,
+        total_orders: productDayMetrics.total_orders,
+        drr_overall: null,
+        spend: 0,
         estimated_gap: 0,
         campaign_ids: [],
         campaign_labels: [],
@@ -444,6 +491,8 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
       };
       current.hours += dayEntry.hours;
       current.incidents += dayEntry.incidents;
+      current.orders_ads += campaignDayMetrics.orders_ads;
+      current.spend += campaignDayMetrics.spend;
       if (dayEntry.estimatedGap !== null) {
         current.estimated_gap = (current.estimated_gap || 0) + dayEntry.estimatedGap;
       }
@@ -453,6 +502,8 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
         current.campaigns.push(buildIssueCampaignMeta(campaign, {
           hours: dayEntry.hours,
           incidents: dayEntry.incidents,
+          orders_ads: campaignDayMetrics.orders_ads,
+          drr: campaignDrr,
           estimated_gap: dayEntry.estimatedGap,
         }));
       } else {
@@ -460,6 +511,8 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
         if (currentCampaign) {
           currentCampaign.hours += dayEntry.hours;
           currentCampaign.incidents += dayEntry.incidents;
+          currentCampaign.orders_ads += campaignDayMetrics.orders_ads;
+          currentCampaign.drr = Number.isFinite(campaignDrr) ? campaignDrr : currentCampaign.drr;
           currentCampaign.estimated_gap =
             dayEntry.estimatedGap !== null
               ? (currentCampaign.estimated_gap || 0) + dayEntry.estimatedGap
@@ -478,29 +531,35 @@ function aggregateCatalogIssueSummaries(campaigns, yesterday) {
   return ["budget", "limit"]
     .map((kind) => aggregated.get(kind))
     .filter(Boolean)
-    .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, ...item }) => ({
-      ...item,
-      estimated_gap: typeof item.estimated_gap === "number" && Number.isFinite(item.estimated_gap) && item.estimated_gap > 0 ? item.estimated_gap : null,
-      campaigns: item.campaigns
-        .map((campaign) => ({
-          ...campaign,
-          estimated_gap:
-            typeof campaign.estimated_gap === "number" && Number.isFinite(campaign.estimated_gap) && campaign.estimated_gap > 0
-              ? campaign.estimated_gap
-              : null,
-        }))
-        .sort((left, right) => {
-          const hoursDiff = right.hours - left.hours;
-          if (hoursDiff !== 0) {
-            return hoursDiff;
-          }
-          const incidentsDiff = right.incidents - left.incidents;
-          if (incidentsDiff !== 0) {
-            return incidentsDiff;
-          }
-          return String(left.label || "").localeCompare(String(right.label || ""), "ru");
-        }),
-    }));
+    .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, spend, ...item }) => {
+      const drrOverall = computeDrr(spend, productDayMetrics.total_revenue);
+      return {
+        ...item,
+        total_orders: Number.isFinite(item.total_orders) ? item.total_orders : null,
+        drr_overall: Number.isFinite(drrOverall) ? drrOverall : null,
+        estimated_gap: typeof item.estimated_gap === "number" && Number.isFinite(item.estimated_gap) && item.estimated_gap > 0 ? item.estimated_gap : null,
+        campaigns: item.campaigns
+          .map((campaign) => ({
+            ...campaign,
+            drr: typeof campaign.drr === "number" && Number.isFinite(campaign.drr) ? campaign.drr : null,
+            estimated_gap:
+              typeof campaign.estimated_gap === "number" && Number.isFinite(campaign.estimated_gap) && campaign.estimated_gap > 0
+                ? campaign.estimated_gap
+                : null,
+          }))
+          .sort((left, right) => {
+            const hoursDiff = right.hours - left.hours;
+            if (hoursDiff !== 0) {
+              return hoursDiff;
+            }
+            const incidentsDiff = right.incidents - left.incidents;
+            if (incidentsDiff !== 0) {
+              return incidentsDiff;
+            }
+            return String(left.label || "").localeCompare(String(right.label || ""), "ru");
+          }),
+      };
+    });
 }
 
 async function collectSingleCatalogIssue(client, [shopId, productId]) {
@@ -509,12 +568,16 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
   const campaignRows = stata?.campaign_wb || [];
   const campaignIds = campaignRows.map((campaign) => campaign?.id).filter((value) => value !== null && value !== undefined);
   if (!campaignIds.length) {
-    return { product_ref: productRef, issues: [] };
+    return { product_ref: productRef, issues: [], campaigns: [] };
   }
 
   const [dailyExactPayload] = await safeCall(
     () => client.campaignDailyExact(shopId, productId, campaignIds, client.range.current_start, client.range.current_end),
     {},
+  );
+  const [productDailyStats] = await safeCall(
+    () => client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end),
+    [],
   );
 
   const campaigns = await mapWithConcurrency(
@@ -549,7 +612,8 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
 
   return {
     product_ref: productRef,
-    issues: aggregateCatalogIssueSummaries(campaigns, client.range.current_start),
+    issues: aggregateCatalogIssueSummaries(campaigns, productDailyStats, client.range.current_start),
+    campaigns: campaigns.map((campaign) => buildIssueCampaignMeta(campaign)),
   };
 }
 
@@ -562,7 +626,7 @@ export async function collectCatalogIssues(env, { productRefs = [], start = null
     ok: true,
     generated_at: new Date().toISOString().slice(0, 10),
     range: client.range,
-    rows: rows.filter((row) => (row.issues || []).length > 0),
+    rows,
     requested_products: parsedRefs.map(([shopId, productId]) => `${shopId}:${productId}`),
     loaded_products_count: rows.length,
   };

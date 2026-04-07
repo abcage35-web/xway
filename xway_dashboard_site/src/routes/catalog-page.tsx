@@ -91,6 +91,7 @@ type CatalogSortDirection = "asc" | "desc";
 interface CatalogIssueCacheEntry {
   product_ref: string;
   issues: CatalogArticleYesterdayIssues["issues"];
+  campaigns: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>;
 }
 
 interface CatalogIssueFetchResult {
@@ -1263,15 +1264,35 @@ function getArticleIssueByKind(item: CatalogArticleYesterdayIssues, kind: Catalo
   return item.issues.find((issue) => issue.kind === kind) || null;
 }
 
-function buildCatalogTurnoverIssue(meta: CatalogIssueTargetMeta, turnoverThreshold: number): CatalogArticleYesterdayIssues["issues"][number] | null {
+function buildCatalogTurnoverIssue(
+  meta: CatalogIssueTargetMeta,
+  availableCampaigns: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]> | null | undefined,
+  turnoverThreshold: number,
+): CatalogArticleYesterdayIssues["issues"][number] | null {
   if (!Number.isFinite(turnoverThreshold) || turnoverThreshold <= 0) {
     return null;
   }
   if (meta.turnoverDays === null || !Number.isFinite(meta.turnoverDays) || meta.turnoverDays > turnoverThreshold) {
     return null;
   }
-  const activeSlots = meta.campaignSlots.filter((slot) => slot.displayStatus === "active");
-  if (!activeSlots.length) {
+  const activeCampaigns =
+    availableCampaigns && availableCampaigns.length
+      ? availableCampaigns.filter((campaign) => campaign.displayStatus === "active")
+      : meta.campaignSlots
+          .filter((slot) => slot.displayStatus === "active")
+          .map((slot) => ({
+            id: `slot-${slot.key}`,
+            label: slot.headline,
+            paymentType: (slot.key === "cpc" ? "cpc" : "cpm") as "cpc" | "cpm",
+            zoneKind: slot.zoneKind,
+            statusCode: slot.statusCode,
+            statusLabel: resolveCatalogCampaignStatusLabel(slot.statusCode),
+            displayStatus: slot.displayStatus,
+            hours: 0,
+            incidents: 0,
+            estimatedGap: null,
+          }));
+  if (!activeCampaigns.length) {
     return null;
   }
   return {
@@ -1280,22 +1301,11 @@ function buildCatalogTurnoverIssue(meta: CatalogIssueTargetMeta, turnoverThresho
     hours: 0,
     incidents: 0,
     estimatedGap: null,
-    campaignIds: activeSlots.map((slot) => `slot-${slot.key}`),
-    campaignLabels: activeSlots.map((slot) => slot.headline),
+    campaignIds: activeCampaigns.map((campaign) => campaign.id),
+    campaignLabels: activeCampaigns.map((campaign) => campaign.label),
     turnoverDays: meta.turnoverDays,
     thresholdDays: turnoverThreshold,
-    campaigns: activeSlots.map((slot) => ({
-      id: `slot-${slot.key}`,
-      label: slot.headline,
-      paymentType: slot.key === "cpc" ? "cpc" : "cpm",
-      zoneKind: slot.zoneKind,
-      statusCode: slot.statusCode,
-      statusLabel: resolveCatalogCampaignStatusLabel(slot.statusCode),
-      displayStatus: slot.displayStatus,
-      hours: 0,
-      incidents: 0,
-      estimatedGap: null,
-    })),
+    campaigns: activeCampaigns,
   };
 }
 
@@ -1314,7 +1324,7 @@ function mapCatalogIssueRows(
     .map((meta) => {
       const cached = rowsByRef[meta.ref];
       const remoteIssues = cached?.issues || [];
-      const turnoverIssue = options.visibleKinds.turnover ? buildCatalogTurnoverIssue(meta, options.turnoverThreshold) : null;
+      const turnoverIssue = options.visibleKinds.turnover ? buildCatalogTurnoverIssue(meta, cached?.campaigns, options.turnoverThreshold) : null;
       const issues = [...remoteIssues, ...(turnoverIssue ? [turnoverIssue] : [])].filter((issue) => options.visibleKinds[issue.kind]);
       if (!issues.length) {
         return null;
@@ -1352,6 +1362,93 @@ function mapCatalogIssueRows(
       }
       return left.article.localeCompare(right.article, "ru");
     });
+}
+
+function resolveCatalogIssueCopyCampaignId(campaign: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>[number]) {
+  return typeof campaign.id === "number" && Number.isFinite(campaign.id) ? formatNumber(campaign.id) : String(campaign.label || campaign.id || "РК");
+}
+
+function resolveCatalogIssueCopyCampaignType(campaign: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>[number]) {
+  return campaign.paymentType === "cpc" ? "CPC" : "CPM";
+}
+
+function resolveCatalogIssueCopyCampaignZone(campaign: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>[number]) {
+  if (campaign.zoneKind === "both") {
+    return "поиск + рекомендации";
+  }
+  if (campaign.zoneKind === "recom") {
+    return "рекомендации";
+  }
+  if (campaign.zoneKind === "search") {
+    return "поиск";
+  }
+  return "зона не указана";
+}
+
+function formatCatalogIssueCopyCampaignDetails(
+  issue: CatalogArticleYesterdayIssues["issues"][number],
+  campaign: NonNullable<CatalogArticleYesterdayIssues["issues"][number]["campaigns"]>[number],
+) {
+  if (issue.kind === "turnover") {
+    const turnoverText = issue.turnoverDays !== undefined && issue.turnoverDays !== null ? formatTurnoverDays(issue.turnoverDays) : "—";
+    const thresholdText = issue.thresholdDays !== undefined && issue.thresholdDays !== null ? formatTurnoverDays(issue.thresholdDays) : "—";
+    return `оборачиваемость ${turnoverText} (порог <= ${thresholdText})`;
+  }
+
+  const hoursValue = campaign.hours > 0 ? campaign.hours : issue.campaigns.length === 1 ? issue.hours : null;
+  const gapValue = campaign.estimatedGap !== null ? campaign.estimatedGap : issue.campaigns.length === 1 ? issue.estimatedGap : null;
+  const hoursText = hoursValue !== null && hoursValue > 0 ? `${formatNumber(hoursValue, 1)} ч` : null;
+  const gapText = gapValue !== null ? `≈ ${formatMoney(gapValue)}` : null;
+
+  if (hoursText && gapText) {
+    return `${hoursText} (${gapText})`;
+  }
+  if (hoursText) {
+    return hoursText;
+  }
+  if (gapText) {
+    return gapText;
+  }
+  return issue.title;
+}
+
+function buildCatalogIssuesCopyText(rows: CatalogIssueDisplayRow[]) {
+  return rows
+    .flatMap((row) =>
+      row.issues.map((issue) => {
+        const lines = [`${row.article} - ${issue.title}`];
+        issue.campaigns.forEach((campaign) => {
+          lines.push(
+            `- ${resolveCatalogIssueCopyCampaignId(campaign)} : ${resolveCatalogIssueCopyCampaignType(campaign)} / ${resolveCatalogIssueCopyCampaignZone(campaign)} - ${formatCatalogIssueCopyCampaignDetails(issue, campaign)}`,
+          );
+        });
+        return lines.join("\n");
+      }),
+    )
+    .join("\n\n");
+}
+
+async function copyTextToClipboard(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard is unavailable");
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error("Clipboard copy failed");
+  }
 }
 
 async function readApiErrorMessage(error: unknown) {
@@ -1486,6 +1583,7 @@ export function CatalogPage() {
   const [chartProgress, setChartProgress] = useState<CatalogChartProgressState | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
+  const [articleIssuesCopyState, setArticleIssuesCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
   const [articleIssuesCollapsed, setArticleIssuesCollapsed] = useState(() => readCatalogIssuesCollapsed());
   const [articleIssueSettingsOpen, setArticleIssueSettingsOpen] = useState(false);
@@ -1496,6 +1594,7 @@ export function CatalogPage() {
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
+  const articleIssuesCopyResetRef = useRef<number | null>(null);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -1651,6 +1750,9 @@ export function CatalogPage() {
     return () => {
       chartFetchAbortRef.current?.abort();
       articleIssuesAbortRef.current?.abort();
+      if (articleIssuesCopyResetRef.current !== null) {
+        window.clearTimeout(articleIssuesCopyResetRef.current);
+      }
     };
   }, []);
 
@@ -1909,6 +2011,18 @@ export function CatalogPage() {
               estimatedGap: campaign.estimated_gap,
             })),
           })),
+          campaigns: row.campaigns.map((campaign) => ({
+            id: campaign.id,
+            label: campaign.label,
+            paymentType: campaign.payment_type,
+            zoneKind: campaign.zone_kind,
+            statusCode: campaign.status_code,
+            statusLabel: campaign.status_label,
+            displayStatus: campaign.display_status,
+            hours: campaign.hours,
+            incidents: campaign.incidents,
+            estimatedGap: campaign.estimated_gap,
+          })),
         }));
       };
 
@@ -1958,7 +2072,7 @@ export function CatalogPage() {
             setArticleIssueCacheByRef((current) => {
               const next = { ...current };
               result.loadedRefs.forEach((ref) => {
-                next[ref] = rowsByRef.get(ref) || { product_ref: ref, issues: [] };
+                next[ref] = rowsByRef.get(ref) || { product_ref: ref, issues: [], campaigns: [] };
               });
               return next;
             });
@@ -1994,6 +2108,27 @@ export function CatalogPage() {
       if (!controller.signal.aborted) {
         setArticleIssuesLoading(false);
       }
+    }
+  };
+
+  const handleCopyArticleIssues = async () => {
+    const text = buildCatalogIssuesCopyText(articleIssueRows);
+    if (!text) {
+      return;
+    }
+    try {
+      await copyTextToClipboard(text);
+      setArticleIssuesCopyState("copied");
+    } catch {
+      setArticleIssuesCopyState("error");
+    } finally {
+      if (articleIssuesCopyResetRef.current !== null) {
+        window.clearTimeout(articleIssuesCopyResetRef.current);
+      }
+      articleIssuesCopyResetRef.current = window.setTimeout(() => {
+        setArticleIssuesCopyState("idle");
+        articleIssuesCopyResetRef.current = null;
+      }, 2200);
     }
   };
 
@@ -2284,6 +2419,27 @@ export function CatalogPage() {
               emptyText="Кабинеты в текущей выборке не найдены"
               className="min-w-[280px]"
             />
+            <button
+              type="button"
+              onClick={handleCopyArticleIssues}
+              disabled={!articleIssueRows.length}
+              className={cn(
+                "metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm transition",
+                articleIssueRows.length
+                  ? articleIssuesCopyState === "copied"
+                    ? "text-emerald-700 hover:bg-[var(--color-surface-strong)]"
+                    : articleIssuesCopyState === "error"
+                      ? "text-rose-700 hover:bg-[var(--color-surface-strong)]"
+                      : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]"
+                  : "cursor-not-allowed text-[var(--color-muted)] opacity-70",
+              )}
+            >
+              {articleIssuesCopyState === "copied"
+                ? "Скопировано"
+                : articleIssuesCopyState === "error"
+                  ? "Ошибка копирования"
+                  : "Скопировать ошибки"}
+            </button>
             <button
               type="button"
               onClick={() => setArticleIssueSettingsOpen(true)}
