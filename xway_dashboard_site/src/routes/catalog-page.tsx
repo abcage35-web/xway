@@ -40,6 +40,9 @@ const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: st
 const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
 const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
 const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v2";
+const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
+const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
+const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 
 type CatalogSortField =
   | "article"
@@ -59,6 +62,12 @@ type CatalogSortDirection = "asc" | "desc";
 interface CatalogIssueCacheEntry {
   product_ref: string;
   issues: CatalogArticleYesterdayIssues["issues"];
+}
+
+interface CatalogIssueFetchResult {
+  rows: CatalogIssueCacheEntry[];
+  loadedRefs: string[];
+  failedRefs: string[];
 }
 
 interface CatalogIssueCachePayload {
@@ -987,6 +996,22 @@ function mapCatalogIssueRows(
 }
 
 async function readApiErrorMessage(error: unknown) {
+  const normalizeMessage = (message: string) => {
+    const text = String(message || "").trim();
+    if (!text) {
+      return "Не удалось собрать ошибки по артикулам.";
+    }
+    const hasHtml = /<!doctype html>|<html[\s>]|<head[\s>]|<body[\s>]/i.test(text);
+    const statusMatch = text.match(/\b(5\d{2}|4\d{2})\b/);
+    if (hasHtml && statusMatch?.[1] === "503") {
+      return "XWAY временно недоступен (503).";
+    }
+    if (hasHtml && statusMatch?.[1]) {
+      return `Ошибка API (${statusMatch[1]}).`;
+    }
+    return text;
+  };
+
   if (error instanceof Response) {
     if (error.bodyUsed) {
       return error.statusText ? `Ошибка API (${error.status}): ${error.statusText}` : `Ошибка API (${error.status})`;
@@ -997,15 +1022,36 @@ async function readApiErrorMessage(error: unknown) {
     }
     try {
       const parsed = JSON.parse(text) as { error?: string };
-      return parsed.error || text;
+      return normalizeMessage(parsed.error || text);
     } catch {
-      return text;
+      return normalizeMessage(text);
     }
   }
   if (error instanceof Error) {
-    return error.message;
+    return normalizeMessage(error.message);
   }
   return "Не удалось собрать ошибки по артикулам.";
+}
+
+function waitForCatalogIssuesRetry(ms: number, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+
+    const handleAbort = () => {
+      window.clearTimeout(timeoutId);
+      signal.removeEventListener("abort", handleAbort);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 async function isWorkerSubrequestLimitError(error: unknown) {
@@ -1216,6 +1262,7 @@ export function CatalogPage() {
   const articleIssueRows = visibleIssueCachedEntries.length ? mapCatalogIssueRows(visibleIssueCachedEntries, visibleIssueTargetMetaByRef) : null;
   const articleIssuesCompletedCount = visibleIssueTargetRefs.filter((ref) => Boolean(articleIssueCacheByRef[ref])).length;
   const articleIssuesTotalCount = visibleIssueTargetRefs.length;
+  const articleIssuesPendingCount = Math.max(articleIssuesTotalCount - articleIssuesCompletedCount, 0);
 
   const handleRangeChange = (next: { start: string; end: string }) => {
     navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
@@ -1453,7 +1500,7 @@ export function CatalogPage() {
         return;
       }
 
-      const fetchIssueRowsChunk = async (refs: string[]): Promise<Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>> => {
+      const fetchIssueRowsChunk = async (refs: string[]): Promise<CatalogIssueCacheEntry[]> => {
         const response = await fetchCatalogIssues({
           productRefs: refs,
           start: yesterdayIso,
@@ -1483,42 +1530,78 @@ export function CatalogPage() {
         }));
       };
 
-      const fetchIssueRowsAdaptive = async (refs: string[]): Promise<Array<{ product_ref: string; issues: CatalogArticleYesterdayIssues["issues"] }>> => {
+      const fetchIssueRowsAdaptive = async (refs: string[]): Promise<CatalogIssueFetchResult> => {
         try {
-          return await fetchIssueRowsChunk(refs);
+          const rows = await fetchIssueRowsChunk(refs);
+          return {
+            rows,
+            loadedRefs: refs,
+            failedRefs: [],
+          };
         } catch (error) {
           if (refs.length > 1 && (await isWorkerSubrequestLimitError(error))) {
             const middle = Math.ceil(refs.length / 2);
             const left = await fetchIssueRowsAdaptive(refs.slice(0, middle));
             const right = await fetchIssueRowsAdaptive(refs.slice(middle));
-            return [...left, ...right];
+            return {
+              rows: [...left.rows, ...right.rows],
+              loadedRefs: [...left.loadedRefs, ...right.loadedRefs],
+              failedRefs: [...left.failedRefs, ...right.failedRefs],
+            };
           }
           if (!controller.signal.aborted) {
             partialErrorMessages.add(await readApiErrorMessage(error));
           }
-          return [];
+          return {
+            rows: [],
+            loadedRefs: [],
+            failedRefs: refs,
+          };
         }
       };
 
-      const chunks = chunkItems(missingRefs, 20);
-      for (const chunk of chunks) {
-        const rows = await fetchIssueRowsAdaptive(chunk);
-        if (controller.signal.aborted) {
-          return;
-        }
-        const rowsByRef = new Map(rows.map((row) => [row.product_ref, row]));
-        setArticleIssueCacheByRef((current) => {
-          const next = { ...current };
-          chunk.forEach((ref) => {
-            next[ref] = rowsByRef.get(ref) || { product_ref: ref, issues: [] };
+      let pendingRefs = missingRefs;
+      for (let attempt = 0; attempt < CATALOG_ISSUES_MAX_ATTEMPTS && pendingRefs.length; attempt += 1) {
+        const failedRefs = new Set<string>();
+        const chunks = chunkItems(pendingRefs, CATALOG_ISSUES_FETCH_CHUNK_SIZE);
+
+        for (const chunk of chunks) {
+          const result = await fetchIssueRowsAdaptive(chunk);
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          if (result.loadedRefs.length) {
+            const rowsByRef = new Map(result.rows.map((row) => [row.product_ref, row]));
+            setArticleIssueCacheByRef((current) => {
+              const next = { ...current };
+              result.loadedRefs.forEach((ref) => {
+                next[ref] = rowsByRef.get(ref) || { product_ref: ref, issues: [] };
+              });
+              return next;
+            });
+          }
+
+          result.failedRefs.forEach((ref) => {
+            failedRefs.add(ref);
           });
-          return next;
-        });
+        }
+
+        pendingRefs = [...failedRefs];
+        if (pendingRefs.length && attempt < CATALOG_ISSUES_MAX_ATTEMPTS - 1) {
+          try {
+            await waitForCatalogIssuesRetry(CATALOG_ISSUES_RETRY_DELAY_MS, controller.signal);
+          } catch {
+            return;
+          }
+        }
       }
 
-      if (partialErrorMessages.size) {
+      if (pendingRefs.length) {
         const [firstMessage] = [...partialErrorMessages];
-        setArticleIssuesError(`Часть артикулов не загрузилась. Уже показаны найденные ошибки. ${firstMessage || "Не удалось собрать ошибки по артикулам."}`);
+        setArticleIssuesError(
+          `Не удалось догрузить ${formatNumber(pendingRefs.length)} из ${formatNumber(articleIssuesTotalCount)} артикулов. Уже показаны найденные ошибки. ${firstMessage || "Попробуйте повторить дозагрузку."}`,
+        );
       }
     } catch (error) {
       if (controller.signal.aborted) {
@@ -1830,7 +1913,11 @@ export function CatalogPage() {
                   : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
               )}
             >
-              {articleIssuesLoading ? "Собираем ошибки..." : "Собрать ошибки за вчера"}
+              {articleIssuesLoading
+                ? "Собираем ошибки..."
+                : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
+                  ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
+                  : "Собрать ошибки за вчера"}
             </button>
           </div>
         }
