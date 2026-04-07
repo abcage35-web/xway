@@ -46,7 +46,7 @@ function enumerateIsoDays(startDay: string, endDay: string) {
   return days;
 }
 
-function extractBidChangeActor(origin: string | null | undefined) {
+export function extractBidChangeActor(origin: string | null | undefined) {
   const normalized = String(origin || "").replace(/\s+/g, " ").trim();
   if (!normalized) {
     return null;
@@ -131,6 +131,8 @@ export function formatSignedBidMoney(
 
 export function buildDailyBidRows(campaign: CampaignSummary, options: BuildDailyBidRowsOptions = {}): DailyBidRow[] {
   const mode = options.mode ?? "period";
+  const startDay = options.startDay || null;
+  const endDay = options.endDay || null;
   const history = [...(campaign.bid_history || [])]
     .map((row) => ({
       ...row,
@@ -155,22 +157,16 @@ export function buildDailyBidRows(campaign: CampaignSummary, options: BuildDaily
     mode === "history"
       ? (() => {
           const historyDays = [...historyByDay.keys()].sort((left, right) => left.localeCompare(right));
-          if (!historyDays.length) {
-            return dailyExact.length
-              ? dailyExact.map((row) => ({
-                  day: row.day,
-                  label: formatBidDayLabel(row.day),
-                  bid: fallbackBid,
-                  lastChangeOrigin: null,
-                  lastChangeActor: null,
-                  views: toNumber(row.views),
-                  clicks: toNumber(row.clicks),
-                  spend: toNumber(row.expense_sum),
-                }))
-              : [];
+          const sourceStartDay = historyDays[0] ?? dailyExact[0]?.day ?? null;
+          const sourceEndDay = historyDays[historyDays.length - 1] ?? dailyExact[dailyExact.length - 1]?.day ?? null;
+          const effectiveStartDay = startDay ?? sourceStartDay;
+          const effectiveEndDay = endDay ?? sourceEndDay;
+
+          if (!effectiveStartDay || !effectiveEndDay) {
+            return [];
           }
 
-          const allDays = enumerateIsoDays(historyDays[0]!, historyDays[historyDays.length - 1]!);
+          const allDays = enumerateIsoDays(effectiveStartDay, effectiveEndDay);
           let cursor = 0;
           let activeBid = fallbackBid;
 
@@ -261,8 +257,6 @@ export function buildDailyBidRows(campaign: CampaignSummary, options: BuildDaily
     };
   });
 
-  const startDay = options.startDay || null;
-  const endDay = options.endDay || null;
   return rowsWithChanges.filter((row) => (!startDay || row.day >= startDay) && (!endDay || row.day <= endDay));
 }
 

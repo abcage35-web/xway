@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { buildDailyBidRows, countBidDayChanges, formatBidMoney, parseBidHistoryDate, resolveBidKind, resolveBidLabel, type DailyBidRow } from "../lib/bid-history";
+import {
+  buildDailyBidRows,
+  countBidDayChanges,
+  extractBidChangeActor,
+  formatBidMoney,
+  parseBidHistoryDate,
+  resolveBidKind,
+  resolveBidLabel,
+  type DailyBidRow,
+} from "../lib/bid-history";
 import { formatNumber, toNumber } from "../lib/format";
-import type { CampaignSummary } from "../lib/types";
+import type { BidLogEntry, CampaignSummary } from "../lib/types";
 import { EmptyState, MetricTable, SectionCard } from "./ui";
 
 interface CampaignBidHistoryDialogTarget {
@@ -130,6 +139,51 @@ function BidHistoryTooltip({
   );
 }
 
+interface BidHistoryDayGroup {
+  day: string;
+  label: string;
+  bidChain: string;
+  actorSummary: string;
+  recordsCount: number;
+}
+
+function buildBidHistoryDayGroups(rows: BidLogEntry[], bidKind: "cpm" | "cpc"): BidHistoryDayGroup[] {
+  const groups = new Map<string, Array<BidLogEntry & { at: Date }>>();
+
+  rows.forEach((row) => {
+    const parsed = parseBidHistoryDate(row);
+    if (!parsed) {
+      return;
+    }
+    const day = formatLocalIsoDay(parsed);
+    const bucket = groups.get(day) || [];
+    bucket.push({ ...row, at: parsed });
+    groups.set(day, bucket);
+  });
+
+  return [...groups.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([day, items]) => {
+      const sortedItems = [...items].sort((left, right) => left.at.getTime() - right.at.getTime());
+      const bidChain = sortedItems.map((item) => formatBidMoney(item.cpm, bidKind)).join(" > ");
+      const actorSummary = Array.from(
+        new Set(
+          sortedItems
+            .map((item) => extractBidChangeActor(item.origin) || String(item.origin || "").trim() || null)
+            .filter((item): item is string => Boolean(item)),
+        ),
+      ).join(" • ");
+
+      return {
+        day,
+        label: formatBidTooltipDate(day),
+        bidChain,
+        actorSummary: actorSummary || "—",
+        recordsCount: sortedItems.length,
+      };
+    });
+}
+
 export function CampaignBidHistoryDialog({
   target,
   onClose,
@@ -137,13 +191,14 @@ export function CampaignBidHistoryDialog({
   target: CampaignBidHistoryDialogTarget | null;
   onClose: () => void;
 }) {
+  const todayIso = formatLocalIsoDay(new Date());
   const allBidRows = useMemo(
-    () => (target ? buildDailyBidRows(target.campaign, { mode: "history" }) : []),
-    [target],
+    () => (target ? buildDailyBidRows(target.campaign, { mode: "history", endDay: todayIso }) : []),
+    [target, todayIso],
   );
   const minDay = allBidRows[0]?.day ?? null;
   const maxDay = allBidRows[allBidRows.length - 1]?.day ?? null;
-  const [windowPreset, setWindowPreset] = useState<BidHistoryWindowPreset>(14);
+  const [windowPreset, setWindowPreset] = useState<BidHistoryWindowPreset>("all");
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [rangeEnd, setRangeEnd] = useState<string | null>(null);
   const [isRawHistoryCollapsed, setRawHistoryCollapsed] = useState(true);
@@ -151,15 +206,9 @@ export function CampaignBidHistoryDialog({
   const effectiveRangeEnd = rangeEnd ?? maxDay;
 
   useEffect(() => {
-    setWindowPreset(14);
+    setWindowPreset("all");
     setRawHistoryCollapsed(true);
-    if (!minDay || !maxDay) {
-      setRangeStart(minDay);
-      setRangeEnd(maxDay);
-      return;
-    }
-    const startCandidate = shiftIsoDay(maxDay, -(14 - 1));
-    setRangeStart(startCandidate < minDay ? minDay : startCandidate);
+    setRangeStart(minDay);
     setRangeEnd(maxDay);
   }, [target, minDay, maxDay]);
 
@@ -191,6 +240,7 @@ export function CampaignBidHistoryDialog({
       return (!effectiveRangeStart || day >= effectiveRangeStart) && (!effectiveRangeEnd || day <= effectiveRangeEnd);
     });
   }, [effectiveRangeEnd, effectiveRangeStart, target]);
+  const groupedBidHistory = useMemo(() => buildBidHistoryDayGroups(filteredBidHistory, bidKind), [bidKind, filteredBidHistory]);
   const xTickInterval = useMemo(() => resolveBidTickInterval(bidRows.length), [bidRows.length]);
 
   const handlePresetChange = (preset: Exclude<BidHistoryWindowPreset, "custom">) => {
@@ -379,7 +429,7 @@ export function CampaignBidHistoryDialog({
 
             <SectionCard
               title="История изменений"
-              caption="Сырые записи XWAY по изменению ставки"
+              caption="Сырые записи XWAY, сгруппированные по дням"
               actions={
                 <button
                   type="button"
@@ -396,19 +446,34 @@ export function CampaignBidHistoryDialog({
               <div id="bid-history-raw-table">
                 {!isRawHistoryCollapsed ? (
                   <MetricTable
-                    rows={filteredBidHistory}
+                    rows={groupedBidHistory}
                     emptyText="В выбранном диапазоне нет записей по изменению ставки."
                     columns={[
-                      { key: "datetime", header: "Время", render: (row) => row.datetime },
-                      { key: "cpm", header: bidLabel, align: "right", render: (row) => formatBidMoney(row.cpm, bidKind) },
-                      { key: "zone", header: "Зона", render: (row) => row.zone || "—" },
-                      { key: "origin", header: "Источник", render: (row) => row.origin || "—" },
-                      { key: "new_position", header: "Новая позиция", align: "right", render: (row) => row.new_position || "—" },
+                      {
+                        key: "day",
+                        header: "День",
+                        render: (row) => (
+                          <div className="space-y-1">
+                            <div className="font-semibold text-[var(--color-ink)]">{row.label}</div>
+                            <div className="text-xs text-[var(--color-muted)]">Записей: {formatNumber(row.recordsCount)}</div>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: "changes",
+                        header: "Изменения за день",
+                        render: (row) => (
+                          <div className="space-y-1">
+                            <div className="break-words text-[var(--color-ink)]">{row.bidChain}</div>
+                            <div className="text-xs text-[var(--color-muted)]">Кто менял: {row.actorSummary}</div>
+                          </div>
+                        ),
+                      },
                     ]}
                   />
                 ) : (
                   <div className="rounded-[24px] border border-dashed border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-                    Таблица изменений свернута. Записей в текущем диапазоне: {formatNumber(filteredBidHistory.length)}.
+                    Таблица изменений свернута. Дней с изменениями: {formatNumber(groupedBidHistory.length)}. Записей в текущем диапазоне: {formatNumber(filteredBidHistory.length)}.
                   </div>
                 )}
               </div>
