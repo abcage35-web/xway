@@ -3352,6 +3352,14 @@ body.page-view-articles .article-nav-inline {
   font-size: 0.82rem;
 }
 
+.campaign-period-compare-stack {
+  row-gap: 4px;
+}
+
+.campaign-period-compare-stack > [data-period-delta] {
+  flex-basis: 100%;
+}
+
 .campaign-grid > *,
 .campaign-budget-grid > *,
 .campaign-inline-metrics-row > * {

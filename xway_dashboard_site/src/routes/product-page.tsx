@@ -3612,7 +3612,13 @@ function ClusterStrategyPositionCell({ cluster }: { cluster: ClusterItem }) {
   );
 }
 
-function PerformanceCell({ cell }: { cell: BoardMetricCell }) {
+function PerformanceCell({
+  cell,
+  compareOnNewLine = false,
+}: {
+  cell: BoardMetricCell;
+  compareOnNewLine?: boolean;
+}) {
   if (!cell.label && !cell.value && !cell.inlineMetrics?.length) {
     return <div className="min-h-[52px] p-3" />;
   }
@@ -3626,10 +3632,11 @@ function PerformanceCell({ cell }: { cell: BoardMetricCell }) {
               {index > 0 ? <div className="h-full bg-[var(--color-line)]" aria-hidden="true" /> : null}
               <div className={cn("min-w-0", index > 0 && "pl-2")}>
                 <span className="block text-[10px] font-bold uppercase tracking-wider leading-none text-[var(--color-muted)]">{metric.label}</span>
-                <div className="mt-1.5 flex flex-wrap items-baseline gap-1.5">
+                <div className={cn("mt-1.5 flex flex-wrap items-baseline gap-1.5", compareOnNewLine && "campaign-period-compare-stack")}>
                   <strong className="font-display text-[1.15rem] leading-none text-[var(--color-ink)]">{metric.value}</strong>
                   {metric.delta ? (
                     <span
+                      data-period-delta
                       className={cn(
                         "text-[11px] font-semibold leading-none",
                         metric.deltaGood === undefined ? "text-[var(--color-muted)]" : metric.deltaGood ? "text-emerald-600" : "text-rose-500",
@@ -3653,16 +3660,22 @@ function PerformanceCell({ cell }: { cell: BoardMetricCell }) {
         <span className="block text-[10px] font-bold uppercase tracking-wider leading-none text-[var(--color-muted)]">{cell.label}</span>
         {cell.action ? <div className="shrink-0">{cell.action}</div> : null}
       </div>
-      <div className="flex flex-wrap items-baseline gap-1.5">
+      <div className={cn("flex flex-wrap items-baseline gap-1.5", compareOnNewLine && "campaign-period-compare-stack")}>
         <strong className="font-display text-[1.15rem] leading-none text-[var(--color-ink)]">{cell.value}</strong>
-        {cell.delta ? <span className={cn("text-[11px] font-semibold leading-none", cell.deltaGood === undefined ? "text-[var(--color-muted)]" : cell.deltaGood ? "text-emerald-600" : "text-rose-500")}>({cell.delta})</span> : null}
+        {cell.delta ? <span data-period-delta className={cn("text-[11px] font-semibold leading-none", cell.deltaGood === undefined ? "text-[var(--color-muted)]" : cell.deltaGood ? "text-emerald-600" : "text-rose-500")}>({cell.delta})</span> : null}
       </div>
       {cell.hint ? <div className="mt-1 text-[10px] leading-tight text-[var(--color-muted)]">{cell.hint}</div> : null}
     </div>
   );
 }
 
-function DrrCard({ drr }: { drr: BoardDrrCell }) {
+function DrrCard({
+  drr,
+  compareOnNewLine = false,
+}: {
+  drr: BoardDrrCell;
+  compareOnNewLine?: boolean;
+}) {
   const graphRef = useRef<HTMLDivElement>(null);
   const [graphWidth, setGraphWidth] = useState(0);
   const palette = {
@@ -3712,9 +3725,9 @@ function DrrCard({ drr }: { drr: BoardDrrCell }) {
         {drr.label}
       </span>
       <div className="flex min-w-0 items-end gap-3">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-1.5">
+        <div className={cn("flex min-w-0 flex-wrap items-baseline gap-1.5", compareOnNewLine && "campaign-period-compare-stack")}>
           <strong className="font-display text-[1.15rem] leading-none text-[var(--color-ink)]">{formatBoardPercent(drr.value)}</strong>
-          {drr.delta !== null && drr.delta !== undefined ? <span className={cn("text-[11px] font-bold leading-none", deltaTone(drr.delta, false))}>{formatSignedPercent(drr.delta)}</span> : null}
+          {drr.delta !== null && drr.delta !== undefined ? <span data-period-delta className={cn("text-[11px] font-bold leading-none", deltaTone(drr.delta, false))}>{formatSignedPercent(drr.delta)}</span> : null}
         </div>
         {shouldRenderGraph ? (
           <div ref={graphRef} className="ml-auto flex h-[30px] min-w-0 flex-1 items-end justify-end">
@@ -4175,6 +4188,7 @@ function CampaignPerformanceBoard({
       },
       highlight: (
         <DrrCard
+          compareOnNewLine
           drr={{
             label: "ДРР корзин",
             value: current.drrAtbs,
@@ -4207,6 +4221,7 @@ function CampaignPerformanceBoard({
       },
       highlight: (
         <DrrCard
+          compareOnNewLine
           drr={{
             label: "ДРР заказов (РК)",
             value: current.drrOrders,
@@ -4242,7 +4257,7 @@ function CampaignPerformanceBoard({
         <div key={rowKey} className={cn("grid", rowIndex > 0 && "border-t border-[var(--color-line)]")} style={{ gridTemplateColumns: "repeat(4, minmax(0,1fr))" }}>
           {columns.map((column, index) => (
             <div key={`${column.stage}-${rowKey}`} className={cn(index > 0 && "border-l border-[var(--color-line)]")}>
-              <PerformanceCell cell={column[rowKey]} />
+              <PerformanceCell cell={column[rowKey]} compareOnNewLine />
             </div>
           ))}
         </div>

@@ -31,7 +31,7 @@ const DATE_TICK_PROPS = {
   fontWeight: 700,
 } as const;
 const CAMPAIGN_INLINE_LEFT_AXIS_WIDTH = 0;
-const CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH = 50;
+const CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH = 42;
 const CAMPAIGN_INLINE_TOOLTIP_GAP = 20;
 const CAMPAIGN_INLINE_TOOLTIP_EDGE_PADDING = 16;
 const CAMPAIGN_INLINE_STATUS_VIEW_STORAGE_KEY = "xway-campaign-inline-status-view";
@@ -1398,13 +1398,17 @@ export function CampaignInlineOverviewChart({
         isOverlayDensity && "is-overlay-density",
       )}
     >
-      <div className="chart-card-head">
-        <div>
+      <div className="chart-card-head campaign-inline-chart-head">
+        <div className="campaign-inline-chart-title">
           <h4 className="font-display font-semibold text-[var(--color-ink)]">Показы, заказы, расход, ставка, ДРР и статусы</h4>
           <p>{bidLabel} · по дням внутри периода</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="chart-window-switch">
+        <div className="campaign-inline-chart-controls">
+          <div className="campaign-inline-chart-controls-row">
+            <ChartWindowSwitch activeWindow={activeWindow} onChange={setActiveWindow} />
+            {headerAction}
+          </div>
+          <div className="chart-window-switch campaign-status-view-switch">
             <button type="button" onClick={() => setStatusOverlayMode("strip")} className={statusOverlayMode === "strip" ? "chart-window-chip is-active" : "chart-window-chip"}>
               Полоска
             </button>
@@ -1412,8 +1416,6 @@ export function CampaignInlineOverviewChart({
               Иконки
             </button>
           </div>
-          <ChartWindowSwitch activeWindow={activeWindow} onChange={setActiveWindow} />
-          {headerAction}
         </div>
       </div>
 
@@ -1431,7 +1433,7 @@ export function CampaignInlineOverviewChart({
             <ResponsiveContainer>
               <ComposedChart
                 data={visibleRows}
-                margin={{ top: 12, right: 8, left: 0, bottom: chartBottomReserve }}
+                margin={{ top: 12, right: 0, left: 0, bottom: chartBottomReserve }}
                 onMouseMove={(state) => {
                   const nextPayloadRow = (
                     state as unknown as { activePayload?: Array<{ payload?: CampaignOverviewChartRow }> }
@@ -1480,6 +1482,7 @@ export function CampaignInlineOverviewChart({
                 orientation="right"
                 width={CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH}
                 tick={{ fill: CHART_TICK, fontSize: 10 }}
+                tickMargin={2}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(value) => formatNumber(value)}
@@ -1499,7 +1502,7 @@ export function CampaignInlineOverviewChart({
               className="campaign-inline-hover-grid"
               style={{
                 paddingLeft: `${CAMPAIGN_INLINE_LEFT_AXIS_WIDTH}px`,
-                paddingRight: `${CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH + 8}px`,
+                paddingRight: `${CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH}px`,
                 gridTemplateColumns: `repeat(${Math.max(visibleRows.length, 1)}, minmax(0, 1fr))`,
                 bottom: `${chartBottomReserve}px`,
               }}
@@ -1536,7 +1539,7 @@ export function CampaignInlineOverviewChart({
                 style={{
                   top: `${Math.round(activeTooltipAnchorY)}px`,
                   paddingLeft: `${CAMPAIGN_INLINE_LEFT_AXIS_WIDTH}px`,
-                  paddingRight: `${CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH + 8}px`,
+                  paddingRight: `${CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH}px`,
                   gridTemplateColumns: `repeat(${Math.max(visibleRows.length, 1)}, minmax(0, 1fr))`,
                 }}
               >
@@ -1559,7 +1562,7 @@ export function CampaignInlineOverviewChart({
               className={cn("chart-status-overlay", statusOverlayMode === "strip" && "is-strip-mode")}
               style={{
                 paddingLeft: `${CAMPAIGN_INLINE_LEFT_AXIS_WIDTH}px`,
-                paddingRight: `${CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH + 8}px`,
+                paddingRight: `${CAMPAIGN_INLINE_RIGHT_AXIS_WIDTH}px`,
                 gridTemplateColumns: `repeat(${Math.max(visibleStatusDays.length, 1)}, minmax(0, 1fr))`,
               }}
             >
