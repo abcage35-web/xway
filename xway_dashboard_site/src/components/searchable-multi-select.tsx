@@ -30,15 +30,28 @@ export function SearchableMultiSelect({
   const [search, setSearch] = useState("");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const selectedSet = new Set(selectedValues);
   const normalizedSearch = search.trim().toLowerCase();
   const viewportWidth = typeof window !== "undefined" ? window.visualViewport?.width ?? window.innerWidth : 0;
+  const viewportHeight = typeof window !== "undefined" ? window.visualViewport?.height ?? window.innerHeight : 0;
   const panelWidth = anchorRect ? Math.max(anchorRect.width, 280) : 280;
   const panelLeft =
     anchorRect && viewportWidth
       ? Math.max(12, Math.min(anchorRect.left, viewportWidth - panelWidth - 12))
       : anchorRect?.left ?? 0;
+  const spaceBelow = anchorRect && viewportHeight ? viewportHeight - anchorRect.bottom - 12 : 0;
+  const spaceAbove = anchorRect ? anchorRect.top - 12 : 0;
+  const panelOpensAbove = Boolean(anchorRect && viewportHeight && spaceBelow < 300 && spaceAbove > spaceBelow);
+  const panelMaxHeight = Math.max(220, Math.min(420, (panelOpensAbove ? spaceAbove : spaceBelow) - 10 || 320));
+  const panelTop =
+    anchorRect && viewportHeight
+      ? panelOpensAbove
+        ? Math.max(12, anchorRect.top - panelMaxHeight - 10)
+        : Math.min(anchorRect.bottom + 10, viewportHeight - panelMaxHeight - 12)
+      : anchorRect?.bottom ? anchorRect.bottom + 10 : 0;
+  const optionsMaxHeight = Math.max(120, panelMaxHeight - 132);
   const filteredOptions = options.filter((option) => {
     if (!normalizedSearch) {
       return true;
@@ -103,6 +116,8 @@ export function SearchableMultiSelect({
       return;
     }
 
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen(false);
@@ -124,19 +139,19 @@ export function SearchableMultiSelect({
   };
 
   return (
-    <div ref={rootRef} className={cn("relative min-w-[220px] flex-1 sm:flex-none", className)}>
+    <div ref={rootRef} className={cn("relative min-w-0", className)}>
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
         className={cn(
-          "metric-chip flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left transition",
+          "metric-chip flex min-h-11 w-full items-center justify-between gap-2 rounded-[18px] px-3 py-2 text-left transition",
           open && "border-[var(--color-brand-300)] shadow-[0_10px_30px_rgba(44,35,66,0.08)]",
         )}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</p>
+          <p className="text-[9px] uppercase tracking-[0.2em] text-[var(--color-muted)]">{label}</p>
           <p className="truncate text-sm font-medium text-[var(--color-ink)]">{summary}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -156,15 +171,17 @@ export function SearchableMultiSelect({
               className="glass-panel rounded-[24px] p-3"
               style={{
                 position: "fixed",
-                top: anchorRect.bottom + 10,
+                top: panelTop,
                 left: panelLeft,
                 width: panelWidth,
+                maxHeight: panelMaxHeight,
                 zIndex: 9999,
               }}
             >
               <div className="metric-chip flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm text-[var(--color-muted)]">
                 <Search className="size-4 text-brand-200" />
                 <input
+                  ref={searchInputRef}
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder={`Поиск: ${label.toLowerCase()}`}
@@ -172,7 +189,7 @@ export function SearchableMultiSelect({
                 />
               </div>
 
-              <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
+              <div className="mt-3 space-y-1 overflow-y-auto pr-1" style={{ maxHeight: optionsMaxHeight }}>
                 {filteredOptions.length ? (
                   filteredOptions.map((option) => {
                     const checked = selectedSet.has(option.value);

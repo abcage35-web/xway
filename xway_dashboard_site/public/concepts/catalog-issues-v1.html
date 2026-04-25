@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XWAY Concept - Ошибки по артикулам</title>
+    <style>
+      :root {
+        --bg: #eeedf1;
+        --surface: #ffffff;
+        --surface-soft: #f7f6fa;
+        --surface-muted: #f1f0f5;
+        --line: #e3e1ea;
+        --line-strong: #d3cfdd;
+        --ink: #26213a;
+        --muted: #807a93;
+        --brand: #f17828;
+        --brand-soft: #fff2e7;
+        --rose: #d75f5f;
+        --rose-soft: #fff0eb;
+        --amber: #c08b12;
+        --amber-soft: #fff7dc;
+        --blue: #4b7bff;
+        --blue-soft: #edf3ff;
+        --green: #3e9d69;
+        --green-soft: #ecfaf2;
+        --shadow: 0 16px 38px rgb(44 35 66 / 0.07);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        font-size: 90.625%;
+      }
+
+      body {
+        min-width: 320px;
+        margin: 0;
+        background:
+          linear-gradient(180deg, #f4f3f7 0%, var(--bg) 420px),
+          var(--bg);
+        color: var(--ink);
+        font-family:
+          "IBM Plex Sans",
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .page {
+        width: min(1510px, calc(100vw - 28px));
+        margin: 0 auto;
+        padding: 18px 0 34px;
+      }
+
+      .frame-label {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 0 0 10px;
+        color: var(--muted);
+        font-size: 0.76rem;
+        line-height: 1.35;
+      }
+
+      .frame-label strong {
+        color: var(--ink);
+        font-size: 1rem;
+      }
+
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 10px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: rgb(255 255 255 / 0.95);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .search {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--surface-soft);
+        color: var(--muted);
+      }
+
+      .range,
+      .toolbar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pill,
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--ink);
+        white-space: nowrap;
+      }
+
+      .pill {
+        padding: 5px 10px;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+      }
+
+      .button {
+        padding: 6px 12px;
+        font-size: 0.86rem;
+        font-weight: 600;
+      }
+
+      .button.primary {
+        border-color: rgb(241 120 40 / 0.28);
+        background: var(--brand-soft);
+        color: var(--brand);
+      }
+
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(142px, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .kpi {
+        min-width: 0;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--surface);
+        box-shadow: 0 10px 24px rgb(44 35 66 / 0.04);
+      }
+
+      .kpi span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .kpi strong {
+        display: block;
+        margin-top: 5px;
+        font-size: 1.32rem;
+        line-height: 1.05;
+      }
+
+      .kpi small {
+        display: block;
+        margin-top: 7px;
+        overflow: hidden;
+        color: var(--green);
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .kpi.negative small {
+        color: #f40045;
+      }
+
+      .issue-strip {
+        display: grid;
+        grid-template-columns: minmax(270px, 1.1fr) minmax(360px, 1.8fr) auto;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgb(255 255 255 / 0.96);
+        box-shadow: var(--shadow);
+      }
+
+      .issue-title {
+        min-width: 0;
+      }
+
+      .issue-title h1 {
+        margin: 0;
+        font-size: 1.08rem;
+        line-height: 1.15;
+      }
+
+      .issue-title p {
+        margin: 4px 0 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.35;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .issue-chips {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+      }
+
+      .issue-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 34px;
+        padding: 6px 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--ink);
+        font-size: 0.82rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .issue-chip em {
+        display: inline-grid;
+        min-width: 24px;
+        height: 22px;
+        place-items: center;
+        border-radius: 999px;
+        background: rgb(38 33 58 / 0.08);
+        color: var(--ink);
+        font-style: normal;
+        font-size: 0.74rem;
+      }
+
+      .issue-chip.active {
+        border-color: rgb(241 120 40 / 0.32);
+        background: var(--brand-soft);
+        color: var(--brand);
+      }
+
+      .issue-chip.budget {
+        border-color: rgb(215 95 95 / 0.24);
+        background: var(--rose-soft);
+      }
+
+      .issue-chip.limit {
+        border-color: rgb(192 139 18 / 0.26);
+        background: var(--amber-soft);
+      }
+
+      .issue-chip.turnover {
+        border-color: rgb(75 123 255 / 0.22);
+        background: var(--blue-soft);
+      }
+
+      .issue-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .progress {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px 10px;
+        align-items: center;
+        margin-top: 8px;
+      }
+
+      .progress-track {
+        height: 6px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--surface-muted);
+      }
+
+      .progress-track div {
+        width: 75%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--brand), #ffb16c);
+      }
+
+      .progress span {
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(330px, 420px);
+        gap: 10px;
+        align-items: start;
+      }
+
+      .section {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .section-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-head h2 {
+        margin: 0;
+        font-size: 1.08rem;
+        line-height: 1.1;
+      }
+
+      .section-head p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .shop-stats {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 6px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        min-width: 1080px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: right;
+        vertical-align: middle;
+      }
+
+      th:first-child,
+      td:first-child,
+      th:nth-child(2),
+      td:nth-child(2) {
+        text-align: left;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: rgb(255 255 255 / 0.98);
+        color: var(--muted);
+        font-size: 0.66rem;
+        font-weight: 800;
+        letter-spacing: 0.17em;
+        text-transform: uppercase;
+      }
+
+      tr.issue-row {
+        background:
+          linear-gradient(90deg, rgb(241 120 40 / 0.06), transparent 54%),
+          var(--surface);
+      }
+
+      .product {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        min-width: 280px;
+      }
+
+      .thumb {
+        width: 48px;
+        height: 62px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background:
+          linear-gradient(135deg, rgb(241 120 40 / 0.12), transparent),
+          var(--surface-soft);
+      }
+
+      .product strong {
+        display: block;
+        overflow: hidden;
+        font-size: 0.96rem;
+        line-height: 1.18;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .product span {
+        display: block;
+        margin-top: 4px;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 0.78rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .issue-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        max-width: 250px;
+        justify-content: flex-start;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 26px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .badge.budget {
+        background: var(--rose-soft);
+        color: var(--rose);
+      }
+
+      .badge.limit {
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
+      .badge.turnover {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+
+      .num {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+
+      .drawer {
+        position: sticky;
+        top: 74px;
+        overflow: hidden;
+      }
+
+      .drawer-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .drawer-head h2 {
+        margin: 0;
+        font-size: 1.08rem;
+      }
+
+      .drawer-head p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .drawer-body {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .risk-card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--surface-soft);
+      }
+
+      .risk-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .risk-card-head strong {
+        font-size: 0.92rem;
+      }
+
+      .risk-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+        padding: 10px;
+      }
+
+      .risk-metric {
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+
+      .risk-metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .risk-metric strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 1rem;
+      }
+
+      .campaign-list {
+        display: grid;
+        gap: 6px;
+        padding: 0 10px 10px;
+      }
+
+      .campaign {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 8px 9px;
+        border-radius: 12px;
+        background: var(--surface);
+      }
+
+      .campaign strong {
+        display: block;
+        overflow: hidden;
+        font-size: 0.84rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .campaign span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+
+      .state-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(160px, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .state {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .state strong {
+        display: block;
+        font-size: 0.88rem;
+      }
+
+      .state span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 0.76rem;
+        line-height: 1.35;
+      }
+
+      @media (max-width: 1180px) {
+        .toolbar,
+        .issue-strip,
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .issue-actions,
+        .shop-stats {
+          justify-content: flex-start;
+        }
+
+        .drawer {
+          position: static;
+        }
+
+        .kpis {
+          grid-template-columns: repeat(3, minmax(142px, 1fr));
+        }
+      }
+
+      @media (max-width: 640px) {
+        .page {
+          width: min(100vw - 18px, 520px);
+          padding-top: 10px;
+        }
+
+        .kpis,
+        .state-strip,
+        .risk-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .issue-title p {
+          white-space: normal;
+        }
+
+        .issue-actions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="frame-label">
+        <strong>Концепт v1: ошибки как слой над каталогом</strong>
+        <span>Цель: не уводить пользователя из таблицы, а подсветить проблемные строки и открыть детали по требованию.</span>
+      </div>
+
+      <section class="toolbar" aria-label="Рабочая панель каталога">
+        <div class="search">Поиск по артикулу, названию, бренду, категории</div>
+        <div class="range" aria-label="Диапазон">
+          <span class="pill">18 апр 2026</span>
+          <span class="pill">24 апр 2026</span>
+        </div>
+        <div class="toolbar-actions">
+          <button class="button primary" type="button">Все 480</button>
+          <button class="button" type="button">Внимание 134</button>
+          <button class="button" type="button">Расход без заказов 144</button>
+        </div>
+      </section>
+
+      <section class="kpis" aria-label="KPI каталога">
+        <div class="kpi negative"><span>Расход</span><strong>6 952 615 ₽</strong><small>+1 165 364 ₽ к прошлому</small></div>
+        <div class="kpi"><span>Показы</span><strong>16,7 млн</strong><small>+1 637 600 к прошлому</small></div>
+        <div class="kpi"><span>Клики</span><strong>596 тыс</strong><small>+57 792 к прошлому</small></div>
+        <div class="kpi"><span>Корзины</span><strong>107 тыс</strong><small>+4 368 к прошлому</small></div>
+        <div class="kpi negative"><span>Заказы</span><strong>28 307</strong><small>-2 049 к прошлому</small></div>
+        <div class="kpi negative"><span>CTR</span><strong>3.6%</strong><small>-0.0% к прошлому</small></div>
+        <div class="kpi negative"><span>CR</span><strong>4.7%</strong><small>-0.9% к прошлому</small></div>
+      </section>
+
+      <section class="issue-strip" aria-label="Ошибки по артикулам">
+        <div class="issue-title">
+          <h1>Ошибки за 24 апреля</h1>
+          <p>По текущему списку: 18 артикулов с рисками, обработано 180 / 240 с остатком</p>
+          <div class="progress" aria-label="Прогресс сбора">
+            <div class="progress-track"><div></div></div>
+            <span>75%</span>
+          </div>
+        </div>
+        <div class="issue-chips" aria-label="Фильтры ошибок">
+          <button class="issue-chip active" type="button">Все <em>18</em></button>
+          <button class="issue-chip budget" type="button">Нет бюджета <em>7</em></button>
+          <button class="issue-chip limit" type="button">Лимит <em>9</em></button>
+          <button class="issue-chip turnover" type="button">Оборач. <em>5</em></button>
+          <button class="issue-chip" type="button">2+ ошибки <em>4</em></button>
+        </div>
+        <div class="issue-actions">
+          <button class="button primary" type="button">Догрузить 60</button>
+          <button class="button" type="button">Скопировать</button>
+          <button class="button" type="button">Настройки</button>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="section">
+          <header class="section-head">
+            <div>
+              <h2>MPstats-main</h2>
+              <p>Ошибки встроены в строки каталога, без отдельной дублирующей таблицы</p>
+            </div>
+            <div class="shop-stats">
+              <span class="pill">480 SKU</span>
+              <span class="pill">18 с ошибками</span>
+              <span class="pill">34,5 ч простоя</span>
+              <span class="pill">≈ 42 000 ₽</span>
+            </div>
+          </header>
+          <div class="table-wrap">
+            <table aria-label="Каталог с ошибками">
+              <thead>
+                <tr>
+                  <th>Товар</th>
+                  <th>Ошибки</th>
+                  <th>Остаток</th>
+                  <th>Обор. 3 дн</th>
+                  <th>Расход</th>
+                  <th>Заказы</th>
+                  <th>CTR</th>
+                  <th>CR</th>
+                  <th>Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="issue-row">
+                  <td>
+                    <div class="product">
+                      <div class="thumb" aria-hidden="true"></div>
+                      <div>
+                        <strong>Коврик для йоги и фитнеса нескользящий</strong>
+                        <span>240176959 · Коврики спортивные</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="issue-badges">
+                      <button class="badge budget" type="button">Нет бюджета · 4,5 ч</button>
+                      <button class="badge limit" type="button">Лимит · 2 стопа</button>
+                    </div>
+                  </td>
+                  <td class="num">8 015</td>
+                  <td class="num">70 дн</td>
+                  <td class="num">192 480 ₽</td>
+                  <td class="num">187</td>
+                  <td class="num">3.1%</td>
+                  <td class="num">1.7%</td>
+                  <td><button class="button primary" type="button">Детали</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="product">
+                      <div class="thumb" aria-hidden="true"></div>
+                      <div>
+                        <strong>Бутылка спортивная с мерной шкалой</strong>
+                        <span>238400182 · Спорт и отдых</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="issue-badges">
+                      <button class="badge turnover" type="button">Оборач. · 2,1 дн</button>
+                    </div>
+                  </td>
+                  <td class="num">312</td>
+                  <td class="num">2,1 дн</td>
+                  <td class="num">58 120 ₽</td>
+                  <td class="num">421</td>
+                  <td class="num">4.8%</td>
+                  <td class="num">6.3%</td>
+                  <td><button class="button" type="button">Детали</button></td>
+                </tr>
+                <tr class="issue-row">
+                  <td>
+                    <div class="product">
+                      <div class="thumb" aria-hidden="true"></div>
+                      <div>
+                        <strong>Фитнес резинки набор тканевых</strong>
+                        <span>231598045 · Эспандеры</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="issue-badges">
+                      <button class="badge budget" type="button">Нет бюджета · 7,8 ч</button>
+                    </div>
+                  </td>
+                  <td class="num">1 204</td>
+                  <td class="num">18 дн</td>
+                  <td class="num">121 090 ₽</td>
+                  <td class="num">96</td>
+                  <td class="num">2.4%</td>
+                  <td class="num">0.9%</td>
+                  <td><button class="button" type="button">Детали</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="product">
+                      <div class="thumb" aria-hidden="true"></div>
+                      <div>
+                        <strong>Гантели неопреновые для тренировок</strong>
+                        <span>190574211 · Силовые тренировки</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="pill">Нет ошибок</span></td>
+                  <td class="num">884</td>
+                  <td class="num">42 дн</td>
+                  <td class="num">42 600 ₽</td>
+                  <td class="num">62</td>
+                  <td class="num">3.5%</td>
+                  <td class="num">2.4%</td>
+                  <td><button class="button" type="button">Открыть</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <aside class="section drawer" aria-label="Детали ошибки">
+          <header class="drawer-head">
+            <div>
+              <h2>Детали: 240176959</h2>
+              <p>Коврик для йоги и фитнеса · за 24 апреля</p>
+            </div>
+            <button class="button" type="button">Закрыть</button>
+          </header>
+          <div class="drawer-body">
+            <div class="risk-card">
+              <div class="risk-card-head">
+                <strong>Нет бюджета</strong>
+                <span class="badge budget">К исправлению</span>
+              </div>
+              <div class="risk-grid">
+                <div class="risk-metric"><span>Простой</span><strong>4,5 ч</strong></div>
+                <div class="risk-metric"><span>Остановки</span><strong>3</strong></div>
+                <div class="risk-metric"><span>Потери</span><strong>≈ 18 400 ₽</strong></div>
+              </div>
+              <div class="campaign-list">
+                <div class="campaign">
+                  <div><strong>Единая ставка · поиск</strong><span>CPM · активна · ДРР 11.4%</span></div>
+                  <button class="button" type="button">XWAY</button>
+                </div>
+                <div class="campaign">
+                  <div><strong>Ручная ставка · рекомендации</strong><span>CPM · активна · заказы 18</span></div>
+                  <button class="button" type="button">XWAY</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="risk-card">
+              <div class="risk-card-head">
+                <strong>Израсходован лимит</strong>
+                <span class="badge limit">Проверить</span>
+              </div>
+              <div class="risk-grid">
+                <div class="risk-metric"><span>Простой</span><strong>1,8 ч</strong></div>
+                <div class="risk-metric"><span>Остановки</span><strong>2</strong></div>
+                <div class="risk-metric"><span>Заказы</span><strong>24 / 187</strong></div>
+              </div>
+            </div>
+
+            <button class="button primary" type="button">Открыть карточку товара</button>
+            <button class="button" type="button">Скопировать только этот артикул</button>
+          </div>
+        </aside>
+      </section>
+
+      <section class="state-strip" aria-label="Состояния блока">
+        <div class="state"><strong>Idle</strong><span>Ошибки еще не собирались. Показываем кнопку “Собрать за вчера”, не зеленый empty state.</span></div>
+        <div class="state"><strong>Partial</strong><span>Показываем найденное и прогресс догрузки: 180 / 240. Данные не прячутся.</span></div>
+        <div class="state"><strong>Empty</strong><span>Только после полного сбора: “по текущему списку ошибок не найдено”.</span></div>
+        <div class="state"><strong>Error</strong><span>Ошибка рядом с блоком: сколько артикулов не догрузилось и что можно повторить.</span></div>
+      </section>
+    </main>
+  </body>
+</html>

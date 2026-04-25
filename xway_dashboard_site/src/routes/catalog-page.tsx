@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUpDown, ChevronDown, ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUpDown, CalendarDays, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -8,7 +8,7 @@ import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange,
 import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogSelectionChart } from "../components/catalog-selection-chart";
 import { SearchableMultiSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
-import { InlineMetricSet, MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
+import { MetricCard, MetricTable, SearchField, SectionCard } from "../components/ui";
 
 interface CatalogLoaderData {
   payload: CatalogResponse;
@@ -41,7 +41,7 @@ const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolba
 const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
 const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v4";
 const CATALOG_ISSUES_SETTINGS_STORAGE_KEY = "xway-catalog-issues-settings-v1";
-const CATALOG_ISSUES_COLLAPSED_STORAGE_KEY = "xway-catalog-issues-collapsed-v1";
+const CATALOG_CHART_FETCH_CHUNK_SIZE = 120;
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
@@ -89,6 +89,22 @@ type CatalogSortField =
   | "cr";
 
 type CatalogSortDirection = "asc" | "desc";
+type CatalogQuickView = "all" | "attention" | "withSpend" | "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
+
+const CATALOG_QUICK_VIEW_STORAGE_KEY = "xway-catalog-quick-view-v1";
+const CATALOG_LOW_CR_CLICKS_THRESHOLD = 20;
+const CATALOG_LOW_CR_PERCENT_THRESHOLD = 2;
+const CATALOG_SLOW_TURNOVER_DAYS = 30;
+
+const CATALOG_QUICK_VIEW_OPTIONS: Array<{ value: CatalogQuickView; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "attention", label: "Внимание" },
+  { value: "withSpend", label: "Есть расход" },
+  { value: "noOrders", label: "Расход без заказов" },
+  { value: "lowCr", label: "Низкий CR" },
+  { value: "slowTurnover", label: "Медленная оборач." },
+  { value: "withoutCampaigns", label: "Без РК" },
+];
 
 interface CatalogIssueCacheEntry {
   product_ref: string;
@@ -125,10 +141,10 @@ interface CatalogChartCacheEntry {
 }
 
 function CatalogCampaignColumnsHeader() {
-  const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string; subtitle: string }> = [
-    { key: "unified", title: "кампания", subtitle: "Единая ставка" },
-    { key: "manual", title: "кампания", subtitle: "Ручная ставка" },
-    { key: "cpc", title: "кампания", subtitle: "Оплата за клики" },
+  const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string }> = [
+    { key: "unified", title: "Единая" },
+    { key: "manual", title: "Ручная" },
+    { key: "cpc", title: "Клики" },
   ];
 
   return (
@@ -139,7 +155,6 @@ function CatalogCampaignColumnsHeader() {
             <span className={cn("catalog-campaign-kind-badge", `is-${item.key}`)}>{item.key === "cpc" ? "CPC" : "CPM"}</span>
             <strong className="catalog-campaign-header-title">{item.title}</strong>
           </div>
-          <span className="catalog-campaign-header-subtitle">{item.subtitle}</span>
         </div>
       ))}
     </div>
@@ -362,77 +377,6 @@ function CatalogIssueCampaignEntry({
               ≈ {formatMoney(campaign.estimatedGap)}
             </span>
           ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function CatalogIssueCell({
-  issue,
-}: {
-  issue: CatalogArticleYesterdayIssues["issues"][number] | null;
-}) {
-  if (!issue) {
-    return <div className="min-h-[72px]" aria-hidden="true" />;
-  }
-
-  const tone = resolveCatalogIssueKindTone(issue.kind);
-
-  return (
-    <div className={cn("flex h-full flex-col gap-2 rounded-[20px] border p-3", tone.shell)}>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", tone.badge)}>
-          {issue.title}
-        </span>
-        {issue.kind === "turnover" ? (
-          <>
-            {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                {formatTurnoverDays(issue.turnoverDays)}
-              </span>
-            ) : null}
-            {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                ≤ {formatTurnoverDays(issue.thresholdDays)}
-              </span>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {issue.hours > 0 ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                {formatNumber(issue.hours, 1)} ч
-              </span>
-            ) : null}
-            {issue.incidents > 0 ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                {formatIssueIncidents(issue.incidents)}
-              </span>
-            ) : null}
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-              {issue.totalOrders !== null
-                ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
-                : `Заказы ${formatNumber(issue.ordersAds)}`}
-            </span>
-            {issue.drrOverall !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                ДРР общ. {formatPercent(issue.drrOverall)}
-              </span>
-            ) : null}
-            {issue.estimatedGap !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                ≈ {formatMoney(issue.estimatedGap)}
-              </span>
-            ) : null}
-          </>
-        )}
-      </div>
-      {issue.campaigns.length ? (
-        <div className="space-y-2">
-          {issue.campaigns.map((campaign) => (
-            <CatalogIssueCampaignEntry key={`${issue.kind}-${campaign.id}`} campaign={campaign} issueKind={issue.kind} />
-          ))}
         </div>
       ) : null}
     </div>
@@ -678,13 +622,6 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
   }
 }
 
-function readCatalogIssuesCollapsed() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return window.localStorage.getItem(CATALOG_ISSUES_COLLAPSED_STORAGE_KEY) === "1";
-}
-
 function readCatalogIssuesCache(day: string): Record<string, CatalogIssueCacheEntry> {
   if (typeof window === "undefined") {
     return {};
@@ -920,8 +857,8 @@ function FilterField({
   className?: string;
 }) {
   return (
-    <label className={cn("metric-chip flex flex-col gap-1 rounded-2xl px-3.5 py-2.5", className)}>
-      <span className="text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</span>
+    <label className={cn("metric-chip flex min-h-11 flex-col justify-center gap-0.5 rounded-[18px] px-3 py-2", className)}>
+      <span className="text-[9px] uppercase tracking-[0.2em] text-[var(--color-muted)]">{label}</span>
       {children}
     </label>
   );
@@ -944,7 +881,7 @@ function NumericRangeField({
 }) {
   return (
     <FilterField label={label}>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-1.5">
         <input
           type="number"
           inputMode="decimal"
@@ -997,6 +934,7 @@ function CatalogStickyFilterShell({
   });
   const rootRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
+  const reportedHeightRef = useRef(0);
   const [isPinned, setIsPinned] = useState(false);
   const [layout, setLayout] = useState({ height: 0, left: 0, right: 0 });
   const topOffset = 12;
@@ -1014,6 +952,16 @@ function CatalogStickyFilterShell({
     }
     window.localStorage.setItem(CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY, detailsExpanded ? "1" : "0");
   }, [detailsExpanded]);
+
+  const toggleDetails = () => {
+    setDetailsExpanded((current) => {
+      const next = !current;
+      if (next && isPinned) {
+        window.requestAnimationFrame(() => rootRef.current?.scrollIntoView({ block: "start" }));
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!rootRef.current || !innerRef.current) {
@@ -1034,9 +982,12 @@ function CatalogStickyFilterShell({
         current.height === nextLayout.height && current.left === nextLayout.left && current.right === nextLayout.right ? current : nextLayout,
       );
       const pinned = wrapperRect.top <= topOffset;
-      setIsPinned(pinned);
-      const effectiveHeight = pinned ? topOffset + nextLayout.height + 8 : Math.ceil(wrapperRect.top + innerRect.height);
-      onHeightChange(effectiveHeight);
+      setIsPinned((current) => (current === pinned ? current : pinned));
+      const effectiveHeight = topOffset + nextLayout.height + 8;
+      if (reportedHeightRef.current !== effectiveHeight) {
+        reportedHeightRef.current = effectiveHeight;
+        onHeightChange(effectiveHeight);
+      }
     };
 
     updateLayout();
@@ -1058,7 +1009,7 @@ function CatalogStickyFilterShell({
       window.removeEventListener("scroll", updateLayout);
       window.removeEventListener("resize", updateLayout);
     };
-  }, [collapsed, detailsExpanded, onHeightChange]);
+  }, [collapsed, onHeightChange]);
 
   if (collapsed) {
     return (
@@ -1083,30 +1034,31 @@ function CatalogStickyFilterShell({
   }
 
   return (
-    <div ref={rootRef} className="relative z-[39] w-full" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
-      <div
-        ref={innerRef}
-        className="space-y-2.5"
-        style={
-          isPinned
-            ? {
-                position: "fixed",
-                top: `${topOffset}px`,
-                left: `${layout.left}px`,
-                right: `${layout.right}px`,
-                zIndex: 39,
-              }
-            : undefined
-        }
-      >
-        {toolbar({
-          collapseAll: () => setCollapsed(true),
-          detailsExpanded,
-          toggleDetails: () => setDetailsExpanded((current) => !current),
-        })}
-        {detailsExpanded ? filters : null}
+    <>
+      <div ref={rootRef} className="relative z-[39] w-full" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
+        <div
+          ref={innerRef}
+          style={
+            isPinned
+              ? {
+                  position: "fixed",
+                  top: `${topOffset}px`,
+                  left: `${layout.left}px`,
+                  right: `${layout.right}px`,
+                  zIndex: 39,
+                }
+              : undefined
+          }
+        >
+          {toolbar({
+            collapseAll: () => setCollapsed(true),
+            detailsExpanded,
+            toggleDetails,
+          })}
+        </div>
       </div>
-    </div>
+      {detailsExpanded ? <div className="relative z-[20] mt-2.5">{filters}</div> : null}
+    </>
   );
 }
 
@@ -1131,27 +1083,14 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
   const payload = await fetchCatalog({ request, start, end });
   const compareStart = shiftIsoDate(payload.range.current_start, -payload.range.span_days);
   const compareEnd = shiftIsoDate(payload.range.current_end, -payload.range.span_days);
-  let comparePayload: CatalogResponse | null = null;
-
-  try {
-    comparePayload = await fetchCatalog({ request, start: compareStart, end: compareEnd });
-  } catch {
-    comparePayload = null;
-  }
-
   const turnoverEnd = payload.range.current_end;
   const turnoverStart = shiftIsoDate(turnoverEnd, -2);
-  let turnoverPayload: CatalogResponse | null = null;
-
-  if (payload.range.current_start === turnoverStart && payload.range.current_end === turnoverEnd) {
-    turnoverPayload = payload;
-  } else {
-    try {
-      turnoverPayload = await fetchCatalog({ request, start: turnoverStart, end: turnoverEnd });
-    } catch {
-      turnoverPayload = null;
-    }
-  }
+  const comparePayloadPromise = fetchCatalog({ request, start: compareStart, end: compareEnd }).catch(() => null);
+  const turnoverPayloadPromise =
+    payload.range.current_start === turnoverStart && payload.range.current_end === turnoverEnd
+      ? Promise.resolve(payload)
+      : fetchCatalog({ request, start: turnoverStart, end: turnoverEnd }).catch(() => null);
+  const [comparePayload, turnoverPayload] = await Promise.all([comparePayloadPromise, turnoverPayloadPromise]);
 
   return { payload, comparePayload, turnoverPayload, start, end };
 }
@@ -1238,6 +1177,21 @@ function formatProductsWord(count: number) {
   return "товаров";
 }
 
+function formatArticlesWord(count: number) {
+  const abs = Math.abs(count) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 19) {
+    return "артикулов";
+  }
+  if (last === 1) {
+    return "артикул";
+  }
+  if (last >= 2 && last <= 4) {
+    return "артикула";
+  }
+  return "артикулов";
+}
+
 function summarizeCatalogArticles(articles: CatalogArticle[]) {
   return articles.reduce(
     (totals, article) => {
@@ -1269,6 +1223,111 @@ function computeTurnoverDays(stock: number | string | null | undefined, orderedR
     return Number.POSITIVE_INFINITY;
   }
   return stockValue / (orderedValue / windowDays);
+}
+
+function readCatalogQuickView(): CatalogQuickView {
+  if (typeof window === "undefined") {
+    return "all";
+  }
+  try {
+    const storedValue = window.localStorage.getItem(CATALOG_QUICK_VIEW_STORAGE_KEY);
+    return CATALOG_QUICK_VIEW_OPTIONS.some((option) => option.value === storedValue) ? (storedValue as CatalogQuickView) : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function getCatalogCrPercent(article: CatalogArticle) {
+  const directValue = toNumber(article.cr);
+  if (directValue !== null) {
+    return directValue;
+  }
+  const clicks = toNumber(article.clicks) ?? 0;
+  if (clicks <= 0) {
+    return null;
+  }
+  return ((toNumber(article.orders) ?? 0) / clicks) * 100;
+}
+
+function isCatalogSlowTurnover(turnoverDays: number | null) {
+  return turnoverDays !== null && (!Number.isFinite(turnoverDays) || turnoverDays > CATALOG_SLOW_TURNOVER_DAYS);
+}
+
+function isCatalogLowCrArticle(article: CatalogArticle) {
+  const clicks = toNumber(article.clicks) ?? 0;
+  const crValue = getCatalogCrPercent(article);
+  return clicks >= CATALOG_LOW_CR_CLICKS_THRESHOLD && crValue !== null && crValue < CATALOG_LOW_CR_PERCENT_THRESHOLD;
+}
+
+function isCatalogAttentionArticle(article: CatalogArticle, turnoverDays: number | null) {
+  const stockValue = toNumber(article.stock) ?? 0;
+  if (stockValue <= 0) {
+    return false;
+  }
+  const spend = toNumber(article.expense_sum) ?? 0;
+  const orders = toNumber(article.orders) ?? 0;
+  return (
+    article.campaign_states.length === 0 ||
+    (spend > 0 && orders <= 0) ||
+    isCatalogLowCrArticle(article) ||
+    isCatalogSlowTurnover(turnoverDays)
+  );
+}
+
+function matchesCatalogQuickView(article: CatalogArticle, quickView: CatalogQuickView, turnoverDays: number | null) {
+  const stockValue = toNumber(article.stock) ?? 0;
+  const spend = toNumber(article.expense_sum) ?? 0;
+  const orders = toNumber(article.orders) ?? 0;
+
+  switch (quickView) {
+    case "attention":
+      return isCatalogAttentionArticle(article, turnoverDays);
+    case "withSpend":
+      return spend > 0;
+    case "noOrders":
+      return spend > 0 && orders <= 0;
+    case "lowCr":
+      return isCatalogLowCrArticle(article);
+    case "slowTurnover":
+      return stockValue > 0 && isCatalogSlowTurnover(turnoverDays);
+    case "withoutCampaigns":
+      return stockValue > 0 && article.campaign_states.length === 0;
+    case "all":
+    default:
+      return true;
+  }
+}
+
+function buildCatalogQuickViewMetrics(
+  shops: CatalogShop[],
+  turnoverOrdersByRef: Map<string, number | string | null | undefined>,
+): Record<CatalogQuickView, number> {
+  const metrics: Record<CatalogQuickView, number> = {
+    all: 0,
+    attention: 0,
+    withSpend: 0,
+    noOrders: 0,
+    lowCr: 0,
+    slowTurnover: 0,
+    withoutCampaigns: 0,
+  };
+
+  shops.forEach((shop) => {
+    shop.articles.forEach((article) => {
+      const turnoverDays = computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
+      metrics.all += 1;
+      CATALOG_QUICK_VIEW_OPTIONS.forEach((option) => {
+        if (option.value === "all") {
+          return;
+        }
+        if (matchesCatalogQuickView(article, option.value, turnoverDays)) {
+          metrics[option.value] += 1;
+        }
+      });
+    });
+  });
+
+  return metrics;
 }
 
 function formatTurnoverDays(value: number | null | undefined) {
@@ -1375,6 +1434,238 @@ type CatalogIssueDisplayRow = CatalogArticleYesterdayIssues & {
   imageUrl: string | null;
   turnoverDays: number | null;
 };
+
+function resolveCatalogIssueKindShortLabel(kind: CatalogIssueKind) {
+  if (kind === "budget") {
+    return "Бюджет";
+  }
+  if (kind === "limit") {
+    return "Лимит";
+  }
+  return "Оборач.";
+}
+
+function getArticleIssueEstimatedGapTotal(item: CatalogIssueDisplayRow) {
+  return item.issues.reduce((sum, issue) => sum + (issue.estimatedGap ?? 0), 0);
+}
+
+function formatCatalogIssueInlineText(issue: CatalogArticleYesterdayIssues["issues"][number]) {
+  if (issue.kind === "turnover") {
+    const turnoverText = issue.turnoverDays !== undefined && issue.turnoverDays !== null ? formatTurnoverDays(issue.turnoverDays) : null;
+    return turnoverText ? `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${turnoverText}` : resolveCatalogIssueKindShortLabel(issue.kind);
+  }
+
+  if (issue.hours > 0) {
+    return `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${formatNumber(issue.hours, 1)} ч`;
+  }
+
+  if (issue.incidents > 0) {
+    return `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${formatIssueIncidents(issue.incidents)}`;
+  }
+
+  return resolveCatalogIssueKindShortLabel(issue.kind);
+}
+
+function CatalogIssueInlineBadges({
+  item,
+  isLoaded,
+  isLoading,
+  onSelect,
+}: {
+  item: CatalogIssueDisplayRow | null;
+  isLoaded: boolean;
+  isLoading: boolean;
+  onSelect: (kind: CatalogIssueKind) => void;
+}) {
+  if (!item) {
+    return (
+      <span className={cn("catalog-issue-empty-badge", !isLoaded && "is-pending")}>
+        {isLoading && !isLoaded ? "Сбор" : isLoaded ? "Нет ошибок" : "Не собрано"}
+      </span>
+    );
+  }
+
+  return (
+    <div className="catalog-issue-badge-list">
+      {item.issues.map((issue) => (
+        <button
+          key={`${item.ref}-${issue.kind}`}
+          type="button"
+          onClick={() => onSelect(issue.kind)}
+          title={`${resolveCatalogIssueKindLabel(issue.kind)} · ${resolveCatalogIssueKindCaption(issue.kind)}`}
+          className={cn("catalog-issue-inline-badge", `is-${issue.kind}`)}
+        >
+          {formatCatalogIssueInlineText(issue)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CatalogIssueDrawer({
+  item,
+  preferredKind,
+  yesterdayIso,
+  yesterdayLabel,
+  onClose,
+}: {
+  item: CatalogIssueDisplayRow;
+  preferredKind: CatalogIssueKind | null;
+  yesterdayIso: string;
+  yesterdayLabel: string;
+  onClose: () => void;
+}) {
+  const preferredIssue = preferredKind ? getArticleIssueByKind(item, preferredKind) : null;
+  const issues = preferredIssue ? [preferredIssue, ...item.issues.filter((issue) => issue.kind !== preferredIssue.kind)] : item.issues;
+  const totalHours = getArticleIssueHoursTotal(item);
+  const totalIncidents = getArticleIssueIncidentsTotal(item);
+  const estimatedGap = getArticleIssueEstimatedGapTotal(item);
+
+  return (
+    <div className="catalog-issue-drawer-backdrop" role="presentation" onClick={onClose}>
+      <aside
+        className="catalog-issue-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="catalog-issue-drawer-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="catalog-issue-drawer-head">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-200">Ошибки за {yesterdayLabel}</p>
+            <h2 id="catalog-issue-drawer-title" className="font-display text-lg font-semibold text-[var(--color-ink)]">
+              {item.article}
+            </h2>
+            <p className="mt-1 truncate text-sm text-[var(--color-muted)]" title={item.name}>
+              {item.name}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            title="Закрыть"
+            aria-label="Закрыть детали ошибок"
+            className="metric-chip inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="catalog-issue-drawer-body">
+          <div className="catalog-issue-drawer-product">
+            <Link
+              to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="h-[76px] w-[58px] shrink-0 overflow-hidden rounded-[16px] border border-[var(--color-line)] bg-[var(--color-surface-soft)]"
+              aria-label={`Открыть товар ${item.name}`}
+            >
+              {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" /> : null}
+            </Link>
+            <div className="grid min-w-0 flex-1 grid-cols-3 gap-2">
+              <div className="catalog-issue-drawer-metric">
+                <span>Простой</span>
+                <strong>{totalHours > 0 ? `${formatNumber(totalHours, 1)} ч` : "—"}</strong>
+              </div>
+              <div className="catalog-issue-drawer-metric">
+                <span>Остановки</span>
+                <strong>{totalIncidents > 0 ? formatNumber(totalIncidents) : "—"}</strong>
+              </div>
+              <div className="catalog-issue-drawer-metric">
+                <span>Потери</span>
+                <strong>{estimatedGap > 0 ? `≈ ${formatMoney(estimatedGap)}` : "—"}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {issues.map((issue) => {
+              const tone = resolveCatalogIssueKindTone(issue.kind);
+              return (
+                <section key={`${item.ref}-${issue.kind}`} className={cn("rounded-[18px] border p-3", tone.shell)}>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", tone.badge)}>
+                      {resolveCatalogIssueKindLabel(issue.kind)}
+                    </span>
+                    {issue.kind === "turnover" ? (
+                      <>
+                        {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            {formatTurnoverDays(issue.turnoverDays)}
+                          </span>
+                        ) : null}
+                        {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            порог {formatTurnoverDays(issue.thresholdDays)}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {issue.hours > 0 ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            {formatNumber(issue.hours, 1)} ч
+                          </span>
+                        ) : null}
+                        {issue.incidents > 0 ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            {formatIssueIncidents(issue.incidents)}
+                          </span>
+                        ) : null}
+                        <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          {issue.totalOrders !== null
+                            ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
+                            : `Заказы ${formatNumber(issue.ordersAds)}`}
+                        </span>
+                        {issue.drrOverall !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            ДРР {formatPercent(issue.drrOverall)}
+                          </span>
+                        ) : null}
+                        {issue.estimatedGap !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            ≈ {formatMoney(issue.estimatedGap)}
+                          </span>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                  {issue.campaigns.length ? (
+                    <div className="mt-2 space-y-2">
+                      {issue.campaigns.map((campaign) => (
+                        <CatalogIssueCampaignEntry key={`${issue.kind}-${campaign.id}`} campaign={campaign} issueKind={issue.kind} />
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex min-h-9 items-center rounded-2xl bg-brand-200 px-3.5 text-sm font-medium text-white transition hover:bg-brand-500"
+            >
+              Карточка товара
+            </Link>
+            <a
+              href={item.productUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="metric-chip inline-flex min-h-9 items-center gap-1.5 rounded-2xl px-3.5 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)]"
+            >
+              XWAY
+              <ExternalLink className="size-3.5" />
+            </a>
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}
 
 function applyCatalogIssueDowntimeThreshold(
   issue: CatalogArticleYesterdayIssues["issues"][number],
@@ -1657,6 +1948,28 @@ function filterShops(
     .filter(Boolean) as CatalogShop[];
 }
 
+function computeCatalogTotals(shops: CatalogShop[]) {
+  return shops.reduce(
+    (totals, shop) => {
+      shop.articles.forEach((article) => {
+        totals.expense_sum += toNumber(article.expense_sum) ?? 0;
+        totals.views += toNumber(article.views) ?? 0;
+        totals.clicks += toNumber(article.clicks) ?? 0;
+        totals.atbs += toNumber(article.atbs) ?? 0;
+        totals.orders += toNumber(article.orders) ?? 0;
+      });
+      return totals;
+    },
+    {
+      expense_sum: 0,
+      orders: 0,
+      atbs: 0,
+      clicks: 0,
+      views: 0,
+    },
+  );
+}
+
 export function CatalogPage() {
   const { payload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
@@ -1671,7 +1984,8 @@ export function CatalogPage() {
   const [turnoverTo, setTurnoverTo] = useState("");
   const [sortField, setSortField] = useState<CatalogSortField>("stock");
   const [sortDirection, setSortDirection] = useState<CatalogSortDirection>("desc");
-  const [chartCollapsed, setChartCollapsed] = useState(false);
+  const [quickView, setQuickView] = useState<CatalogQuickView>(() => readCatalogQuickView());
+  const [chartCollapsed, setChartCollapsed] = useState(true);
   const [chartWindow, setChartWindow] = useState<CatalogChartWindow>(() => resolveCatalogChartWindow(payload.range.span_days));
   const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
@@ -1681,9 +1995,10 @@ export function CatalogPage() {
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssuesCopyState, setArticleIssuesCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
-  const [articleIssuesCollapsed, setArticleIssuesCollapsed] = useState(() => readCatalogIssuesCollapsed());
   const [articleIssueSettingsOpen, setArticleIssueSettingsOpen] = useState(false);
   const [articleIssueSettings, setArticleIssueSettings] = useState<CatalogIssueSettingsState>(() => readCatalogIssueSettings());
+  const [selectedArticleIssueRef, setSelectedArticleIssueRef] = useState<string | null>(null);
+  const [selectedArticleIssueKind, setSelectedArticleIssueKind] = useState<CatalogIssueKind | null>(null);
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -1691,6 +2006,13 @@ export function CatalogPage() {
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_QUICK_VIEW_STORAGE_KEY, quickView);
+  }, [quickView]);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -1700,7 +2022,7 @@ export function CatalogPage() {
       shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
     ),
   );
-  const visibleShops = filterShops(payload, {
+  const baseVisibleShops = filterShops(payload, {
     query: deferredQuery,
     selectedShopIds,
     selectedCategories,
@@ -1766,6 +2088,60 @@ export function CatalogPage() {
       };
     })
     .filter(Boolean) as CatalogShop[];
+  const quickViewMetrics = buildCatalogQuickViewMetrics(baseVisibleShops, turnoverOrdersByRef);
+  const visibleShops = baseVisibleShops
+    .map((shop) => {
+      if (quickView === "all") {
+        return shop;
+      }
+
+      const articles = shop.articles.filter((article) =>
+        matchesCatalogQuickView(article, quickView, computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`))),
+      );
+      if (!articles.length) {
+        return null;
+      }
+      return {
+        ...shop,
+        articles,
+      };
+    })
+    .filter(Boolean) as CatalogShop[];
+  const visibleTotals = computeCatalogTotals(visibleShops);
+  const compareTurnoverOrdersByRef = new Map(
+    (comparePayload?.shops || []).flatMap((shop) =>
+      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
+    ),
+  );
+  const compareVisibleShops = comparePayload
+    ? filterShops(comparePayload, {
+        query: deferredQuery,
+        selectedShopIds,
+        selectedCategories,
+        selectedSkus,
+      })
+        .map((shop) => {
+          const articles = shop.articles.filter((article) => {
+            const turnoverDays = computeTurnoverDays(article.stock, compareTurnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
+            if (!matchesNumericRange(toNumber(article.stock), stockFrom, stockTo) || !matchesNumericRange(turnoverDays, turnoverFrom, turnoverTo)) {
+              return false;
+            }
+            return quickView === "all" || matchesCatalogQuickView(article, quickView, turnoverDays);
+          });
+
+          if (!articles.length) {
+            return null;
+          }
+
+          return {
+            ...shop,
+            articles,
+          };
+        })
+        .filter(Boolean) as CatalogShop[]
+    : [];
+  const compareVisibleTotals = comparePayload ? computeCatalogTotals(compareVisibleShops) : null;
+  const visibleQuickViewMetrics = buildCatalogQuickViewMetrics(visibleShops, turnoverOrdersByRef);
   const issueShopOptions = buildShopOptionsFromShops(visibleShops);
   const issueShopOptionKey = issueShopOptions.map((option) => option.value).join(",");
   const issueScopedShops = visibleShops.filter(
@@ -1788,7 +2164,6 @@ export function CatalogPage() {
       ]),
     ),
   ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0) as CatalogIssueTargetMeta[];
-  const visibleArticleCodes = [...new Set(visibleShops.flatMap((shop) => shop.articles.map((article) => article.article)))].sort((left, right) => left.localeCompare(right, "ru"));
   const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
   const visibleArticles = [...new Map(
     visibleShops.flatMap((shop) =>
@@ -1811,19 +2186,61 @@ export function CatalogPage() {
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
+  const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
   const preset = getRangePreset(start, end);
-  const catalogSearch = buildCatalogSearch(start, end);
-  const issueScopeShopCount = issueScopedShops.length;
+  const articleIssueRowsAllKinds = mapCatalogIssueRows(visibleIssueTargets, articleIssueCacheByRef, {
+    ...articleIssueSettings,
+    visibleKinds: DEFAULT_CATALOG_ISSUE_VISIBILITY,
+  });
   const articleIssueRows = mapCatalogIssueRows(visibleIssueTargets, articleIssueCacheByRef, articleIssueSettings);
   const enabledIssueKinds = CATALOG_ISSUE_KIND_ORDER.filter((kind) => articleIssueSettings.visibleKinds[kind]);
   const articleIssuesCompletedCount = visibleIssueTargetRefs.filter((ref) => Boolean(articleIssueCacheByRef[ref])).length;
   const articleIssuesTotalCount = visibleIssueTargetRefs.length;
   const articleIssuesPendingCount = Math.max(articleIssuesTotalCount - articleIssuesCompletedCount, 0);
-  const articleIssueGridTemplate =
-    enabledIssueKinds.length > 0
-      ? `minmax(280px,1.1fr) repeat(${enabledIssueKinds.length}, minmax(250px,1fr))`
-      : "minmax(280px,1fr)";
-
+  const articleIssueRowsByRef = new Map(articleIssueRows.map((item) => [item.ref, item]));
+  const selectedArticleIssueRow = selectedArticleIssueRef ? articleIssueRowsByRef.get(selectedArticleIssueRef) ?? null : null;
+  const articleIssueKindCounts = CATALOG_ISSUE_KIND_ORDER.reduce(
+    (counts, kind) => {
+      counts[kind] = articleIssueRowsAllKinds.reduce((sum, item) => sum + (getArticleIssueByKind(item, kind) ? 1 : 0), 0);
+      return counts;
+    },
+    {} as Record<CatalogIssueKind, number>,
+  );
+  const articleIssuesHoursTotal = articleIssueRows.reduce((sum, item) => sum + getArticleIssueHoursTotal(item), 0);
+  const articleIssuesEstimatedGapTotal = articleIssueRows.reduce((sum, item) => sum + getArticleIssueEstimatedGapTotal(item), 0);
+  const articleIssuesPanelState = !articleIssuesTotalCount
+    ? "no-targets"
+    : articleIssuesLoading
+      ? "loading"
+      : articleIssuesError && articleIssuesCompletedCount < articleIssuesTotalCount
+        ? "partial-error"
+        : articleIssuesError
+          ? "error"
+          : articleIssuesCompletedCount === 0
+            ? "idle"
+            : articleIssuesPendingCount > 0
+              ? "partial"
+              : articleIssueRowsAllKinds.length
+                ? "complete-with-issues"
+                : "complete-empty";
+  const articleIssuesStatusText =
+    articleIssuesPanelState === "no-targets"
+      ? "В текущем списке нет артикулов с остатком для проверки."
+      : articleIssuesPanelState === "idle"
+        ? `Сбор за ${yesterdaySentenceLabel} еще не запускался.`
+        : articleIssuesPanelState === "loading"
+          ? articleIssueRows.length
+            ? `Сбор идет: обработано ${formatNumber(articleIssuesCompletedCount)} / ${formatNumber(articleIssuesTotalCount)}. Уже показаны найденные ошибки.`
+            : `Собираем ошибки за ${yesterdaySentenceLabel} по текущему списку.`
+          : articleIssuesPanelState === "partial"
+            ? `Показаны частичные данные: обработано ${formatNumber(articleIssuesCompletedCount)} / ${formatNumber(articleIssuesTotalCount)}.`
+            : articleIssuesPanelState === "partial-error"
+              ? `Часть данных не догрузилась: обработано ${formatNumber(articleIssuesCompletedCount)} / ${formatNumber(articleIssuesTotalCount)}.`
+              : articleIssuesPanelState === "error"
+                ? "Сбор завершился ошибкой. Можно повторить загрузку."
+                : articleIssuesPanelState === "complete-empty"
+                  ? `За ${yesterdaySentenceLabel} по текущему списку ошибок не найдено.`
+                  : `За ${yesterdaySentenceLabel}: ${formatNumber(articleIssueRowsAllKinds.length)} ${formatArticlesWord(articleIssueRowsAllKinds.length)} с ошибками.`;
   const handleRangeChange = (next: { start: string; end: string }) => {
     navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
   };
@@ -1842,6 +2259,16 @@ export function CatalogPage() {
     );
   };
 
+  const toggleArticleIssueKind = (kind: CatalogIssueKind) => {
+    setArticleIssueSettings((current) => ({
+      ...current,
+      visibleKinds: {
+        ...current.visibleKinds,
+        [kind]: !current.visibleKinds[kind],
+      },
+    }));
+  };
+
   useEffect(() => {
     return () => {
       chartFetchAbortRef.current?.abort();
@@ -1855,13 +2282,6 @@ export function CatalogPage() {
   useEffect(() => {
     writeCatalogIssuesCache(yesterdayIso, articleIssueCacheByRef);
   }, [articleIssueCacheByRef, yesterdayIso]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(CATALOG_ISSUES_COLLAPSED_STORAGE_KEY, articleIssuesCollapsed ? "1" : "0");
-  }, [articleIssuesCollapsed]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1931,7 +2351,7 @@ export function CatalogPage() {
       setChartLoading(true);
       setChartError(null);
       setChartData(null);
-      const productChunks = chunkItems(chartProductRefs, 24);
+      const productChunks = chunkItems(chartProductRefs, CATALOG_CHART_FETCH_CHUNK_SIZE);
       setChartProgress({
         cacheKey: chartCacheKey,
         selectionCount: chartSelectionCount,
@@ -1993,10 +2413,10 @@ export function CatalogPage() {
     };
   }, [chartCacheKey, chartCollapsed, chartProductRefsKey, chartSelectionCount, chartRangeEnd, chartRangeStart]);
 
-  const ctr = payload.totals.views > 0 ? (payload.totals.clicks / payload.totals.views) * 100 : 0;
-  const cr = payload.totals.clicks > 0 ? (payload.totals.orders / payload.totals.clicks) * 100 : 0;
-  const compareCtr = comparePayload && comparePayload.totals.views > 0 ? (comparePayload.totals.clicks / comparePayload.totals.views) * 100 : null;
-  const compareCr = comparePayload && comparePayload.totals.clicks > 0 ? (comparePayload.totals.orders / comparePayload.totals.clicks) * 100 : null;
+  const ctr = visibleTotals.views > 0 ? (visibleTotals.clicks / visibleTotals.views) * 100 : 0;
+  const cr = visibleTotals.clicks > 0 ? (visibleTotals.orders / visibleTotals.clicks) * 100 : 0;
+  const compareCtr = compareVisibleTotals && compareVisibleTotals.views > 0 ? (compareVisibleTotals.clicks / compareVisibleTotals.views) * 100 : null;
+  const compareCr = compareVisibleTotals && compareVisibleTotals.clicks > 0 ? (compareVisibleTotals.orders / compareVisibleTotals.clicks) * 100 : null;
   const diffValue = (current: number | string | null | undefined, previous: number | string | null | undefined) => {
     const currentValue = toNumber(current);
     const previousValue = toNumber(previous);
@@ -2047,6 +2467,7 @@ export function CatalogPage() {
     setTurnoverTo("");
     setSortField("stock");
     setSortDirection("desc");
+    setQuickView("all");
   };
   const activeListFilterCount =
     (query.trim() ? 1 : 0) +
@@ -2054,7 +2475,13 @@ export function CatalogPage() {
     (selectedCategories.length ? 1 : 0) +
     (selectedSkus.length ? 1 : 0) +
     (stockFrom || stockTo ? 1 : 0) +
-    (turnoverFrom || turnoverTo ? 1 : 0);
+    (turnoverFrom || turnoverTo ? 1 : 0) +
+    (quickView !== "all" ? 1 : 0);
+  const articleIssuesCollectLabel = articleIssuesLoading
+    ? "Собираем ошибки..."
+    : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
+      ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
+      : "Собрать ошибки за вчера";
 
   const collectArticleIssues = async () => {
     articleIssuesAbortRef.current?.abort();
@@ -2236,101 +2663,180 @@ export function CatalogPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHero
-        title="Каталог артикулов"
-        subtitle={
-          <>
-            <p>
-              Сводка по всем магазинам и товарам за <span className="font-medium text-[var(--color-ink)]">{formatDateRange(start, end)}</span>.
-            </p>
-            <p className="mt-2">
-              В каталоге сейчас {formatNumber(payload.total_articles)} артикулов из {formatNumber(payload.total_shops)} магазинов.
-            </p>
-          </>
-        }
-        metrics={
-          <>
-            <span className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)]">{formatNumber(payload.total_shops)} магазинов</span>
-            <span className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)]">{formatNumber(payload.total_articles)} артикулов</span>
-          </>
-        }
-      />
+    <div className="space-y-4">
+      <div className="glass-panel rounded-[24px] px-4 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-200">XWAY Dashboard</p>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <h1 className="font-display text-2xl font-semibold leading-none text-[var(--color-ink)] sm:text-3xl">Каталог артикулов</h1>
+          <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">{formatDateRange(start, end)}</span>
+          <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">
+            {formatNumber(visibleQuickViewMetrics.all)} / {formatNumber(payload.total_articles)} артикулов
+          </span>
+          <span className="metric-chip rounded-2xl px-3 py-1.5 text-xs text-[var(--color-muted)]">{formatNumber(payload.total_shops)} магазина</span>
+        </div>
+      </div>
 
       <CatalogStickyFilterShell
         onHeightChange={setToolbarHeight}
         activeFiltersCount={activeListFilterCount}
         toolbar={({ collapseAll, detailsExpanded, toggleDetails }) => (
-          <RangeToolbar
-            start={start}
-            end={end}
-            preset={preset}
-            onPresetChange={handlePresetChange}
-            onRangeChange={handleRangeChange}
-            extra={
-              <>
+          <div className="glass-panel rounded-[24px] p-3">
+            <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+              <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-3 xl:max-w-[620px]">
+                <label className="metric-chip flex h-9 min-w-0 items-center gap-2 rounded-2xl px-3 text-sm">
+                  <CalendarDays className="size-4 shrink-0 text-brand-200" />
+                  <select
+                    value={preset}
+                    onChange={(event) => handlePresetChange(event.target.value)}
+                    className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-ink)] outline-none"
+                  >
+                    <option value="custom">Свой диапазон</option>
+                    <option value="today">Сегодня</option>
+                    <option value="yesterday">Вчера</option>
+                    <option value="3">Последние 3 дня</option>
+                    <option value="7">Последние 7 дней</option>
+                    <option value="14">Последние 14 дней</option>
+                    <option value="30">Последние 30 дней</option>
+                  </select>
+                </label>
+                <label className="metric-chip flex h-9 min-w-0 items-center gap-2 rounded-2xl px-3 text-sm">
+                  <span className="text-[var(--color-muted)]">с</span>
+                  <input
+                    type="date"
+                    value={start || ""}
+                    onChange={(event) => handleRangeChange({ start: event.target.value, end: end || event.target.value })}
+                    className="min-w-0 flex-1 bg-transparent text-[var(--color-ink)] outline-none"
+                  />
+                </label>
+                <label className="metric-chip flex h-9 min-w-0 items-center gap-2 rounded-2xl px-3 text-sm">
+                  <span className="text-[var(--color-muted)]">по</span>
+                  <input
+                    type="date"
+                    value={end || ""}
+                    onChange={(event) => handleRangeChange({ start: start || event.target.value, end: event.target.value })}
+                    className="min-w-0 flex-1 bg-transparent text-[var(--color-ink)] outline-none"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                 <button
                   type="button"
-                  onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                  onClick={collectArticleIssues}
+                  disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
+                  className={cn(
+                    "inline-flex h-9 items-center rounded-2xl px-3.5 text-sm font-medium transition",
+                    articleIssuesLoading || !visibleIssueTargetRefs.length
+                      ? "cursor-not-allowed border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] opacity-70"
+                      : "bg-brand-200 text-white shadow-[0_12px_28px_rgba(241,120,40,0.18)] hover:bg-brand-500",
+                  )}
                 >
-                  <ArrowUpDown className="size-4 rotate-90" />
-                  Наверх
+                  {articleIssuesLoading
+                    ? "Собираем..."
+                    : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
+                      ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
+                      : "Собрать ошибки"}
                 </button>
                 <button
                   type="button"
-                  onClick={collapseAll}
-                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                  onClick={() => setChartCollapsed((current) => !current)}
+                  className="metric-chip inline-flex h-9 items-center rounded-2xl px-3.5 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
                 >
-                  <SlidersHorizontal className="size-4" />
-                  Скрыть фильтры
+                  {chartCollapsed ? "График" : "Скрыть график"}
                 </button>
                 {activeListFilterCount > 0 ? (
                   <button
                     type="button"
                     onClick={clearLocalFilters}
-                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
+                    className="metric-chip inline-flex h-9 items-center rounded-2xl px-3.5 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
                   >
-                    Сбросить выборку
+                    Сбросить
                   </button>
                 ) : null}
                 <button
                   type="button"
                   onClick={toggleDetails}
                   className={cn(
-                    "metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm transition hover:bg-[var(--color-surface-strong)]",
+                    "metric-chip inline-flex h-9 items-center gap-2 rounded-2xl px-3.5 text-sm transition hover:bg-[var(--color-surface-strong)]",
                     activeListFilterCount > 0 ? "text-brand-200" : "text-[var(--color-ink)]",
                   )}
                 >
-                  <span>
-                    {detailsExpanded ? "Свернуть параметры" : "Параметры списка"}
-                    {activeListFilterCount > 0 ? ` · ${formatNumber(activeListFilterCount)}` : ""}
-                  </span>
+                  <span>Фильтры{activeListFilterCount > 0 ? ` · ${formatNumber(activeListFilterCount)}` : ""}</span>
                   <ChevronDown className={cn("size-4 transition-transform", detailsExpanded && "rotate-180")} />
                 </button>
-              </>
-            }
-          />
+                <button
+                  type="button"
+                  onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                  title="Наверх"
+                  aria-label="Наверх"
+                  className="metric-chip inline-flex h-9 w-9 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                >
+                  <ArrowUpDown className="size-4 rotate-90" />
+                </button>
+                <button
+                  type="button"
+                  onClick={collapseAll}
+                  title="Скрыть панель"
+                  aria-label="Скрыть панель"
+                  className="metric-chip inline-flex h-9 w-9 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                >
+                  <SlidersHorizontal className="size-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-2 flex gap-2 overflow-x-auto pb-0.5">
+              {CATALOG_QUICK_VIEW_OPTIONS.map((option) => {
+                const isActive = option.value === quickView;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setQuickView(option.value)}
+                    aria-pressed={isActive}
+                    className={cn(
+                      "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
+                      isActive
+                        ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
+                        : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
+                    )}
+                  >
+                    <span>{option.label}</span>
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                        isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
+                      )}
+                    >
+                      {formatNumber(quickViewMetrics[option.value])}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
         filters={
-          <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-1">
-                <h3 className="font-display text-base font-semibold text-[var(--color-ink)]">Фильтры списка артикулов</h3>
-                <p className="text-sm text-[var(--color-muted)]">Поиск, кабинеты, остаток, оборачиваемость и сортировка таблиц по кабинетам.</p>
-              </div>
+          <div className="glass-panel rounded-[24px] p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-display text-base font-semibold text-[var(--color-ink)]">Параметры списка</h3>
               <button
                 type="button"
                 onClick={clearLocalFilters}
-                className="metric-chip rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                className="metric-chip rounded-[18px] px-3 py-1.5 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
               >
                 Сбросить фильтры
               </button>
             </div>
 
-            <div className="grid gap-2.5 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1.2fr)_repeat(3,minmax(160px,0.9fr))]">
               <div className="min-w-0">
-                <SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />
+                <SearchField
+                  value={query}
+                  onChange={(value) => startTransition(() => setQuery(value))}
+                  placeholder="Фильтр по артикулу, названию, бренду, категории"
+                  className="min-h-11 rounded-[18px] px-3 py-2"
+                />
               </div>
               <SearchableMultiSelect
                 label="Кабинет"
@@ -2358,7 +2864,7 @@ export function CatalogPage() {
               />
             </div>
 
-            <div className="mt-2.5 grid gap-2.5 lg:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-[repeat(2,minmax(190px,1fr))_minmax(170px,0.85fr)_minmax(160px,0.8fr)]">
               <NumericRangeField
                 label="Остаток"
                 fromValue={stockFrom}
@@ -2378,7 +2884,7 @@ export function CatalogPage() {
                 <select
                   value={sortField}
                   onChange={(event) => setSortField(event.target.value as CatalogSortField)}
-                  className="bg-transparent text-sm text-[var(--color-ink)] outline-none"
+                  className="w-full bg-transparent text-sm text-[var(--color-ink)] outline-none"
                 >
                   <option value="stock">Остаток</option>
                   <option value="turnover">Оборачиваемость</option>
@@ -2397,7 +2903,7 @@ export function CatalogPage() {
                 <select
                   value={sortDirection}
                   onChange={(event) => setSortDirection(event.target.value as CatalogSortDirection)}
-                  className="bg-transparent text-sm text-[var(--color-ink)] outline-none"
+                  className="w-full bg-transparent text-sm text-[var(--color-ink)] outline-none"
                 >
                   <option value="desc">По убыванию</option>
                   <option value="asc">По возрастанию</option>
@@ -2408,34 +2914,79 @@ export function CatalogPage() {
         }
       />
 
-      <SectionCard
-        title="График каталога"
-        caption={`Отображение за ${chartWindow} дн. · ${chartRangeLabel}. Отдельная шкала рассчитывается для каждого показателя, поэтому сильные расхождения по абсолютным значениям не сжимают остальные линии.`}
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="chart-window-switch" aria-label="Период графика каталога">
-              {[7, 14, 30, 60].map((windowValue) => (
-                <button
-                  key={windowValue}
-                  type="button"
-                  onClick={() => setChartWindow(windowValue as CatalogChartWindow)}
-                  className={chartWindow === windowValue ? "chart-window-chip is-active" : "chart-window-chip"}
-                >
-                  {windowValue}
-                </button>
-              ))}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(178px,1fr))] gap-3">
+        <MetricCard
+          label="Расход"
+          value={formatMoney(visibleTotals.expense_sum)}
+          deltaText={renderDeltaText(formatSignedMoney(diffValue(visibleTotals.expense_sum, compareVisibleTotals?.expense_sum)))}
+          deltaClassName={deltaClassName(diffValue(visibleTotals.expense_sum, compareVisibleTotals?.expense_sum), false)}
+        />
+        <MetricCard
+          label="Показы"
+          value={formatCompactNumber(visibleTotals.views)}
+          deltaText={renderDeltaText(formatSignedNumber(diffValue(visibleTotals.views, compareVisibleTotals?.views)))}
+          deltaClassName={deltaClassName(diffValue(visibleTotals.views, compareVisibleTotals?.views), true)}
+        />
+        <MetricCard
+          label="Клики"
+          value={formatCompactNumber(visibleTotals.clicks)}
+          deltaText={renderDeltaText(formatSignedNumber(diffValue(visibleTotals.clicks, compareVisibleTotals?.clicks)))}
+          deltaClassName={deltaClassName(diffValue(visibleTotals.clicks, compareVisibleTotals?.clicks), true)}
+        />
+        <MetricCard
+          label="Корзины"
+          value={formatCompactNumber(visibleTotals.atbs)}
+          deltaText={renderDeltaText(formatSignedNumber(diffValue(visibleTotals.atbs, compareVisibleTotals?.atbs)))}
+          deltaClassName={deltaClassName(diffValue(visibleTotals.atbs, compareVisibleTotals?.atbs), true)}
+        />
+        <MetricCard
+          label="Заказы"
+          value={formatNumber(visibleTotals.orders)}
+          deltaText={renderDeltaText(formatSignedNumber(diffValue(visibleTotals.orders, compareVisibleTotals?.orders)))}
+          deltaClassName={deltaClassName(diffValue(visibleTotals.orders, compareVisibleTotals?.orders), true)}
+        />
+        <MetricCard
+          label="CTR каталога"
+          value={formatPercent(ctr)}
+          deltaText={renderDeltaText(formatSignedPercent(diffValue(ctr, compareCtr)))}
+          deltaClassName={deltaClassName(diffValue(ctr, compareCtr), true)}
+        />
+        <MetricCard
+          label="CR каталога"
+          value={formatPercent(cr)}
+          deltaText={renderDeltaText(formatSignedPercent(diffValue(cr, compareCr)))}
+          deltaClassName={deltaClassName(diffValue(cr, compareCr), true)}
+        />
+      </div>
+
+      {!chartCollapsed ? (
+        <SectionCard
+          title="График каталога"
+          caption={`${chartRangeLabel} · ${formatNumber(chartSelectionCount)} ${formatProductsWord(chartSelectionCount)}`}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="chart-window-switch" aria-label="Период графика каталога">
+                {[7, 14, 30, 60].map((windowValue) => (
+                  <button
+                    key={windowValue}
+                    type="button"
+                    onClick={() => setChartWindow(windowValue as CatalogChartWindow)}
+                    className={chartWindow === windowValue ? "chart-window-chip is-active" : "chart-window-chip"}
+                  >
+                    {windowValue}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setChartCollapsed(true)}
+                className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+              >
+                Скрыть
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setChartCollapsed((current) => !current)}
-              className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-            >
-              {chartCollapsed ? "Показать график" : "Скрыть график"}
-            </button>
-          </div>
-        }
-      >
-        {!chartCollapsed ? (
+          }
+        >
           <CatalogSelectionChart
             rows={chartData?.rows ?? []}
             totals={chartData?.totals ?? null}
@@ -2449,85 +3000,99 @@ export function CatalogPage() {
             rangeLabel={chartRangeLabel}
             windowDays={chartWindow}
           />
-        ) : (
-          <div className="text-sm text-[var(--color-muted)]">
-            График скрыт. В текущую выборку попало {formatNumber(chartSelectionCount)} {formatProductsWord(chartSelectionCount)}. При открытии он загрузится отдельно за последние {chartWindow} дн.
+        </SectionCard>
+      ) : null}
+
+      <section className="catalog-issues-panel glass-panel" aria-labelledby="catalog-issues-title">
+        <div className="catalog-issues-panel-main">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 id="catalog-issues-title" className="font-display text-base font-semibold text-[var(--color-ink)]">
+                Ошибки за {yesterdayLabel}
+              </h2>
+              <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                {formatNumber(articleIssueRowsAllKinds.length)} с ошибками
+              </span>
+              {articleIssuesHoursTotal > 0 ? (
+                <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                  {formatNumber(articleIssuesHoursTotal, 1)} ч простоя
+                </span>
+              ) : null}
+              {articleIssuesEstimatedGapTotal > 0 ? (
+                <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                  ≈ {formatMoney(articleIssuesEstimatedGapTotal)}
+                </span>
+              ) : null}
+            </div>
+            <p className="catalog-issues-status" role="status" aria-live="polite">
+              {articleIssuesStatusText}
+            </p>
+            {articleIssuesError ? (
+              <p className="mt-1 line-clamp-2 text-xs text-rose-600" role="alert">
+                {articleIssuesError}
+              </p>
+            ) : null}
           </div>
-        )}
-      </SectionCard>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-        <MetricCard
-          label="Расход"
-          value={formatMoney(payload.totals.expense_sum)}
-          icon={<Layers3 className="size-5" />}
-          deltaText={renderDeltaText(formatSignedMoney(diffValue(payload.totals.expense_sum, comparePayload?.totals.expense_sum)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.expense_sum, comparePayload?.totals.expense_sum), false)}
-        />
-        <MetricCard
-          label="Показы"
-          value={formatCompactNumber(payload.totals.views)}
-          icon={<ShoppingBag className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.views, comparePayload?.totals.views)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.views, comparePayload?.totals.views), true)}
-        />
-        <MetricCard
-          label="Клики"
-          value={formatCompactNumber(payload.totals.clicks)}
-          icon={<MousePointerClick className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.clicks, comparePayload?.totals.clicks)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.clicks, comparePayload?.totals.clicks), true)}
-        />
-        <MetricCard
-          label="Корзины"
-          value={formatCompactNumber(payload.totals.atbs)}
-          icon={<ShoppingCart className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.atbs, comparePayload?.totals.atbs)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.atbs, comparePayload?.totals.atbs), true)}
-        />
-        <MetricCard
-          label="Заказы"
-          value={formatNumber(payload.totals.orders)}
-          icon={<PackageCheck className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.orders, comparePayload?.totals.orders)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.orders, comparePayload?.totals.orders), true)}
-        />
-        <MetricCard
-          label="CTR каталога"
-          value={formatPercent(ctr)}
-          icon={<FolderOpen className="size-5" />}
-          deltaText={renderDeltaText(formatSignedPercent(diffValue(ctr, compareCtr)))}
-          deltaClassName={deltaClassName(diffValue(ctr, compareCtr), true)}
-        />
-        <MetricCard
-          label="CR каталога"
-          value={formatPercent(cr)}
-          icon={<ExternalLink className="size-5" />}
-          deltaText={renderDeltaText(formatSignedPercent(diffValue(cr, compareCr)))}
-          deltaClassName={deltaClassName(diffValue(cr, compareCr), true)}
-        />
-      </div>
+          <div className="catalog-issues-progress" aria-label={`Обработано ${articleIssuesCompletedCount} из ${articleIssuesTotalCount}`}>
+            <div className="catalog-issues-progress-track">
+              <div style={{ width: `${articleIssuesTotalCount ? Math.round((articleIssuesCompletedCount / articleIssuesTotalCount) * 100) : 0}%` }} />
+            </div>
+            <span>
+              {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
+            </span>
+          </div>
+        </div>
 
-      <SectionCard
-        title="Ошибки по артикулам"
-        caption={`Бюджет и лимиты догружаются по видимым артикулам с остатком > 0 за ${yesterdayLabel}. Простои короче ${formatNumber(articleIssueSettings.downtimeThresholdHours, 1)} ч в этом блоке не считаются ошибкой. Оборачиваемость считается сразу по текущей выборке, порог сейчас ${formatTurnoverDays(articleIssueSettings.turnoverThreshold)}.`}
-        actions={
-          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+        <div className="catalog-issues-controls">
+          <div className="catalog-issues-kind-row" aria-label="Типы ошибок">
+            <button
+              type="button"
+              onClick={() =>
+                setArticleIssueSettings((current) => ({
+                  ...current,
+                  visibleKinds: DEFAULT_CATALOG_ISSUE_VISIBILITY,
+                }))
+              }
+              aria-pressed={enabledIssueKinds.length === CATALOG_ISSUE_KIND_ORDER.length}
+              className={cn("catalog-issue-filter-chip", enabledIssueKinds.length === CATALOG_ISSUE_KIND_ORDER.length && "is-active")}
+            >
+              Все
+              <span>{formatNumber(articleIssueRowsAllKinds.length)}</span>
+            </button>
+            {CATALOG_ISSUE_KIND_ORDER.map((kind) => {
+              const isActive = articleIssueSettings.visibleKinds[kind];
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => toggleArticleIssueKind(kind)}
+                  aria-pressed={isActive}
+                  className={cn("catalog-issue-filter-chip", `is-${kind}`, isActive && "is-active")}
+                >
+                  {resolveCatalogIssueKindShortLabel(kind)}
+                  <span>{formatNumber(articleIssueKindCounts[kind])}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="catalog-issues-action-row">
             <SearchableMultiSelect
-              label="Кабинеты для сбора"
+              label="Кабинеты"
               allLabel="Все кабинеты"
               options={issueShopOptions}
               selectedValues={selectedIssueShopIds}
               onChange={setSelectedIssueShopIds}
               emptyText="Кабинеты в текущей выборке не найдены"
-              className="min-w-[280px]"
+              className="catalog-issues-shop-select"
             />
             <button
               type="button"
               onClick={handleCopyArticleIssues}
               disabled={!articleIssueRows.length}
               className={cn(
-                "metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm transition",
+                "metric-chip inline-flex h-9 items-center rounded-2xl px-3.5 text-sm transition",
                 articleIssueRows.length
                   ? articleIssuesCopyState === "copied"
                     ? "text-emerald-700 hover:bg-[var(--color-surface-strong)]"
@@ -2540,197 +3105,38 @@ export function CatalogPage() {
               {articleIssuesCopyState === "copied"
                 ? "Скопировано"
                 : articleIssuesCopyState === "error"
-                  ? "Ошибка копирования"
-                  : "Скопировать ошибки"}
+                  ? "Ошибка"
+                  : "Скопировать"}
             </button>
             <button
               type="button"
               onClick={() => setArticleIssueSettingsOpen(true)}
-              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
+              title="Настройки блока ошибок"
+              aria-label="Настройки блока ошибок"
+              className="metric-chip inline-flex h-9 w-9 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
             >
               <SlidersHorizontal className="size-4" />
-              Настройки
             </button>
             <button
               type="button"
               onClick={collectArticleIssues}
               disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
               className={cn(
-                "metric-chip rounded-2xl px-4 py-2 text-sm transition",
+                "inline-flex h-9 items-center rounded-2xl px-3.5 text-sm font-medium transition",
                 articleIssuesLoading || !visibleIssueTargetRefs.length
-                  ? "cursor-not-allowed text-[var(--color-muted)] opacity-70"
-                  : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
+                  ? "cursor-not-allowed border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] opacity-70"
+                  : "bg-brand-200 text-white shadow-[0_12px_28px_rgba(241,120,40,0.18)] hover:bg-brand-500",
               )}
             >
-              {articleIssuesLoading
-                ? "Собираем ошибки..."
-                : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
-                  ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
-                  : "Собрать ошибки за вчера"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setArticleIssuesCollapsed((current) => !current)}
-              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-            >
-              <span>{articleIssuesCollapsed ? "Развернуть блок" : "Свернуть блок"}</span>
-              <ChevronDown className={cn("size-4 transition-transform", !articleIssuesCollapsed && "rotate-180")} />
+              {articleIssuesCollectLabel}
             </button>
           </div>
-        }
-      >
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-muted)]">
-            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleArticleCodes.length)} артикулов в текущей выборке</span>
-            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issueScopeShopCount)} кабинетов для сбора</span>
-            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleIssueTargetRefs.length)} с остатком &gt; 0</span>
-            {articleIssuesTotalCount ? (
-              <span className="metric-chip rounded-2xl px-3 py-2">
-                Обработано {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
-              </span>
-            ) : null}
-            <span className="metric-chip rounded-2xl px-3 py-2">
-              Порог простоя {formatNumber(articleIssueSettings.downtimeThresholdHours, 1)} ч
-            </span>
-            <span className="metric-chip rounded-2xl px-3 py-2">
-              Порог оборачиваемости {formatTurnoverDays(articleIssueSettings.turnoverThreshold)}
-            </span>
-            {enabledIssueKinds.map((kind) => (
-              <span key={kind} className="metric-chip rounded-2xl px-3 py-2">
-                {resolveCatalogIssueKindLabel(kind)}
-              </span>
-            ))}
-            {articleIssueRows.length ? (
-              <span className="metric-chip rounded-2xl px-3 py-2">
-                {formatNumber(articleIssueRows.length)} с ошибками в блоке
-              </span>
-            ) : null}
-          </div>
-
-          {articleIssuesError ? (
-            <div className="rounded-[22px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {articleIssuesError}
-            </div>
-          ) : null}
-
-          {!articleIssuesCollapsed ? (
-            <>
-              {articleIssuesLoading ? (
-                <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-                  {articleIssueRows.length
-                    ? `Обработано ${formatNumber(articleIssuesCompletedCount)} из ${formatNumber(articleIssuesTotalCount)} артикулов. Уже показаны найденные ошибки.`
-                    : `Загружаю вчерашние ошибки по ${formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком > 0.`}
-                </div>
-              ) : null}
-
-              {!enabledIssueKinds.length ? (
-                <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-                  Все типы ошибок скрыты в настройках блока.
-                </div>
-              ) : null}
-
-              {!articleIssuesLoading && !articleIssuesError && enabledIssueKinds.length > 0 && !articleIssueRows.length ? (
-                <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
-                  За {yesterdayLabel} по текущей выборке не найдено ошибок по выбранным типам.
-                </div>
-              ) : null}
-
-              {articleIssueRows.length ? (
-                <div className="overflow-x-auto pb-1">
-                  <div className="space-y-2" style={{ minWidth: `${280 + enabledIssueKinds.length * 250}px` }}>
-                    <div
-                      className="grid gap-3 px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]"
-                      style={{ gridTemplateColumns: articleIssueGridTemplate }}
-                    >
-                      <div>Товар</div>
-                      {enabledIssueKinds.map((kind) => (
-                        <div key={`issue-header-${kind}`} className="px-1">
-                          <div>{resolveCatalogIssueKindLabel(kind)}</div>
-                          <div className="mt-1 text-[10px] font-normal normal-case tracking-normal text-[var(--color-muted)]">
-                            {resolveCatalogIssueKindCaption(kind)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {articleIssueRows.map((item) => {
-                      const totalHours = getArticleIssueHoursTotal(item);
-                      const totalIncidents = getArticleIssueIncidentsTotal(item);
-                      const turnoverIssue = getArticleIssueByKind(item, "turnover");
-                      return (
-                        <article
-                          key={item.ref}
-                          className="rounded-[22px] border border-[var(--color-line)] bg-white/92 p-3 shadow-[0_10px_24px_rgba(44,35,66,0.05)]"
-                        >
-                          <div className="grid gap-3" style={{ gridTemplateColumns: articleIssueGridTemplate }}>
-                            <div className="min-w-0">
-                              <div className="flex items-start gap-3">
-                                <Link
-                                  to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="h-[86px] w-[64px] shrink-0 overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] shadow-[0_8px_20px_rgba(44,35,66,0.06)]"
-                                  aria-label={`Открыть товар ${item.name}`}
-                                >
-                                  {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" /> : null}
-                                </Link>
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <Link
-                                      to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="min-w-0 font-display text-[1.05rem] font-semibold leading-tight text-[var(--color-ink)] hover:text-brand-200"
-                                      title={item.name}
-                                    >
-                                      <span className="line-clamp-2">{item.name}</span>
-                                    </Link>
-                                    {totalHours > 0 ? (
-                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                                        {formatNumber(totalHours, 1)} ч простоя
-                                      </span>
-                                    ) : null}
-                                    {totalIncidents > 0 ? (
-                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                                        {formatIssueIncidents(totalIncidents)}
-                                      </span>
-                                    ) : null}
-                                    {turnoverIssue?.turnoverDays !== undefined && turnoverIssue?.turnoverDays !== null ? (
-                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                                        {formatTurnoverDays(turnoverIssue.turnoverDays)}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                  <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
-                                    Артикул {item.article}
-                                  </p>
-                                </div>
-                                <a
-                                  href={item.productUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-[var(--color-line)] px-2.5 py-1.5 text-xs text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
-                                >
-                                  XWAY
-                                  <ExternalLink className="size-3.5" />
-                                </a>
-                              </div>
-                            </div>
-
-                            {enabledIssueKinds.map((kind) => (
-                              <CatalogIssueCell key={`${item.ref}-${kind}`} issue={getArticleIssueByKind(item, kind)} />
-                            ))}
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : null}
         </div>
-      </SectionCard>
+
+        {!enabledIssueKinds.length ? (
+          <div className="catalog-issues-note">Все типы ошибок скрыты. Включите хотя бы один chip, чтобы увидеть отметки в таблице.</div>
+        ) : null}
+      </section>
 
       <div className="space-y-5">
         {visibleShops.map((shop) => {
@@ -2740,51 +3146,41 @@ export function CatalogPage() {
           return (
             <SectionCard
               key={shop.id}
-              className="catalog-shop-section overflow-visible"
+              className="catalog-shop-section overflow-visible !p-4"
               title={shop.name}
               caption={
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span>{shop.marketplace} · {shop.tariff_code}</span>
+                  <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">{formatNumber(shop.articles.length)} арт.</span>
+                  <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">{formatMoney(totals.expense_sum)}</span>
+                  <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">{formatNumber(totals.orders)} заказов</span>
+                  <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">CR {formatPercent(totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null)}</span>
+                  <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">Баланс {formatMoney(shop.balance)}</span>
                   {shop.expire_in ? <span className="text-[var(--color-muted)]">{shop.expire_in}</span> : null}
                 </div>
               }
               actions={
-                <button
-                  type="button"
-                  onClick={() => toggleShop(shop.id)}
-                  className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-                >
-                  {collapsed ? "Развернуть" : "Свернуть"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={shop.shop_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="metric-chip inline-flex items-center gap-1.5 rounded-2xl px-3 py-2 text-xs text-brand-200 transition hover:bg-[var(--color-surface-strong)]"
+                  >
+                    XWAY
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => toggleShop(shop.id)}
+                    className="metric-chip rounded-2xl px-3 py-2 text-xs text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                  >
+                    {collapsed ? "Развернуть" : "Свернуть"}
+                  </button>
+                </div>
               }
             >
-              <div className="space-y-5">
-                <InlineMetricSet
-                  values={[
-                    { label: "Артикулы", value: formatNumber(shop.articles.length) },
-                    { label: "Показы", value: formatCompactNumber(totals.views) },
-                    { label: "Клики", value: formatCompactNumber(totals.clicks) },
-                    { label: "Заказы", value: formatNumber(totals.orders) },
-                    { label: "Расход", value: formatMoney(totals.expense_sum) },
-                    { label: "CR", value: formatPercent(totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null) },
-                    { label: "Баланс", value: formatMoney(shop.balance) },
-                    {
-                      label: "Магазин",
-                      value: (
-                        <a
-                          href={shop.shop_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 whitespace-nowrap text-brand-200 hover:text-brand-100"
-                        >
-                          Открыть в XWAY
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                      ),
-                    },
-                  ]}
-                />
-
+              <div className="space-y-3">
                 {!collapsed ? (
                   <MetricTable
                     rows={shop.articles}
@@ -2812,6 +3208,26 @@ export function CatalogPage() {
                           </div>
                         ),
                       },
+                      {
+                        key: "issues",
+                        header: <span className="inline-block w-[190px]">Ошибки</span>,
+                        render: (article) => {
+                          const ref = `${shop.id}:${article.product_id}`;
+                          return (
+                            <div className="w-[190px] max-w-[190px]">
+                              <CatalogIssueInlineBadges
+                                item={articleIssueRowsByRef.get(ref) ?? null}
+                                isLoaded={Boolean(articleIssueCacheByRef[ref])}
+                                isLoading={articleIssuesLoading}
+                                onSelect={(kind) => {
+                                  setSelectedArticleIssueRef(ref);
+                                  setSelectedArticleIssueKind(kind);
+                                }}
+                              />
+                            </div>
+                          );
+                        },
+                      },
                       { key: "stock", header: "Остаток", align: "right", render: (article) => formatNumber(article.stock) },
                       {
                         key: "turnover",
@@ -2833,7 +3249,7 @@ export function CatalogPage() {
                         render: (article) => {
                           const slots = buildCatalogCampaignSlots(article);
                           return (
-                          <div className="catalog-campaign-board min-w-[560px]">
+                          <div className="catalog-campaign-board min-w-[360px]">
                             {slots.length ? (
                               slots.map((slot) => (
                                 <div key={`${article.article}-${slot.key}`} className={cn("catalog-campaign-card", `tone-${slot.displayStatus}`)}>
@@ -2876,9 +3292,7 @@ export function CatalogPage() {
                         render: (article) => (
                           <Link
                             to={`/product${buildProductSearch(article.article, start, end)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-ink)] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#342f49]"
+                            className="inline-flex items-center gap-2 rounded-2xl border border-[var(--color-line)] bg-white/82 px-3 py-2 text-xs font-medium text-[var(--color-ink)] transition hover:bg-[var(--color-surface-soft)]"
                           >
                             Детали
                           </Link>
@@ -2901,14 +3315,23 @@ export function CatalogPage() {
               onClick={clearLocalFilters}
               className="text-brand-200 underline underline-offset-4"
             >
-              Очистить локальные фильтры
+              Сбросить все фильтры
             </button>
-            <span>или</span>
-            <Link to={`/catalog${catalogSearch}`} target="_blank" rel="noreferrer" className="text-brand-200 underline underline-offset-4">
-              вернуться к полному периоду
-            </Link>
           </div>
         </SectionCard>
+      ) : null}
+
+      {selectedArticleIssueRow ? (
+        <CatalogIssueDrawer
+          item={selectedArticleIssueRow}
+          preferredKind={selectedArticleIssueKind}
+          yesterdayIso={yesterdayIso}
+          yesterdayLabel={yesterdayLabel}
+          onClose={() => {
+            setSelectedArticleIssueRef(null);
+            setSelectedArticleIssueKind(null);
+          }}
+        />
       ) : null}
 
       <CatalogIssuesSettingsDialog
@@ -2929,15 +3352,7 @@ export function CatalogPage() {
           }))
         }
         visibleKinds={articleIssueSettings.visibleKinds}
-        onToggleKind={(kind) =>
-          setArticleIssueSettings((current) => ({
-            ...current,
-            visibleKinds: {
-              ...current.visibleKinds,
-              [kind]: !current.visibleKinds[kind],
-            },
-          }))
-        }
+        onToggleKind={toggleArticleIssueKind}
       />
     </div>
   );

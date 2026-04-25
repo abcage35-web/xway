@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
+import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
 import { Link } from "react-router";
 import { cn } from "../lib/format";
 
@@ -76,16 +76,6 @@ function ToolbarLogo({ className = "w-6 h-6" }: { className?: string }) {
   );
 }
 
-function CalendarIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0 opacity-50">
-      <rect x="1" y="3" width="12" height="10" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M4 1v2M10 1v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path d="M1 6h12" stroke="currentColor" strokeWidth="1.1" strokeOpacity="0.5" />
-    </svg>
-  );
-}
-
 function CalendarPortal({
   anchorRect,
   onClose,
@@ -109,9 +99,18 @@ function CalendarPortal({
         onClose();
       }
     };
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
 
     document.addEventListener("mousedown", handleMouseDown, true);
-    return () => document.removeEventListener("mousedown", handleMouseDown, true);
+    window.addEventListener("keydown", handleKeydown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown, true);
+      window.removeEventListener("keydown", handleKeydown);
+    };
   }, [onClose]);
 
   return createPortal(
@@ -119,6 +118,8 @@ function CalendarPortal({
       ref={ref}
       style={{ position: "fixed", top, left, width, zIndex: 99999 }}
       className="overflow-hidden rounded-[20px] border border-[var(--color-line)] bg-white shadow-[0_20px_60px_rgba(44,35,66,0.22)]"
+      role="dialog"
+      aria-label="Выбор даты"
     >
       {children}
     </div>,
@@ -209,6 +210,8 @@ function ToolbarDatePicker({
         ref={buttonRef}
         type="button"
         onClick={openCalendar}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className={cn(
           "flex h-8 items-center gap-2 rounded-[11px] border px-3 text-sm font-semibold whitespace-nowrap transition-all",
           open
@@ -217,19 +220,19 @@ function ToolbarDatePicker({
         )}
       >
         {formatDisplayDate(value)}
-        <CalendarIcon />
+        <CalendarDays className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
       </button>
 
       {open && anchorRect ? (
         <CalendarPortal anchorRect={anchorRect} onClose={() => setOpen(false)}>
           <div className="flex items-center justify-between border-b border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-3">
-            <button type="button" onClick={() => (viewMonth === 0 ? (setViewMonth(11), setViewYear((year) => year - 1)) : setViewMonth((month) => month - 1))} className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-line)]">
+            <button type="button" aria-label="Предыдущий месяц" onClick={() => (viewMonth === 0 ? (setViewMonth(11), setViewYear((year) => year - 1)) : setViewMonth((month) => month - 1))} className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-line)]">
               <ChevronLeft className="h-4 w-4 text-[var(--color-muted)]" />
             </button>
             <span className="font-display text-sm text-[var(--color-ink)]">
               {MONTHS_RU[viewMonth]} {viewYear}
             </span>
-            <button type="button" onClick={() => (viewMonth === 11 ? (setViewMonth(0), setViewYear((year) => year + 1)) : setViewMonth((month) => month + 1))} className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-line)]">
+            <button type="button" aria-label="Следующий месяц" onClick={() => (viewMonth === 11 ? (setViewMonth(0), setViewYear((year) => year + 1)) : setViewMonth((month) => month + 1))} className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-line)]">
               <ChevronRight className="h-4 w-4 text-[var(--color-muted)]" />
             </button>
           </div>
@@ -383,6 +386,7 @@ export function ProductTopToolbar({
             onClick={onScrollTop}
             className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-surface-soft)] transition-all hover:bg-[var(--color-line)]"
             title="Наверх"
+            aria-label="Наверх"
           >
             <ToolbarLogo className="h-5 w-5" />
           </button>
@@ -391,6 +395,7 @@ export function ProductTopToolbar({
             onClick={() => setCollapsed(false)}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] transition-all hover:bg-[var(--color-line)] hover:text-[var(--color-ink)]"
             title="Развернуть меню"
+            aria-label="Развернуть меню"
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
@@ -401,94 +406,101 @@ export function ProductTopToolbar({
 
   return (
     <div ref={rootRef} className="fixed left-[18px] right-[18px] top-3 z-40">
-      <div className="flex items-center gap-2 overflow-x-auto rounded-[22px] border border-[var(--color-line)] bg-white/95 px-3 py-2 shadow-[0_12px_40px_rgba(44,35,66,0.1)] backdrop-blur-xl">
-        <ToolbarLogo className="h-6 w-6 flex-shrink-0" />
-        <div className="h-5 w-px flex-shrink-0 bg-[var(--color-line)]" />
+      <div className="product-top-toolbar-inner">
+        <div className="product-toolbar-group product-toolbar-date-group">
+          <ToolbarLogo className="h-6 w-6 flex-shrink-0" />
+          <div className="h-5 w-px flex-shrink-0 bg-[var(--color-line)]" />
 
-        <ToolbarDatePicker label="с" value={start} onChange={(value) => onRangeChange({ start: value, end })} />
-        <ToolbarDatePicker label="по" value={end} onChange={(value) => onRangeChange({ start, end: value })} />
+          <ToolbarDatePicker label="с" value={start} onChange={(value) => onRangeChange({ start: value, end })} />
+          <ToolbarDatePicker label="по" value={end} onChange={(value) => onRangeChange({ start, end: value })} />
 
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-deep)] px-4 text-sm font-semibold whitespace-nowrap text-white shadow-[0_6px_16px_rgba(241,120,40,0.28)] transition-all hover:shadow-[0_10px_24px_rgba(241,120,40,0.38)] disabled:cursor-progress disabled:opacity-70"
-          disabled={refreshing}
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-          Обновить
-        </button>
-
-        <div className="min-w-[8px] flex-1" />
-
-        <label className="flex h-8 flex-shrink-0 cursor-pointer items-center gap-2 rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-3 text-sm font-semibold whitespace-nowrap text-[var(--color-ink)] transition-all hover:border-[rgba(241,120,40,0.22)] hover:bg-white">
-          <span
-            className={cn(
-              "flex h-4 w-4 items-center justify-center rounded-[5px] border transition-all",
-              compareEnabled
-                ? "border-[rgba(241,120,40,0.45)] bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-deep)] text-white shadow-[0_4px_10px_rgba(241,120,40,0.22)]"
-                : "border-[var(--color-line)] bg-white text-transparent",
-            )}
-            aria-hidden="true"
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-deep)] px-4 text-sm font-semibold whitespace-nowrap text-white shadow-[0_6px_16px_rgba(241,120,40,0.28)] transition-all hover:shadow-[0_10px_24px_rgba(241,120,40,0.38)] disabled:cursor-progress disabled:opacity-70"
+            disabled={refreshing}
           >
-            <Check className="h-3 w-3" />
-          </span>
-          <span>Сравнение периода</span>
-          <input
-            type="checkbox"
-            checked={compareEnabled}
-            onChange={(event) => onCompareEnabledChange(event.target.checked)}
-            className="sr-only"
-          />
-        </label>
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+            Обновить
+          </button>
+        </div>
 
-        <div className="chart-window-switch flex-shrink-0" aria-label="Период сравнения">
-          {periods.map((period) => (
-            <button
-              type="button"
-              key={period.value}
-              onClick={() => onPresetChange(period.value)}
+        <div className="product-toolbar-group product-toolbar-compare-group">
+          <label
+            className="flex h-8 flex-shrink-0 cursor-pointer items-center gap-2 rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-3 text-sm font-semibold whitespace-nowrap text-[var(--color-ink)] transition-all hover:border-[rgba(241,120,40,0.22)] hover:bg-white"
+            title="Сравнение периода"
+          >
+            <span
               className={cn(
-                "chart-window-chip h-8 px-3 text-sm",
-                preset === period.value && "is-active",
+                "flex h-4 w-4 items-center justify-center rounded-[5px] border transition-all",
+                compareEnabled
+                  ? "border-[rgba(241,120,40,0.45)] bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-deep)] text-white shadow-[0_4px_10px_rgba(241,120,40,0.22)]"
+                  : "border-[var(--color-line)] bg-white text-transparent",
               )}
+              aria-hidden="true"
             >
-              {period.label}
-            </button>
-          ))}
+              <Check className="h-3 w-3" />
+            </span>
+            <span>Сравнение</span>
+            <input
+              type="checkbox"
+              aria-label="Сравнение периода"
+              checked={compareEnabled}
+              onChange={(event) => onCompareEnabledChange(event.target.checked)}
+              className="sr-only"
+            />
+          </label>
+
+          <div className="chart-window-switch flex-shrink-0" aria-label="Период сравнения">
+            {periods.map((period) => (
+              <button
+                type="button"
+                key={period.value}
+                onClick={() => onPresetChange(period.value)}
+                className={cn(
+                  "chart-window-chip h-8 px-3 text-sm",
+                  preset === period.value && "is-active",
+                )}
+              >
+                {period.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="h-5 w-px flex-shrink-0 bg-[var(--color-line)]" />
+        <div className="product-toolbar-group product-toolbar-view-group">
+          <div className="flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[rgba(248,247,252,0.94)] p-0.5">
+            {activeView === "product" ? (
+              <>
+                <span className="inline-flex h-7 items-center rounded-full bg-white px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-ink)] shadow-[0_4px_12px_rgba(44,35,66,0.1)]">
+                  Товар
+                </span>
+                <Link to={catalogPath} className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
+                  Артикулы
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link to={productPath} className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
+                  Товар
+                </Link>
+                <span className="inline-flex h-7 items-center rounded-full bg-white px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-ink)] shadow-[0_4px_12px_rgba(44,35,66,0.1)]">
+                  Артикулы
+                </span>
+              </>
+            )}
+          </div>
 
-        <div className="flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[rgba(248,247,252,0.94)] p-0.5">
-          {activeView === "product" ? (
-            <>
-              <span className="inline-flex h-7 items-center rounded-full bg-white px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-ink)] shadow-[0_4px_12px_rgba(44,35,66,0.1)]">
-                Товар
-              </span>
-              <Link to={catalogPath} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
-                Артикулы
-              </Link>
-            </>
-          ) : (
-            <>
-              <Link to={productPath} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
-                Товар
-              </Link>
-              <span className="inline-flex h-7 items-center rounded-full bg-white px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-ink)] shadow-[0_4px_12px_rgba(44,35,66,0.1)]">
-                Артикулы
-              </span>
-            </>
-          )}
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] transition-all hover:bg-[var(--color-line)] hover:text-[var(--color-ink)]"
+            title="Свернуть меню"
+            aria-label="Свернуть меню"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
         </div>
-
-        <button
-          type="button"
-          onClick={() => setCollapsed(true)}
-          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] transition-all hover:bg-[var(--color-line)] hover:text-[var(--color-ink)]"
-          title="Свернуть меню"
-        >
-          <ChevronUp className="h-3.5 w-3.5" />
-        </button>
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
-from xway_api import DEFAULT_STORAGE_STATE, collect_articles, collect_catalog, collect_cluster_detail
+from xway_api import DEFAULT_STORAGE_STATE, collect_articles, collect_catalog, collect_catalog_chart, collect_catalog_issues, collect_cluster_detail
 
 
 ROOT = Path(__file__).resolve().parent
@@ -41,8 +41,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _request_params(self) -> Tuple[Tuple[str, ...], Optional[str], Optional[str], str, Tuple[str, ...]]:
         query = parse_qs(urlparse(self.path).query)
@@ -181,6 +184,52 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             catalog_mode = (query.get("mode", ["compact"])[0] or "compact").strip().lower()
             try:
                 payload = collect_catalog(STORAGE_STATE, start=start, end=end, mode=catalog_mode)
+            except Exception as exc:
+                self._write_json(
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(),
+                    },
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            payload["ok"] = True
+            self._write_json(payload)
+            return
+
+        if parsed.path == "/api/catalog-chart":
+            query = parse_qs(parsed.query)
+            _, start, end, _, _ = self._request_params()
+            raw_products = query.get("products", [""])[0]
+            product_refs = tuple(
+                dict.fromkeys(item.strip() for item in raw_products.split(",") if item.strip())
+            )
+            try:
+                payload = collect_catalog_chart(STORAGE_STATE, product_refs, start=start, end=end)
+            except Exception as exc:
+                self._write_json(
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(),
+                    },
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            payload["ok"] = True
+            self._write_json(payload)
+            return
+
+        if parsed.path == "/api/catalog-issues":
+            query = parse_qs(parsed.query)
+            _, start, end, _, _ = self._request_params()
+            raw_products = query.get("products", [""])[0]
+            product_refs = tuple(
+                dict.fromkeys(item.strip() for item in raw_products.split(",") if item.strip())
+            )
+            try:
+                payload = collect_catalog_issues(STORAGE_STATE, product_refs, start=start, end=end)
             except Exception as exc:
                 self._write_json(
                     {

@@ -768,22 +768,321 @@
   padding: 10px;
 }
 
+.catalog-issues-panel {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(420px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 22px;
+}
+
+.catalog-issues-panel-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 180px);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.catalog-issues-status {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.catalog-issues-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.catalog-issues-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+.catalog-issues-progress-track > div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  transition: width 0.2s ease;
+}
+
+.catalog-issues-progress span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.catalog-issues-controls {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  min-width: 0;
+}
+
+.catalog-issues-kind-row,
+.catalog-issues-action-row,
+.catalog-issue-badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.catalog-issues-kind-row,
+.catalog-issues-action-row {
+  justify-content: flex-end;
+}
+
+.catalog-issue-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.78);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.catalog-issue-filter-chip span {
+  display: inline-grid;
+  min-width: 22px;
+  height: 20px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.catalog-issue-filter-chip.is-active {
+  border-color: rgba(241, 120, 40, 0.32);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+.catalog-issue-filter-chip.is-budget.is-active {
+  border-color: rgba(215, 95, 95, 0.24);
+  background: var(--rose-soft);
+  color: var(--bad);
+}
+
+.catalog-issue-filter-chip.is-limit.is-active {
+  border-color: rgba(192, 139, 18, 0.26);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.catalog-issue-filter-chip.is-turnover.is-active {
+  border-color: rgba(75, 123, 255, 0.24);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.catalog-issues-shop-select {
+  min-width: 190px;
+  max-width: 240px;
+}
+
+.catalog-issues-note {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.82rem;
+}
+
+.catalog-issue-badge-list {
+  justify-content: flex-start;
+}
+
+.catalog-issue-inline-badge,
+.catalog-issue-empty-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.catalog-issue-inline-badge {
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    filter 0.16s ease;
+}
+
+.catalog-issue-inline-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(44, 35, 66, 0.08);
+}
+
+.catalog-issue-inline-badge.is-budget {
+  border-color: rgba(215, 95, 95, 0.2);
+  background: var(--rose-soft);
+  color: var(--bad);
+}
+
+.catalog-issue-inline-badge.is-limit {
+  border-color: rgba(192, 139, 18, 0.22);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.catalog-issue-inline-badge.is-turnover {
+  border-color: rgba(75, 123, 255, 0.22);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.catalog-issue-empty-badge {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.catalog-issue-empty-badge.is-pending {
+  border-style: dashed;
+  background: rgba(247, 246, 250, 0.58);
+}
+
+.catalog-issue-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4600;
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px;
+  background: rgba(38, 33, 58, 0.14);
+  backdrop-filter: blur(4px);
+}
+
+.catalog-issue-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 70px rgba(44, 35, 66, 0.18);
+}
+
+.catalog-issue-drawer-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.catalog-issue-drawer-body {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.catalog-issue-drawer-product {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-soft);
+}
+
+.catalog-issue-drawer-metric {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: white;
+}
+
+.catalog-issue-drawer-metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.catalog-issue-drawer-metric strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 0.96rem;
+  line-height: 1.05;
+}
+
 .catalog-shop-section > .mb-5 {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 18px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 10px 24px rgba(44, 35, 66, 0.04);
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 0 2px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .catalog-shop-section > .mb-5 > .space-y-1 {
   min-width: 0;
+}
+
+.catalog-shop-section > .mb-5 h2 {
+  font-size: 1.18rem;
+  line-height: 1.05;
+}
+
+.catalog-shop-section > .mb-5 .metric-chip {
+  background: rgba(247, 246, 250, 0.76);
+}
+
+.catalog-shop-section .table-shell > .sticky {
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 24px rgba(44, 35, 66, 0.08);
+  backdrop-filter: blur(14px);
 }
 
 .catalog-table-head,
@@ -1011,13 +1310,12 @@
 .catalog-campaign-header-board {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  min-width: 560px;
+  gap: 6px;
+  min-width: 360px;
 }
 
 .catalog-campaign-header-item {
   display: grid;
-  gap: 4px;
   min-width: 0;
   text-transform: none;
   letter-spacing: 0;
@@ -1026,7 +1324,7 @@
 .catalog-campaign-header-title-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1034,7 +1332,7 @@
   margin: 0;
   color: #111111;
   font-family: "IBM Plex Sans", sans-serif;
-  font-size: 0.76rem;
+  font-size: 0.68rem;
   font-weight: 500;
   line-height: 1;
   text-transform: none;
@@ -1056,16 +1354,16 @@
 .catalog-campaign-board {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .catalog-campaign-card {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 48px;
-  padding: 8px 10px;
-  border-radius: 14px;
+  min-height: 34px;
+  padding: 6px 7px;
+  border-radius: 12px;
   border: 1px solid rgba(128, 122, 147, 0.16);
   background: var(--surface-muted);
   line-height: 1.08;
@@ -1074,7 +1372,7 @@
 .catalog-campaign-card-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   width: 100%;
   min-width: 0;
 }
@@ -1095,7 +1393,7 @@
 
 .catalog-campaign-card strong {
   margin: 0;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   line-height: 1;
   font-weight: 700;
   white-space: nowrap;
@@ -1108,7 +1406,7 @@
   flex: 1 1 auto;
   min-width: 0;
   color: var(--ink);
-  font-size: 0.74rem;
+  font-size: 0.65rem;
   line-height: 1.05;
   white-space: nowrap;
   overflow: hidden;
@@ -1119,12 +1417,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 19px;
-  min-width: 44px;
-  padding: 0 8px;
+  min-height: 18px;
+  min-width: 34px;
+  padding: 0 6px;
   border-radius: 999px;
   font-family: "Space Grotesk", sans-serif;
-  font-size: 0.62rem;
+  font-size: 0.56rem;
   font-weight: 700;
   line-height: 1;
   color: white;
@@ -1144,7 +1442,7 @@
 
 .catalog-campaign-card span,
 .catalog-campaign-card b {
-  font-size: 0.6rem;
+  font-size: 0.56rem;
   font-weight: 700;
   white-space: nowrap;
   overflow: visible;
@@ -1152,8 +1450,8 @@
 }
 
 .catalog-campaign-status {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   align-self: auto;
   justify-self: auto;
   margin-top: 0;
@@ -1161,18 +1459,18 @@
 }
 
 .catalog-campaign-status svg {
-  width: 11px;
-  height: 11px;
+  width: 10px;
+  height: 10px;
 }
 
 .catalog-campaign-zone-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  min-height: 24px;
+  gap: 3px;
+  min-height: 20px;
   width: fit-content;
   max-width: 100%;
-  padding: 0 7px;
+  padding: 0 5px;
   border-radius: 999px;
   border: 1px solid currentColor;
   font-size: 0.58rem;
@@ -1185,15 +1483,15 @@
 
 .catalog-campaign-zone-pill svg {
   flex: 0 0 auto;
-  width: 13px;
-  height: 13px;
+  width: 11px;
+  height: 11px;
 }
 
 .catalog-campaign-zone-pill.is-icon-only {
   justify-content: center;
-  min-width: 24px;
-  padding: 0 6px;
-  gap: 3px;
+  min-width: 20px;
+  padding: 0 5px;
+  gap: 2px;
 }
 
 .catalog-campaign-zone-pill.is-search {
@@ -1248,6 +1546,48 @@
   .catalog-campaign-header-board,
   .catalog-campaign-board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .catalog-issues-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-issues-controls,
+  .catalog-issues-kind-row,
+  .catalog-issues-action-row {
+    justify-content: flex-start;
+    justify-items: start;
+  }
+}
+
+@media (max-width: 760px) {
+  .catalog-issues-panel,
+  .catalog-issues-panel-main {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-issues-controls,
+  .catalog-issues-kind-row,
+  .catalog-issues-action-row {
+    justify-content: flex-start;
+    justify-items: stretch;
+  }
+
+  .catalog-issues-shop-select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .catalog-issue-drawer-backdrop {
+    padding: 8px;
+  }
+
+  .catalog-issue-drawer {
+    border-radius: 20px;
+  }
+
+  .catalog-issue-drawer-product {
+    flex-direction: column;
   }
 }
 

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import {
   buildDailyBidRows,
   countBidDayChanges,
@@ -13,6 +13,7 @@ import {
 } from "../lib/bid-history";
 import { formatNumber, toNumber } from "../lib/format";
 import type { BidLogEntry, CampaignSummary } from "../lib/types";
+import { ResponsiveContainer } from "./safe-responsive-container";
 import { EmptyState, MetricTable, SectionCard } from "./ui";
 
 interface CampaignBidHistoryDialogTarget {
@@ -191,6 +192,7 @@ export function CampaignBidHistoryDialog({
   target: CampaignBidHistoryDialogTarget | null;
   onClose: () => void;
 }) {
+  const titleId = useId();
   const todayIso = formatLocalIsoDay(new Date());
   const allBidRows = useMemo(
     () => (target ? buildDailyBidRows(target.campaign, { mode: "history", endDay: todayIso }) : []),
@@ -299,16 +301,23 @@ export function CampaignBidHistoryDialog({
   return (
     <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
       <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
-      <div className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]">
+      <div
+        className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-brand-200">{target.productArticle}</p>
-            <h2 className="font-display mt-2 text-2xl font-semibold text-[var(--color-ink)]">{target.campaign.name}</h2>
+            <h2 id={titleId} className="font-display mt-2 text-2xl font-semibold text-[var(--color-ink)]">{target.campaign.name}</h2>
             <p className="mt-2 text-sm text-[var(--color-muted)]">{bidLabel} · {displayRangeLabel}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Закрыть историю ставки"
+            title="Закрыть"
             className="metric-chip rounded-2xl p-3 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
           >
             <X className="size-5" />

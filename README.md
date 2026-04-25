@@ -1,5 +1,14 @@
 # xway
 
+## UI/UX агент
+
+Для UI-решений в проекте добавлен локальный агентный слой:
+
+- `AGENTS.md` — инструкции для AI-агентов в этом репозитории;
+- `DESIGN_SYSTEM.md` — дизайн-система XWAY dashboard;
+- `UX_DECISION_RULES.md` — правила принятия UX-решений;
+- `UI_QA_CHECKLIST.md` — чеклист visual QA перед завершением frontend-изменений.
+
 ## Cloudflare Pages через GitHub
 
 Этот репозиторий сейчас делится на две части:

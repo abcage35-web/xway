@@ -37,6 +37,12 @@ STATUS_PAUSE_HISTORY_CREATION_MAX_LIMIT = 20000
 CATALOG_CACHE_TTL_SECONDS = 180
 CATALOG_CACHE_MAX_ENTRIES = 10
 _CATALOG_CACHE: Dict[Tuple[str, str, str, str], Tuple[float, Dict[str, Any]]] = {}
+CATALOG_CHART_CACHE_TTL_SECONDS = 180
+CATALOG_CHART_CACHE_MAX_ENTRIES = 30
+_CATALOG_CHART_CACHE: Dict[Tuple[str, str, str, Tuple[str, ...]], Tuple[float, Dict[str, Any]]] = {}
+CATALOG_ISSUES_CACHE_TTL_SECONDS = 180
+CATALOG_ISSUES_CACHE_MAX_ENTRIES = 80
+_CATALOG_ISSUES_CACHE: Dict[Tuple[str, str, str, Tuple[str, ...]], Tuple[float, Dict[str, Any]]] = {}
 PRODUCTS_CACHE_TTL_SECONDS = 180
 PRODUCTS_CACHE_MAX_ENTRIES = 40
 _PRODUCTS_CACHE: Dict[
@@ -1332,6 +1338,36 @@ def _set_cached_catalog(cache_key: Tuple[str, str, str, str], payload: Dict[str,
             oldest_key = min(_CATALOG_CACHE.items(), key=lambda item: item[1][0])[0]
             _CATALOG_CACHE.pop(oldest_key, None)
         _CATALOG_CACHE[cache_key] = (monotonic(), copy.deepcopy(payload))
+
+
+def _get_ttl_cached_payload(
+    cache: Dict[Tuple[str, str, str, Tuple[str, ...]], Tuple[float, Dict[str, Any]]],
+    cache_key: Tuple[str, str, str, Tuple[str, ...]],
+    ttl_seconds: int,
+) -> Optional[Dict[str, Any]]:
+    now = monotonic()
+    with _CACHE_LOCK:
+        entry = cache.get(cache_key)
+        if not entry:
+            return None
+        cached_at, payload = entry
+        if now - cached_at > ttl_seconds:
+            cache.pop(cache_key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+def _set_ttl_cached_payload(
+    cache: Dict[Tuple[str, str, str, Tuple[str, ...]], Tuple[float, Dict[str, Any]]],
+    cache_key: Tuple[str, str, str, Tuple[str, ...]],
+    payload: Dict[str, Any],
+    max_entries: int,
+) -> None:
+    with _CACHE_LOCK:
+        if len(cache) >= max_entries:
+            oldest_key = min(cache.items(), key=lambda item: item[1][0])[0]
+            cache.pop(oldest_key, None)
+        cache[cache_key] = (monotonic(), copy.deepcopy(payload))
 
 
 def _get_cached_products(
@@ -2697,6 +2733,503 @@ def collect_catalog(
         "shops": catalog_shops,
     }
     _set_cached_catalog(cache_key, payload)
+    return payload
+
+
+def _parse_catalog_chart_product_refs(product_refs: Iterable[str]) -> List[Tuple[int, int]]:
+    parsed_refs: List[Tuple[int, int]] = []
+    seen: set[Tuple[int, int]] = set()
+    for raw_ref in product_refs:
+        left, separator, right = str(raw_ref or "").strip().partition(":")
+        if separator != ":":
+            continue
+        try:
+            ref = (int(left), int(right))
+        except (TypeError, ValueError):
+            continue
+        if ref not in seen:
+            parsed_refs.append(ref)
+            seen.add(ref)
+    return parsed_refs
+
+
+def _catalog_chart_rate(numerator: float, denominator: float) -> Optional[float]:
+    return (numerator / denominator) * 100 if denominator else None
+
+
+def _empty_catalog_chart_row(day: str) -> Dict[str, Any]:
+    return {
+        "day": day,
+        "day_label": _format_day(day),
+        "views": 0.0,
+        "clicks": 0.0,
+        "atbs": 0.0,
+        "orders": 0.0,
+        "expense_sum": 0.0,
+        "spent_sku_count": 0,
+    }
+
+
+def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    views = _parse_decimal_number(row.get("views")) or 0.0
+    clicks = _parse_decimal_number(row.get("clicks")) or 0.0
+    atbs = _parse_decimal_number(row.get("atbs")) or 0.0
+    orders = _parse_decimal_number(row.get("orders")) or 0.0
+    expense_sum = _parse_decimal_number(row.get("expense_sum")) or 0.0
+    spent_sku_count = int(_parse_decimal_number(row.get("spent_sku_count")) or 0)
+    return {
+        **row,
+        "views": views,
+        "clicks": clicks,
+        "atbs": atbs,
+        "orders": orders,
+        "expense_sum": expense_sum,
+        "spent_sku_count": spent_sku_count,
+        "ctr": _catalog_chart_rate(clicks, views),
+        "cr1": _catalog_chart_rate(atbs, clicks),
+        "cr2": _catalog_chart_rate(orders, atbs),
+        "crf": _catalog_chart_rate(orders, clicks),
+    }
+
+
+def _build_catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    totals = {
+        "views": 0.0,
+        "clicks": 0.0,
+        "atbs": 0.0,
+        "orders": 0.0,
+        "expense_sum": 0.0,
+    }
+    for row in rows:
+        totals["views"] += _parse_decimal_number(row.get("views")) or 0.0
+        totals["clicks"] += _parse_decimal_number(row.get("clicks")) or 0.0
+        totals["atbs"] += _parse_decimal_number(row.get("atbs")) or 0.0
+        totals["orders"] += _parse_decimal_number(row.get("orders")) or 0.0
+        totals["expense_sum"] += _parse_decimal_number(row.get("expense_sum")) or 0.0
+    return {
+        **totals,
+        "ctr": _catalog_chart_rate(totals["clicks"], totals["views"]),
+        "cr1": _catalog_chart_rate(totals["atbs"], totals["clicks"]),
+        "cr2": _catalog_chart_rate(totals["orders"], totals["atbs"]),
+        "crf": _catalog_chart_rate(totals["orders"], totals["clicks"]),
+    }
+
+
+def collect_catalog_chart(
+    storage_state_path: str,
+    product_refs: Iterable[str],
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> Dict[str, Any]:
+    api = XwayApi(storage_state_path, start=start, end=end)
+    parsed_refs = _parse_catalog_chart_product_refs(product_refs)
+    cache_key = (
+        storage_state_path,
+        api.range["current_start"],
+        api.range["current_end"],
+        tuple(sorted(f"{shop_id}:{product_id}" for shop_id, product_id in parsed_refs)),
+    )
+    cached = _get_ttl_cached_payload(_CATALOG_CHART_CACHE, cache_key, CATALOG_CHART_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
+    days = _iter_iso_days(api.range["current_start"], api.range["current_end"])
+    rows_by_day = {day: _empty_catalog_chart_row(day) for day in days}
+    errors: List[Dict[str, Any]] = []
+
+    def collect_ref(ref: Tuple[int, int]) -> Tuple[Tuple[int, int], Optional[List[Dict[str, Any]]], Optional[str]]:
+        shop_id, product_id = ref
+        try:
+            return ref, api.product_stats_by_day(shop_id, product_id), None
+        except Exception as exc:
+            return ref, None, str(exc)
+
+    max_workers = min(12, max(1, len(parsed_refs)))
+    if parsed_refs:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(collect_ref, ref) for ref in parsed_refs]
+            for future in as_completed(futures):
+                (shop_id, product_id), rows, error = future.result()
+                if error is not None:
+                    errors.append({"product": f"{shop_id}:{product_id}", "error": error})
+                    continue
+                spent_days = set()
+                for source_row in rows or []:
+                    day = source_row.get("day")
+                    target = rows_by_day.get(day)
+                    if target is None:
+                        continue
+                    expense_sum = _parse_decimal_number(source_row.get("expense_sum")) or 0.0
+                    target["views"] += _parse_decimal_number(source_row.get("views")) or 0.0
+                    target["clicks"] += _parse_decimal_number(source_row.get("clicks")) or 0.0
+                    target["atbs"] += _parse_decimal_number(source_row.get("atbs")) or 0.0
+                    target["orders"] += _parse_decimal_number(source_row.get("orders")) or 0.0
+                    target["expense_sum"] += expense_sum
+                    if expense_sum > 0:
+                        spent_days.add(day)
+                for day in spent_days:
+                    rows_by_day[day]["spent_sku_count"] += 1
+
+    rows = [_finalize_catalog_chart_row(rows_by_day[day]) for day in days]
+    payload = {
+        "generated_at": date.today().isoformat(),
+        "range": api.range,
+        "selection_count": len(parsed_refs),
+        "loaded_products_count": max(len(parsed_refs) - len(errors), 0),
+        "rows": rows,
+        "totals": _build_catalog_chart_totals(rows),
+        "errors": errors,
+    }
+    _set_ttl_cached_payload(_CATALOG_CHART_CACHE, cache_key, payload, CATALOG_CHART_CACHE_MAX_ENTRIES)
+    return payload
+
+
+def _catalog_issue_to_number(value: Any) -> Optional[float]:
+    return _parse_decimal_number(value)
+
+
+def _catalog_issue_drr(spend: Any, revenue: Any) -> Optional[float]:
+    spend_value = _catalog_issue_to_number(spend)
+    revenue_value = _catalog_issue_to_number(revenue)
+    if spend_value is None or revenue_value is None or revenue_value <= 0:
+        return None
+    return (spend_value / revenue_value) * 100
+
+
+def _catalog_issue_split_pause_reason_tokens(*values: Any) -> List[str]:
+    tokens: List[str] = []
+    for value in values:
+        source = value if isinstance(value, list) else [value]
+        for item in source:
+            for token in re.split(r"[;,/]", str(item or "")):
+                normalized = token.strip()
+                if normalized:
+                    tokens.append(normalized)
+    return tokens
+
+
+def _catalog_issue_reason_kinds(item: Dict[str, Any]) -> Set[str]:
+    joined = " ".join(
+        token.lower()
+        for token in _catalog_issue_split_pause_reason_tokens(item.get("pause_reasons") or [], item.get("paused_limiter"))
+    )
+    kinds: Set[str] = set()
+    if re.search(r"schedule|распис", joined):
+        kinds.add("schedule")
+    if re.search(r"budget|бюджет|money|баланс|остаток|fund", joined):
+        kinds.add("budget")
+    if re.search(r"campaign_limiter|spend_limit|day_limit|daily_limit|limit|лимит|день|day", joined):
+        kinds.add("limit")
+    return kinds
+
+
+def _catalog_issue_kinds(item: Dict[str, Any]) -> List[str]:
+    if item.get("is_freeze"):
+        return []
+    reason_kinds = _catalog_issue_reason_kinds(item)
+    return [kind for kind in ("budget", "limit") if kind in reason_kinds]
+
+
+def _catalog_issue_status_key(item: Dict[str, Any]) -> str:
+    key = _status_interval_state_key(item)
+    return key or "unknown"
+
+
+def _catalog_issue_format_clock(value: datetime) -> str:
+    return value.strftime("%H:%M")
+
+
+def _catalog_issue_status_day_entries(campaign: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
+    day_start = datetime.strptime(day, DATE_FMT)
+    day_end = day_start + timedelta(days=1)
+    pause_history = ((campaign.get("status_logs") or {}).get("pause_history") or {})
+    intervals = pause_history.get("merged_intervals") or pause_history.get("intervals") or []
+    entries: List[Dict[str, Any]] = []
+
+    for item in intervals:
+        start_at, end_at = _resolve_pause_interval_bounds(item)
+        if start_at is None or end_at is None or start_at >= day_end or end_at <= day_start:
+            continue
+        effective_start = max(start_at, day_start)
+        effective_end = min(end_at, day_end)
+        entries.append(
+            {
+                "key": _catalog_issue_status_key(item),
+                "start_time": _catalog_issue_format_clock(effective_start),
+                "end_time": None if effective_end >= day_end else _catalog_issue_format_clock(effective_end),
+                "issue_kinds": _catalog_issue_kinds(item),
+            }
+        )
+    return sorted(entries, key=lambda item: item["start_time"])
+
+
+def _catalog_issue_parse_clock_minutes(value: Optional[str], end_of_day: bool = False) -> int:
+    if not value:
+        return 24 * 60 if end_of_day else 0
+    try:
+        hours, minutes = str(value).split(":", 1)
+        return int(hours) * 60 + int(minutes)
+    except Exception:
+        return 24 * 60 if end_of_day else 0
+
+
+def _catalog_issue_product_day_metrics(rows: List[Dict[str, Any]], day: str) -> Dict[str, float]:
+    totals = {"total_orders": 0.0, "total_revenue": 0.0}
+    for row in rows or []:
+        if str(row.get("day") or "") != day:
+            continue
+        totals["total_orders"] += _catalog_issue_to_number(row.get("ordered_total")) or 0.0
+        totals["total_revenue"] += _catalog_issue_to_number(row.get("ordered_sum_total")) or 0.0
+    return totals
+
+
+def _catalog_issue_campaign_day_metrics(campaign: Dict[str, Any], day: str) -> Dict[str, float]:
+    totals = {"orders_ads": 0.0, "spend": 0.0, "revenue_ads": 0.0}
+    for row in campaign.get("daily_exact") or []:
+        if str(row.get("day") or "") != day:
+            continue
+        totals["orders_ads"] += _catalog_issue_to_number(row.get("orders")) or 0.0
+        totals["spend"] += _catalog_issue_to_number(row.get("expense_sum")) or 0.0
+        totals["revenue_ads"] += _catalog_issue_to_number(row.get("sum_price")) or 0.0
+    return totals
+
+
+def _catalog_issue_campaign_status_code(campaign: Dict[str, Any]) -> Optional[str]:
+    raw = campaign.get("status_xway") if campaign.get("status_xway") not in (None, "") else campaign.get("status")
+    normalized = str(raw or "").strip().upper()
+    return normalized or None
+
+
+def _catalog_issue_display_status(status_code: Optional[str]) -> str:
+    normalized = str(status_code or "").strip().upper()
+    if normalized == "ACTIVE":
+        return "active"
+    if normalized == "FROZEN":
+        return "freeze"
+    if normalized == "PAUSED":
+        return "paused"
+    return "muted"
+
+
+def _catalog_issue_campaign_zone_kind(campaign: Dict[str, Any]) -> str:
+    auction_mode = str(campaign.get("auction_mode") or "").strip().lower()
+    auto_type = str(campaign.get("auto_type") or "").strip().lower()
+    name = str(campaign.get("name") or "").strip().lower()
+    payment_type = str(campaign.get("payment_type") or "").strip().lower()
+    source = " ".join([auction_mode, auto_type, name])
+    search_signal = _catalog_issue_to_number(campaign.get("min_cpm")) is not None or _catalog_issue_to_number(campaign.get("mp_bid")) is not None
+    recom_signal = _catalog_issue_to_number(campaign.get("min_cpm_recom")) is not None or _catalog_issue_to_number(campaign.get("mp_recom_bid")) is not None
+    if campaign.get("unified") or re.search(r"search[_\s-]*recom|recom[_\s-]*search|searchrecom|поиск.*реком|реком.*поиск", auction_mode):
+        return "both"
+    if re.search(r"recom|recommend|реком", auction_mode):
+        return "recom"
+    if re.search(r"search|поиск", auction_mode) or payment_type in {"cpc", "click", "clicks"}:
+        return "search"
+    has_search = search_signal or bool(re.search(r"search|поиск", source))
+    has_recom = recom_signal or bool(re.search(r"recom|recommend|реком", source))
+    if has_search and has_recom:
+        return "both"
+    return "recom" if has_recom else "search"
+
+
+def _catalog_issue_campaign_meta(campaign: Dict[str, Any], metrics: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    metrics = metrics or {}
+    status_code = _catalog_issue_campaign_status_code(campaign)
+    return {
+        "id": campaign.get("id"),
+        "label": f"РК {campaign.get('id')} · {campaign.get('name')}" if campaign.get("name") else f"РК {campaign.get('id')}",
+        "payment_type": campaign.get("payment_type") or "cpm",
+        "zone_kind": _catalog_issue_campaign_zone_kind(campaign),
+        "status_code": status_code,
+        "status_label": _catalog_campaign_status_label(status_code),
+        "display_status": _catalog_issue_display_status(status_code),
+        "hours": metrics.get("hours") or 0,
+        "incidents": metrics.get("incidents") or 0,
+        "orders_ads": metrics.get("orders_ads") or 0,
+        "drr": metrics.get("drr") if isinstance(metrics.get("drr"), (int, float)) else None,
+        "estimated_gap": metrics.get("estimated_gap") if isinstance(metrics.get("estimated_gap"), (int, float)) and metrics.get("estimated_gap") > 0 else None,
+    }
+
+
+def _aggregate_catalog_issue_summaries(
+    campaigns: List[Dict[str, Any]],
+    product_daily_stats: List[Dict[str, Any]],
+    day: str,
+) -> List[Dict[str, Any]]:
+    product_metrics = _catalog_issue_product_day_metrics(product_daily_stats, day)
+    aggregated: Dict[str, Dict[str, Any]] = {}
+
+    for campaign in campaigns:
+        entries = _catalog_issue_status_day_entries(campaign, day)
+        total_stopped_hours = 0.0
+        issue_metrics: Dict[str, Dict[str, Any]] = {}
+
+        for entry in entries:
+            if entry["key"] == "active":
+                continue
+            start_minutes = _catalog_issue_parse_clock_minutes(entry.get("start_time"))
+            end_minutes = _catalog_issue_parse_clock_minutes(entry.get("end_time"), True)
+            hours = max(end_minutes - start_minutes, 0) / 60
+            total_stopped_hours += hours
+            for kind in entry.get("issue_kinds") or []:
+                current = issue_metrics.setdefault(kind, {"hours": 0.0, "incidents": 0})
+                current["hours"] += hours
+                current["incidents"] += 1
+
+        if not issue_metrics:
+            continue
+
+        campaign_day = _catalog_issue_campaign_day_metrics(campaign, day)
+        active_hours = max(24 - total_stopped_hours, 0)
+        drr = _catalog_issue_drr(campaign_day["spend"], campaign_day["revenue_ads"])
+
+        for kind, metrics in issue_metrics.items():
+            estimated_gap = None
+            if campaign_day["spend"] > 0 and active_hours > 0 and metrics["hours"] > 0:
+                estimated_gap = (campaign_day["spend"] / active_hours) * metrics["hours"]
+            current = aggregated.setdefault(
+                kind,
+                {
+                    "kind": kind,
+                    "title": "Израсходован лимит" if kind == "limit" else "Нет бюджета",
+                    "hours": 0.0,
+                    "incidents": 0,
+                    "orders_ads": 0.0,
+                    "total_orders": product_metrics["total_orders"],
+                    "spend": 0.0,
+                    "estimated_gap": 0.0,
+                    "campaign_ids": [],
+                    "campaign_labels": [],
+                    "campaigns": [],
+                },
+            )
+            current["hours"] += metrics["hours"]
+            current["incidents"] += metrics["incidents"]
+            current["orders_ads"] += campaign_day["orders_ads"]
+            current["spend"] += campaign_day["spend"]
+            if estimated_gap is not None:
+                current["estimated_gap"] += estimated_gap
+            current["campaign_ids"].append(campaign.get("id"))
+            label = f"РК {campaign.get('id')} · {campaign.get('name')}" if campaign.get("name") else f"РК {campaign.get('id')}"
+            current["campaign_labels"].append(label)
+            current["campaigns"].append(_catalog_issue_campaign_meta(campaign, {
+                "hours": metrics["hours"],
+                "incidents": metrics["incidents"],
+                "orders_ads": campaign_day["orders_ads"],
+                "drr": drr,
+                "estimated_gap": estimated_gap,
+            }))
+
+    rows: List[Dict[str, Any]] = []
+    for kind in ("budget", "limit"):
+        item = aggregated.get(kind)
+        if not item:
+            continue
+        drr_overall = _catalog_issue_drr(item["spend"], product_metrics["total_revenue"])
+        rows.append(
+            {
+                "kind": item["kind"],
+                "title": item["title"],
+                "hours": item["hours"],
+                "incidents": item["incidents"],
+                "orders_ads": item["orders_ads"],
+                "total_orders": item["total_orders"] if item["total_orders"] > 0 else None,
+                "drr_overall": drr_overall,
+                "estimated_gap": item["estimated_gap"] if item["estimated_gap"] > 0 else None,
+                "campaign_ids": item["campaign_ids"],
+                "campaign_labels": item["campaign_labels"],
+                "campaigns": sorted(item["campaigns"], key=lambda row: (-row["hours"], -row["incidents"], str(row["label"]))),
+            }
+        )
+    return rows
+
+
+def _collect_single_catalog_issue(
+    storage_state_path: str,
+    start: Optional[str],
+    end: Optional[str],
+    ref: Tuple[int, int],
+) -> Dict[str, Any]:
+    shop_id, product_id = ref
+    api = XwayApi(storage_state_path, start=start, end=end)
+    product_ref = f"{shop_id}:{product_id}"
+    stata = api.product_stata(shop_id, product_id)
+    campaign_rows = stata.get("campaign_wb") or []
+    campaign_ids = [campaign.get("id") for campaign in campaign_rows if campaign.get("id") is not None]
+    if not campaign_ids:
+        return {"product_ref": product_ref, "issues": [], "campaigns": []}
+
+    daily_exact, _ = _safe_call(
+        lambda: api.campaign_daily_exact(shop_id, product_id, campaign_ids, start=api.range["current_start"], end=api.range["current_end"]),
+        {},
+    )
+    product_daily_stats, _ = _safe_call(lambda: api.product_stats_by_day(shop_id, product_id), [])
+
+    campaigns: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(2, max(1, len(campaign_rows)))) as executor:
+        future_by_campaign = {
+            executor.submit(
+                api.campaign_status_pause_history_full,
+                shop_id,
+                product_id,
+                int(campaign.get("id")),
+                initial_limit=120,
+                target_start=api.range["current_start"],
+            ): campaign
+            for campaign in campaign_rows
+            if campaign.get("id") is not None
+        }
+        for future in as_completed(future_by_campaign):
+            campaign = _campaign_summary(future_by_campaign[future])
+            pause_payload, _ = _safe_call(lambda future=future: future.result(), {})
+            campaign["daily_exact"] = daily_exact.get(str(campaign.get("id")), []) if isinstance(daily_exact, dict) else []
+            campaign["status_logs"] = {"pause_history": _normalize_status_pause_history(pause_payload)}
+            campaigns.append(campaign)
+
+    return {
+        "product_ref": product_ref,
+        "issues": _aggregate_catalog_issue_summaries(campaigns, product_daily_stats, api.range["current_start"]),
+        "campaigns": [_catalog_issue_campaign_meta(campaign) for campaign in campaigns],
+    }
+
+
+def collect_catalog_issues(
+    storage_state_path: str,
+    product_refs: Iterable[str],
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> Dict[str, Any]:
+    api = XwayApi(storage_state_path, start=start, end=end)
+    parsed_refs = _parse_catalog_chart_product_refs(product_refs)
+    cache_key = (
+        storage_state_path,
+        api.range["current_start"],
+        api.range["current_end"],
+        tuple(sorted(f"{shop_id}:{product_id}" for shop_id, product_id in parsed_refs)),
+    )
+    cached = _get_ttl_cached_payload(_CATALOG_ISSUES_CACHE, cache_key, CATALOG_ISSUES_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
+    rows: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(2, max(1, len(parsed_refs)))) as executor:
+        futures = [
+            executor.submit(_collect_single_catalog_issue, storage_state_path, api.range["current_start"], api.range["current_end"], ref)
+            for ref in parsed_refs
+        ]
+        for future in as_completed(futures):
+            rows.append(future.result())
+
+    rows.sort(key=lambda row: str(row.get("product_ref") or ""))
+    payload = {
+        "ok": True,
+        "generated_at": date.today().isoformat(),
+        "range": api.range,
+        "rows": rows,
+        "requested_products": [f"{shop_id}:{product_id}" for shop_id, product_id in parsed_refs],
+        "loaded_products_count": len(rows),
+    }
+    _set_ttl_cached_payload(_CATALOG_ISSUES_CACHE, cache_key, payload, CATALOG_ISSUES_CACHE_MAX_ENTRIES)
     return payload
 
 

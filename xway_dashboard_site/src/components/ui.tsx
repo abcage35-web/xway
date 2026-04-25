@@ -2,6 +2,7 @@ import { Group } from "@visx/group";
 import { Text as VisxText } from "@visx/text";
 import { useTooltip } from "@visx/tooltip";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { CalendarDays, ChevronRight, LoaderCircle, Search, Sparkles } from "lucide-react";
 import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, formatNumber, formatPercent, relativeDeltaClass, statusTone } from "../lib/format";
 import type { ScheduleAggregate } from "../lib/types";
@@ -65,17 +66,17 @@ export function MetricCard({
   icon?: ReactNode;
 }) {
   return (
-    <div className="glass-panel rounded-3xl p-4 sm:p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-2">
-          <p className="text-xs uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</p>
-          <div className="font-display text-2xl font-semibold text-[var(--color-ink)] sm:text-3xl">{value}</div>
+    <div className="glass-panel rounded-[22px] p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <p className="text-[10px] uppercase tracking-[0.22em] text-[var(--color-muted)]">{label}</p>
+          <div className="font-display text-2xl font-semibold leading-tight text-[var(--color-ink)]">{value}</div>
           {hint ? <p className="text-sm text-[var(--color-muted)]">{hint}</p> : null}
         </div>
-        {icon ? <div className="metric-chip rounded-2xl p-3 text-brand-200">{icon}</div> : null}
+        {icon ? <div className="metric-chip rounded-2xl p-2.5 text-brand-200">{icon}</div> : null}
       </div>
       {deltaText !== undefined || delta !== undefined ? (
-        <p className={cn("mt-4 text-sm font-medium", deltaText !== undefined ? deltaClassName : relativeDeltaClass(delta))}>
+        <p className={cn("mt-3 text-xs font-medium leading-snug", deltaText !== undefined ? deltaClassName : relativeDeltaClass(delta))}>
           {deltaText !== undefined ? deltaText : delta === null ? "Без сравнения" : `${formatDelta(delta)} к прошлому периоду`}
         </p>
       ) : null}
@@ -132,13 +133,15 @@ export function SearchField({
   value,
   onChange,
   placeholder,
+  className,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  className?: string;
 }) {
   return (
-    <label className="metric-chip flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm text-[var(--color-muted)]">
+    <label className={cn("metric-chip flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm text-[var(--color-muted)]", className)}>
       <Search className="size-4 text-brand-200" />
       <input
         value={value}
@@ -172,11 +175,21 @@ export function MetricTable<T>({
   const [headerCloneState, setHeaderCloneState] = useState<{
     columnWidths: number[];
     tableWidth: number;
+    headerHeight: number;
+    top: number;
+    viewportLeft: number;
+    viewportWidth: number;
     scrollLeft: number;
+    isPinned: boolean;
   }>({
     columnWidths: [],
     tableWidth: 0,
+    headerHeight: 0,
+    top: 0,
+    viewportLeft: 0,
+    viewportWidth: 0,
     scrollLeft: 0,
+    isPinned: false,
   });
   const columnKeys = columns.map((column) => column.key).join("|");
 
@@ -187,8 +200,16 @@ export function MetricTable<T>({
       return;
     }
 
+    const resolveEffectiveScrollLeft = () => {
+      const rawScrollLeft = Math.round(viewportNode.scrollLeft + (window.scrollX || window.pageXOffset || 0));
+      const tableWidth = Math.round(tableNode.getBoundingClientRect().width);
+      const viewportWidth = Math.round(viewportNode.getBoundingClientRect().width);
+      const maxScrollLeft = Math.max(0, tableWidth - viewportWidth);
+      return Math.max(0, Math.min(rawScrollLeft, maxScrollLeft));
+    };
+
     const syncScrollLeft = () => {
-      const nextScrollLeft = Math.round(viewportNode.scrollLeft);
+      const nextScrollLeft = resolveEffectiveScrollLeft();
       setHeaderCloneState((current) => (current.scrollLeft === nextScrollLeft ? current : { ...current, scrollLeft: nextScrollLeft }));
     };
 
@@ -196,28 +217,64 @@ export function MetricTable<T>({
       const headerCells = [...tableNode.querySelectorAll<HTMLTableCellElement>("thead tr:first-child > th")].slice(0, columns.length);
       const nextColumnWidths = headerCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
       const nextTableWidth = Math.round(tableNode.getBoundingClientRect().width);
+      const viewportRect = viewportNode.getBoundingClientRect();
+      const tableRect = tableNode.getBoundingClientRect();
+      const headerRect = headerCells[0]?.getBoundingClientRect();
+      const stickyTop = typeof headerStickyTop === "number" ? headerStickyTop : Number.parseFloat(String(headerStickyTop)) || 0;
+      const nextHeaderHeight = Math.ceil(headerRect?.height ?? 0);
+      const nextTop = Math.round(Math.min(stickyTop, tableRect.bottom - nextHeaderHeight));
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const tableContinuesBelowViewport = tableRect.bottom > viewportHeight - 16;
+      const nextViewportLeft = Math.round(viewportRect.left);
+      const nextViewportWidth = Math.round(viewportRect.width);
+      const nextIsPinned = Boolean(
+        stickyHeader &&
+          headerRect &&
+          nextHeaderHeight > 0 &&
+          headerRect.top <= stickyTop &&
+          tableRect.bottom > 0 &&
+          nextTop + nextHeaderHeight > 0 &&
+          tableContinuesBelowViewport,
+      );
       syncScrollLeft();
       setHeaderCloneState((current) => {
         const sameWidths =
           current.columnWidths.length === nextColumnWidths.length &&
           current.columnWidths.every((value, index) => value === nextColumnWidths[index]);
-        if (sameWidths && current.tableWidth === nextTableWidth) {
+        if (
+          sameWidths &&
+          current.tableWidth === nextTableWidth &&
+          current.headerHeight === nextHeaderHeight &&
+          current.top === nextTop &&
+          current.viewportLeft === nextViewportLeft &&
+          current.viewportWidth === nextViewportWidth &&
+          current.isPinned === nextIsPinned
+        ) {
           return current;
         }
         return {
           ...current,
           columnWidths: nextColumnWidths,
           tableWidth: nextTableWidth,
+          headerHeight: nextHeaderHeight,
+          top: nextTop,
+          viewportLeft: nextViewportLeft,
+          viewportWidth: nextViewportWidth,
+          isPinned: nextIsPinned,
         };
       });
     };
 
     syncHeaderMetrics();
     viewportNode.addEventListener("scroll", syncScrollLeft, { passive: true });
+    window.addEventListener("scroll", syncHeaderMetrics, { passive: true });
+    window.addEventListener("resize", syncHeaderMetrics);
 
     if (typeof ResizeObserver === "undefined") {
       return () => {
         viewportNode.removeEventListener("scroll", syncScrollLeft);
+        window.removeEventListener("scroll", syncHeaderMetrics);
+        window.removeEventListener("resize", syncHeaderMetrics);
       };
     }
 
@@ -227,16 +284,23 @@ export function MetricTable<T>({
     [...tableNode.querySelectorAll<HTMLTableCellElement>("thead th")].forEach((cell) => observer.observe(cell));
     return () => {
       viewportNode.removeEventListener("scroll", syncScrollLeft);
+      window.removeEventListener("scroll", syncHeaderMetrics);
+      window.removeEventListener("resize", syncHeaderMetrics);
       observer.disconnect();
     };
-  }, [columnKeys, columns.length, rows.length, stickyHeader]);
+  }, [columnKeys, columns.length, headerStickyTop, rows.length, stickyHeader]);
 
   if (!rows.length) {
     return <EmptyState title="Пока пусто" text={emptyText} />;
   }
 
-  const showStickyHeaderClone = stickyHeader && headerCloneState.columnWidths.length === columns.length && headerCloneState.tableWidth > 0;
   const hasHeaderSummary = columns.some((column) => column.headerSummary !== undefined);
+  const showStickyHeaderClone =
+    stickyHeader &&
+    headerCloneState.isPinned &&
+    headerCloneState.columnWidths.length === columns.length &&
+    headerCloneState.tableWidth > 0 &&
+    headerCloneState.viewportWidth > 0;
   const colgroup = headerCloneState.columnWidths.length === columns.length ? (
     <colgroup>
       {headerCloneState.columnWidths.map((width, index) => (
@@ -251,7 +315,9 @@ export function MetricTable<T>({
         {columns.map((column) => (
           <th
             key={column.key}
-            style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+            style={{
+              ...(column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : {}),
+            }}
             className={cn(
               "bg-[var(--color-surface-soft)] px-4 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[var(--color-muted)]",
               column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head",
@@ -299,21 +365,43 @@ export function MetricTable<T>({
         className,
       )}
     >
-      {showStickyHeaderClone ? (
-        <div className="sticky z-20 overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ top: headerStickyTop }}>
-          <table
-            aria-hidden="true"
-            className="data-table text-sm"
-            style={{
-              width: `${headerCloneState.tableWidth}px`,
-              transform: `translateX(-${headerCloneState.scrollLeft}px)`,
-            }}
-          >
-            {colgroup}
-            {renderHeader({ clone: true })}
-          </table>
-        </div>
-      ) : null}
+      {showStickyHeaderClone && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="pointer-events-none z-30 overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)] shadow-[0_14px_28px_rgba(44,35,66,0.08)]"
+              style={{
+                position: "fixed",
+                top: `${headerCloneState.top}px`,
+                left: "0",
+                right: "0",
+                height: `${headerCloneState.headerHeight}px`,
+                zIndex: 38,
+              }}
+            >
+              <div
+                className="absolute inset-y-0 overflow-hidden"
+                style={{
+                  left: `${headerCloneState.viewportLeft}px`,
+                  width: `${headerCloneState.viewportWidth}px`,
+                }}
+              >
+                <table
+                  aria-hidden="true"
+                  className="data-table text-sm"
+                  style={{
+                    width: `${headerCloneState.tableWidth}px`,
+                    tableLayout: "fixed",
+                    transform: `translateX(-${headerCloneState.scrollLeft}px)`,
+                  }}
+                >
+                  {colgroup}
+                  {renderHeader({ clone: true })}
+                </table>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       <div ref={tableViewportRef} className={cn("overflow-x-auto", variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible")}>
         <table
@@ -322,7 +410,7 @@ export function MetricTable<T>({
           style={showStickyHeaderClone && headerCloneState.tableWidth ? { width: `${headerCloneState.tableWidth}px` } : undefined}
         >
           {colgroup}
-          {renderHeader({ hidden: showStickyHeaderClone })}
+          {renderHeader()}
           <tbody className="divide-y divide-[var(--color-line)] bg-white">
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex} className="transition hover:bg-[var(--color-surface-soft)]">

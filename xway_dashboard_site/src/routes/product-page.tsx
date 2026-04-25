@@ -6992,6 +6992,8 @@ function CampaignChartsOverlayDialog({
   onActiveWindowChange: (value: OverviewWindow) => void;
   onClose: () => void;
 }) {
+  const titleId = useId();
+
   useEffect(() => {
     if (!product) {
       return undefined;
@@ -7022,11 +7024,16 @@ function CampaignChartsOverlayDialog({
   return (
     <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
       <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
-      <div className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]">
+      <div
+        className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="shrink-0 flex items-start justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3 sm:px-5 sm:py-3.5">
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-[0.22em] text-brand-200">{product.article}</p>
-            <h2 className="mt-1 font-display text-[1.6rem] font-semibold leading-[1.05] text-[var(--color-ink)]">Графики по всем РК</h2>
+            <h2 id={titleId} className="mt-1 font-display text-[1.6rem] font-semibold leading-[1.05] text-[var(--color-ink)]">Графики по всем РК</h2>
             <p className="mt-1 text-[13px] text-[var(--color-muted)]">
               {`${formatNumber(product.campaigns.length)} кампаний · ${formatDateRange(chartSourceProduct.period.current_start, chartSourceProduct.period.current_end)}`}
             </p>
@@ -7034,6 +7041,8 @@ function CampaignChartsOverlayDialog({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Закрыть графики по всем РК"
+            title="Закрыть"
             className="metric-chip rounded-2xl p-2.5 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
           >
             <X className="size-5" />
@@ -7145,6 +7154,8 @@ function ProductOverviewChartsOverlayDialog({
   onActiveWindowChange: (value: OverviewWindow) => void;
   onClose: () => void;
 }) {
+  const titleId = useId();
+
   useEffect(() => {
     if (!product) {
       return undefined;
@@ -7174,16 +7185,23 @@ function ProductOverviewChartsOverlayDialog({
   return (
     <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
       <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
-      <div className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]">
+      <div
+        className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="shrink-0 flex items-start justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3 sm:px-5 sm:py-3.5">
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-[0.22em] text-brand-200">{product.article}</p>
-            <h2 className="mt-1 font-display text-[1.6rem] font-semibold leading-[1.05] text-[var(--color-ink)]">Графики товара</h2>
+            <h2 id={titleId} className="mt-1 font-display text-[1.6rem] font-semibold leading-[1.05] text-[var(--color-ink)]">Графики товара</h2>
             <p className="mt-1 text-[13px] text-[var(--color-muted)]">{formatDateRange(chartSourceProduct.period.current_start, chartSourceProduct.period.current_end)}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Закрыть графики товара"
+            title="Закрыть"
             className="metric-chip rounded-2xl p-2.5 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
           >
             <X className="size-5" />
@@ -7285,6 +7303,8 @@ function LegacyTabBar({
       <div
         ref={innerRef}
         className="flex w-full flex-wrap gap-1.5 rounded-[16px] border border-[var(--color-line)] bg-[rgba(248,247,252,0.88)] p-1.5 backdrop-blur-md shadow-[0_12px_30px_rgba(44,35,66,0.06)]"
+        role="tablist"
+        aria-label="Разделы карточки товара"
         style={
           isPinned
             ? {
@@ -7303,6 +7323,8 @@ function LegacyTabBar({
             type="button"
             key={tab.value}
             onClick={() => onChange(tab.value)}
+            role="tab"
+            aria-selected={activeTab === tab.value}
             className={cn(
               "rounded-[11px] px-3.5 py-2 text-[13px] font-medium leading-none transition",
               activeTab === tab.value
@@ -7354,6 +7376,7 @@ export function ProductPage() {
   const overviewLeftSideRef = useRef<HTMLDivElement | null>(null);
   const overviewSignalsRef = useRef<HTMLDivElement | null>(null);
   const overviewBudgetRef = useRef<HTMLDivElement | null>(null);
+  const tabContentAnchorRef = useRef<HTMLDivElement | null>(null);
   const [overviewHeatmapHeight, setOverviewHeatmapHeight] = useState<number | null>(null);
   const compareFetchAbortRef = useRef<AbortController | null>(null);
   const compareAutoLoadKeyRef = useRef<string | null>(null);
@@ -7361,6 +7384,7 @@ export function ProductPage() {
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const chartFetchKeyRef = useRef<string | null>(null);
   const chartFetchPromiseRef = useRef<Promise<ProductSummary | null> | null>(null);
+  const scrollRestoreFrameRef = useRef<number | null>(null);
 
   const currentProduct = payloadState.products[0] ?? null;
   const overviewHeatmapMinHeight = resolveOverviewHeatmapMinHeight(currentProduct?.schedule_aggregate.days.length);
@@ -7374,6 +7398,38 @@ export function ProductPage() {
   const [draftStart, setDraftStart] = useState(appliedStart);
   const [draftEnd, setDraftEnd] = useState(appliedEnd);
   const [draftPreset, setDraftPreset] = useState(appliedPreset);
+
+  const preserveScrollAfterBackgroundUpdate = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const top = window.scrollY;
+    const left = window.scrollX;
+    if (top <= 0 && left <= 0) {
+      return;
+    }
+
+    if (scrollRestoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollRestoreFrameRef.current);
+    }
+
+    scrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+      scrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+        scrollRestoreFrameRef.current = null;
+        const root = document.documentElement;
+        const body = document.body;
+        const previousRootScrollBehavior = root.style.scrollBehavior;
+        const previousBodyScrollBehavior = body.style.scrollBehavior;
+
+        root.style.scrollBehavior = "auto";
+        body.style.scrollBehavior = "auto";
+        window.scrollTo({ top, left, behavior: "auto" });
+        root.style.scrollBehavior = previousRootScrollBehavior;
+        body.style.scrollBehavior = previousBodyScrollBehavior;
+      });
+    });
+  }, []);
 
   useEffect(() => {
     setActiveTab("overview");
@@ -7441,6 +7497,7 @@ export function ProductPage() {
         if (controller.signal.aborted) {
           return;
         }
+        preserveScrollAfterBackgroundUpdate();
         setPayloadState(response);
       })
       .catch(() => {
@@ -7455,7 +7512,7 @@ export function ProductPage() {
     return () => {
       controller.abort();
     };
-  }, [end, payloadIsCached, start, trackedArticles]);
+  }, [end, payloadIsCached, preserveScrollAfterBackgroundUpdate, start, trackedArticles]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -7607,6 +7664,9 @@ export function ProductPage() {
     () => () => {
       compareFetchAbortRef.current?.abort();
       chartFetchAbortRef.current?.abort();
+      if (scrollRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollRestoreFrameRef.current);
+      }
     },
     [],
   );
@@ -7700,6 +7760,36 @@ export function ProductPage() {
     });
   };
 
+  const scrollTabContentIntoView = useCallback(() => {
+    if (typeof window === "undefined" || !tabContentAnchorRef.current) {
+      return;
+    }
+
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const topOffset = topNavHeight + tabBarHeight + 16;
+    const nextTop = tabContentAnchorRef.current.getBoundingClientRect().top + window.scrollY - topOffset;
+    window.scrollTo({
+      top: Math.max(0, nextTop),
+      behavior: prefersReducedMotion ? "auto" : "smooth",
+    });
+  }, [tabBarHeight, topNavHeight]);
+
+  const handleTabChange = useCallback(
+    (nextTab: ProductTab) => {
+      if (nextTab === activeTab) {
+        return;
+      }
+      setActiveTab(nextTab);
+      if (typeof window === "undefined") {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(scrollTabContentIntoView);
+      });
+    },
+    [activeTab, scrollTabContentIntoView],
+  );
+
   const ensureChartProduct = useCallback(() => {
     if (!currentProduct || (currentProduct.period.span_days || 0) >= CHART_PRELOAD_DAYS) {
       return Promise.resolve(currentProduct ?? null);
@@ -7738,6 +7828,7 @@ export function ProductPage() {
           return null;
         }
         const nextProduct = response.products.find((product) => product.article === currentProduct.article) ?? null;
+        preserveScrollAfterBackgroundUpdate();
         setChartProduct(nextProduct);
         return nextProduct;
       })
@@ -7762,7 +7853,7 @@ export function ProductPage() {
 
     chartFetchPromiseRef.current = requestPromise;
     return requestPromise;
-  }, [chartProduct, currentProduct]);
+  }, [chartProduct, currentProduct, preserveScrollAfterBackgroundUpdate]);
 
   const maybeLoadExtendedCharts = useCallback(
     (nextWindow: OverviewWindow) => {
@@ -7841,6 +7932,7 @@ export function ProductPage() {
       .then((response) => {
         if (!controller.signal.aborted) {
           compareCacheRef.current.set(compareRequestKey, response);
+          preserveScrollAfterBackgroundUpdate();
           setComparePayloadState(response);
         }
       })
@@ -7857,7 +7949,16 @@ export function ProductPage() {
           setIsCompareLoading(false);
         }
       });
-  }, [comparePayloadState, compareRange.compareEnd, compareRange.compareStart, isCompareEnabled, isCompareLoading, trackedArticles, visibleCampaignIds]);
+  }, [
+    comparePayloadState,
+    compareRange.compareEnd,
+    compareRange.compareStart,
+    isCompareEnabled,
+    isCompareLoading,
+    preserveScrollAfterBackgroundUpdate,
+    trackedArticles,
+    visibleCampaignIds,
+  ]);
 
   useEffect(() => {
     if (!isCompareEnabled || comparePayloadState || isCompareLoading || compareAutoLoadKeyRef.current === compareRequestKey) {
@@ -7879,8 +7980,8 @@ export function ProductPage() {
   }
 
   const topLevelErrors = Object.entries(currentProduct.errors || {}).filter(([, value]) => Boolean(value));
-  const productPath = `/product${buildProductSearch({ article: currentProduct.article, start: draftStart, end: draftEnd })}`;
-  const catalogPath = `/catalog${buildCatalogSearch(draftStart, draftEnd)}`;
+  const productPath = `/product${buildProductSearch({ article: currentProduct.article, start: appliedStart, end: appliedEnd })}`;
+  const catalogPath = `/catalog${buildCatalogSearch(appliedStart, appliedEnd)}`;
   const toolbarRefreshing = revalidator.state !== "idle" || navigation.state !== "idle" || isPayloadRefreshing;
   const heroMetrics = buildBoardMetrics(currentProduct);
   const previousHeroMetrics = effectiveCompareProduct ? buildBoardMetrics(effectiveCompareProduct) : null;
@@ -7984,11 +8085,12 @@ export function ProductPage() {
           <div className="page-shell space-y-4">
             <LegacyTabBar
               activeTab={activeTab}
-              onChange={setActiveTab}
+              onChange={handleTabChange}
               onHeightChange={setTabBarHeight}
               stickyTopOffset={topNavHeight + 8}
               product={currentProduct}
             />
+            <div ref={tabContentAnchorRef} aria-hidden="true" />
 
             {activeTab === "overview" ? (
               <article className={cn(PANEL_CLASS, "product-panel relative z-0 overflow-visible p-4 sm:p-5")}>

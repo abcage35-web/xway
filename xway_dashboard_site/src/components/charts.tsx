@@ -7,11 +7,11 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import { ResponsiveContainer } from "./safe-responsive-container";
 import { buildDailyBidRows, formatBidMoney, resolveBidKind, resolveBidLabel } from "../lib/bid-history";
 import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent, toNumber } from "../lib/format";
 import type { CampaignSummary, ClusterDailyRow, DailyStat, HeatmapPayload, OrdersHeatmapPayload, ProductSummary } from "../lib/types";

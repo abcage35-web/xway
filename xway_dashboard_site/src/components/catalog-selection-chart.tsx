@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LoaderCircle } from "lucide-react";
-import { Bar, CartesianGrid, ComposedChart, LabelList, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, CartesianGrid, ComposedChart, LabelList, Line, Tooltip, XAxis, YAxis } from "recharts";
+import { ResponsiveContainer } from "./safe-responsive-container";
 import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent } from "../lib/format";
 import type { CatalogChartRow, CatalogChartTotals } from "../lib/types";
 
@@ -617,6 +618,12 @@ export function CatalogSelectionChart({
     active: !hiddenSeries.includes(series.key),
     onToggle: () => setHiddenSeries((current) => toggleLegendKey(current, series.key)),
   }));
+  const normalizedLoadedCount =
+    typeof loadedProductsCount === "number" && Number.isFinite(loadedProductsCount)
+      ? Math.max(0, Math.min(loadedProductsCount, selectionCount))
+      : 0;
+  const progressPercent = selectionCount > 0 ? Math.round((normalizedLoadedCount / selectionCount) * 100) : 0;
+  const showLoadingProgress = isLoading && selectionCount > 0;
 
   const toggleSplitPanelKey = (panel: SplitPanelKey, key: CatalogSeriesKey) => {
     setSplitHiddenSeries((current) => ({
@@ -633,7 +640,7 @@ export function CatalogSelectionChart({
         <div>
           <h4 className="font-display font-semibold text-[var(--color-ink)]">Динамика по выборке</h4>
           <p>
-            За {windowDays} дн. · {rangeLabel}. В графике {formatNumber(selectionCount)} {formatProductsWord(selectionCount)}
+            За {windowDays} дн. · {rangeLabel}; в графике {formatNumber(selectionCount)} {formatProductsWord(selectionCount)}
             {loadedProductsCount !== undefined && loadedProductsCount !== null && loadedProductsCount < selectionCount
               ? `, загружено ${formatNumber(loadedProductsCount)}`
               : ""}.
@@ -645,7 +652,7 @@ export function CatalogSelectionChart({
             <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5">
               <LoaderCircle className="size-4 animate-spin text-brand-200" />
               {loadedProductsCount !== undefined && loadedProductsCount !== null
-                ? `Загружено ${formatNumber(loadedProductsCount)} / ${formatNumber(selectionCount)}`
+                ? `Загружено ${formatNumber(normalizedLoadedCount)} / ${formatNumber(selectionCount)}`
                 : "Обновляем график"}
             </span>
           ) : null}
@@ -661,6 +668,19 @@ export function CatalogSelectionChart({
           ) : null}
         </div>
       </div>
+
+      {showLoadingProgress ? (
+        <div className="mt-4 rounded-full border border-white/70 bg-white/62 p-1 shadow-inner">
+          <div
+            className="h-2.5 rounded-full bg-gradient-to-r from-brand-300 via-accent-500 to-coral-500 transition-[width] duration-500"
+            style={{ width: `${progressPercent}%` }}
+          />
+          <div className="mt-2 flex items-center justify-between gap-3 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
+            <span>График догружается пакетами</span>
+            <span>{formatNumber(progressPercent)}%</span>
+          </div>
+        </div>
+      ) : null}
 
       <div className={cn("trend-chart", chartMode === "combined" ? "h-[360px] sm:h-[420px]" : "space-y-4")}>
         {!selectionCount ? (

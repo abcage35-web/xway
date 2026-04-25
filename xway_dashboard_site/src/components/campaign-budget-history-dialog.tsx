@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { X } from "lucide-react";
 import { formatMoney, formatNumber } from "../lib/format";
 import type { BudgetHistoryEntry, CampaignSummary } from "../lib/types";
@@ -27,6 +27,8 @@ export function CampaignBudgetHistoryDialog({
   target: CampaignBudgetHistoryDialogTarget | null;
   onClose: () => void;
 }) {
+  const titleId = useId();
+
   useEffect(() => {
     if (!target) {
       return undefined;
@@ -58,16 +60,23 @@ export function CampaignBudgetHistoryDialog({
   return (
     <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
       <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
-      <div className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]">
+      <div
+        className="glass-panel relative z-[5001] flex h-[calc(100vh-8px)] max-h-[calc(100vh-8px)] w-full max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-[34px]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-brand-200">{target.productArticle}</p>
-            <h2 className="mt-2 font-display text-2xl font-semibold text-[var(--color-ink)]">Логи пополнений бюджета</h2>
+            <h2 id={titleId} className="mt-2 font-display text-2xl font-semibold text-[var(--color-ink)]">Логи пополнений бюджета</h2>
             <p className="mt-2 text-sm text-[var(--color-muted)]">{target.campaign.name}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Закрыть логи пополнений бюджета"
+            title="Закрыть"
             className="metric-chip rounded-2xl p-3 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
           >
             <X className="size-5" />

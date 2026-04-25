@@ -3,8 +3,6 @@ import { RouteLoadingScreen } from "../components/ui";
 import { DEFAULT_ARTICLES } from "../lib/api";
 import { getTodayIso, shiftIsoDate } from "../lib/format";
 import { RouteErrorBoundary } from "../routes/error-boundary";
-import { catalogLoader, CatalogPage } from "../routes/catalog-page";
-import { productLoader, ProductPage } from "../routes/product-page";
 import { RootLayout } from "../routes/root-layout";
 
 function defaultProductPath() {
@@ -33,18 +31,29 @@ export const router = createBrowserRouter([
       {
         index: true,
         loader: () => redirect(defaultCatalogPath()),
+        element: <RouteLoadingScreen />,
       },
       {
         path: "product",
-        loader: productLoader,
-        element: <ProductPage />,
+        lazy: async () => {
+          const route = await import("../routes/product-page");
+          return {
+            loader: route.productLoader,
+            Component: route.ProductPage,
+          };
+        },
         hydrateFallbackElement: <RouteLoadingScreen />,
         errorElement: <RouteErrorBoundary />,
       },
       {
         path: "catalog",
-        loader: catalogLoader,
-        element: <CatalogPage />,
+        lazy: async () => {
+          const route = await import("../routes/catalog-page");
+          return {
+            loader: route.catalogLoader,
+            Component: route.CatalogPage,
+          };
+        },
         hydrateFallbackElement: <RouteLoadingScreen />,
         errorElement: <RouteErrorBoundary />,
       },
