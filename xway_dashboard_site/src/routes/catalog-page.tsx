@@ -3494,36 +3494,34 @@ export function CatalogPage() {
       />
 
       <section className="glass-panel rounded-[26px] p-2.5 sm:p-3" aria-label="Быстрые фильтры каталога">
-        <div className="flex items-center gap-2">
-          <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
-            {CATALOG_QUICK_VIEW_OPTIONS.map((option) => {
-              const isActive = option.value === quickView;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setQuickView(option.value)}
-                  aria-pressed={isActive}
+        <div className="flex flex-wrap items-center gap-2">
+          {CATALOG_QUICK_VIEW_OPTIONS.map((option) => {
+            const isActive = option.value === quickView;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setQuickView(option.value)}
+                aria-pressed={isActive}
+                className={cn(
+                  "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
+                  isActive
+                    ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
+                    : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
+                )}
+              >
+                <span>{option.label}</span>
+                <span
                   className={cn(
-                    "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
-                    isActive
-                      ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
-                      : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
+                    "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                    isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
                   )}
                 >
-                  <span>{option.label}</span>
-                  <span
-                    className={cn(
-                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                      isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
-                    )}
-                  >
-                    {formatNumber(quickViewMetrics[option.value])}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                  {formatNumber(quickViewMetrics[option.value])}
+                </span>
+              </button>
+            );
+          })}
           <button
             type="button"
             onClick={() => setQuickViewSettingsOpen(true)}
