@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Settings } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { Outlet, useLocation, useNavigation } from "react-router";
 import { AppSurface, LoadingBar, LoadingOverlay } from "../components/ui";
+import { cn } from "../lib/format";
 
 type AppTheme = "light" | "dark";
 
@@ -25,17 +26,29 @@ function ThemeToggle({
   theme: AppTheme;
   onChange: (theme: AppTheme) => void;
 }) {
-  const nextTheme = theme === "light" ? "dark" : "light";
   return (
-    <button
-      type="button"
-      aria-label={theme === "light" ? "Включить темную тему" : "Включить светлую тему"}
-      title={theme === "light" ? "Включить темную тему" : "Включить светлую тему"}
-      onClick={() => onChange(nextTheme)}
-      className="theme-settings-button"
-    >
-      <Settings className="size-5" />
-    </button>
+    <div className="theme-toggle" aria-label="Переключение темы">
+      <button
+        type="button"
+        aria-label="Светлая тема"
+        title="Светлая тема"
+        aria-pressed={theme === "light"}
+        onClick={() => onChange("light")}
+        className={cn("theme-toggle-button", theme === "light" && "is-active")}
+      >
+        <Sun className="size-5" />
+      </button>
+      <button
+        type="button"
+        aria-label="Темная тема"
+        title="Темная тема"
+        aria-pressed={theme === "dark"}
+        onClick={() => onChange("dark")}
+        className={cn("theme-toggle-button", theme === "dark" && "is-active")}
+      >
+        <Moon className="size-5" />
+      </button>
+    </div>
   );
 }
 

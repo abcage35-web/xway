@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUpDown, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUpDown, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -3527,11 +3527,11 @@ export function CatalogPage() {
           <button
             type="button"
             onClick={() => setQuickViewSettingsOpen(true)}
+            aria-label="Условия быстрых фильтров"
             title={quickViewSettingsTitle}
-            className="metric-chip inline-flex h-8 shrink-0 items-center gap-1.5 rounded-2xl px-3 text-xs text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+            className="metric-chip inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
           >
-            <SlidersHorizontal className="size-3.5" />
-            Условия
+            <Settings className="size-3.5" />
           </button>
         </div>
       </section>

@@ -4845,10 +4845,21 @@ function LegacySection({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const sectionBodyId = useId();
+  const sectionLabel = typeof title === "string" ? title : "секцию";
 
   return (
-    <section className={cn(SOFT_PANEL_CLASS, "p-4 sm:p-5", className)}>
-      <div className={cn("flex flex-wrap items-start justify-between gap-3", collapsed ? "mb-0" : "mb-4")}>
+    <section className={cn(SOFT_PANEL_CLASS, "relative p-4 sm:p-5", className)}>
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        aria-controls={sectionBodyId}
+        aria-label={collapsed ? `Развернуть ${sectionLabel}` : `Свернуть ${sectionLabel}`}
+        onClick={() => setCollapsed((current) => !current)}
+        className="absolute right-4 top-4 inline-flex size-10 items-center justify-center rounded-full bg-[var(--color-surface-soft)] text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)] sm:right-5 sm:top-5"
+      >
+        {collapsed ? <Plus className="size-4" /> : <Minus className="size-4" />}
+      </button>
+      <div className={cn("flex flex-wrap items-start justify-between gap-3 pr-12", collapsed ? "mb-0" : "mb-4")}>
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-3">
             <h3 className="font-display text-lg font-semibold text-[var(--color-ink)] sm:text-xl">{title}</h3>
@@ -4858,16 +4869,6 @@ function LegacySection({
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
-          <button
-            type="button"
-            aria-expanded={!collapsed}
-            aria-controls={sectionBodyId}
-            aria-label={collapsed ? `Развернуть секцию ${title}` : `Свернуть секцию ${title}`}
-            onClick={() => setCollapsed((current) => !current)}
-            className="inline-flex size-10 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] shadow-[0_8px_20px_rgba(44,35,66,0.06)] transition hover:bg-white hover:text-[var(--color-ink)]"
-          >
-            {collapsed ? <Plus className="size-4" /> : <Minus className="size-4" />}
-          </button>
         </div>
       </div>
       {!collapsed ? <div id={sectionBodyId}>{children}</div> : null}

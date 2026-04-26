@@ -577,7 +577,7 @@ export function PageHero({
             <h1 className="font-display text-2xl font-semibold tracking-tight text-[var(--color-ink)] sm:text-3xl">{title}</h1>
             {subtitle ? <div className="mt-1 text-sm leading-5 text-[var(--color-muted)]">{subtitle}</div> : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:pr-14">
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:pr-32">
             {metrics}
             {actions}
           </div>

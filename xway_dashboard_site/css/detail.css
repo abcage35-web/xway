@@ -770,23 +770,29 @@
 
 .catalog-issues-panel {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(420px, auto);
-  gap: 12px;
-  align-items: center;
-  padding: 10px 12px;
-  border-radius: 22px;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  align-items: start;
+  padding: 20px;
+  border-radius: 30px;
+}
+
+@media (min-width: 640px) {
+  .catalog-issues-panel {
+    padding: 24px;
+  }
 }
 
 .catalog-issues-panel-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, 180px);
-  gap: 12px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 420px);
+  gap: 20px;
+  align-items: start;
   min-width: 0;
 }
 
 .catalog-issues-status {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
   font-size: 0.875rem;
   line-height: 1.42;
@@ -797,6 +803,8 @@
   grid-template-columns: 1fr auto;
   gap: 6px 8px;
   align-items: center;
+  justify-self: end;
+  width: 100%;
   min-width: 0;
 }
 
@@ -824,8 +832,8 @@
 
 .catalog-issues-controls {
   display: grid;
-  gap: 8px;
-  justify-items: end;
+  gap: 14px;
+  justify-items: start;
   min-width: 0;
 }
 
@@ -834,13 +842,13 @@
 .catalog-issue-badge-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
 .catalog-issues-kind-row,
 .catalog-issues-action-row {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .catalog-issue-filter-chip {
