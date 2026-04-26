@@ -2700,6 +2700,677 @@ def collect_catalog(
     return payload
 
 
+def _parse_catalog_product_refs(product_refs: Iterable[str]) -> List[Tuple[int, int, str]]:
+    parsed: List[Tuple[int, int, str]] = []
+    seen: Set[str] = set()
+    for value in product_refs:
+        text = str(value or "").strip()
+        if not text or text in seen or ":" not in text:
+            continue
+        shop_raw, product_raw = text.split(":", 1)
+        try:
+            shop_id = int(shop_raw)
+            product_id = int(product_raw)
+        except ValueError:
+            continue
+        parsed.append((shop_id, product_id, text))
+        seen.add(text)
+    return parsed
+
+
+def _catalog_chart_rate(numerator: float, denominator: float) -> Optional[float]:
+    return (numerator / denominator) * 100 if denominator else None
+
+
+def _catalog_chart_number(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _create_catalog_chart_row(day: str) -> Dict[str, Any]:
+    return {
+        "day": day,
+        "day_label": _format_day(day),
+        "views": 0.0,
+        "clicks": 0.0,
+        "atbs": 0.0,
+        "orders": 0.0,
+        "expense_sum": 0.0,
+        "spent_sku_count": 0,
+    }
+
+
+def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    views = _catalog_chart_number(row.get("views"))
+    clicks = _catalog_chart_number(row.get("clicks"))
+    atbs = _catalog_chart_number(row.get("atbs"))
+    orders = _catalog_chart_number(row.get("orders"))
+    expense_sum = _catalog_chart_number(row.get("expense_sum"))
+    spent_sku_count = int(row.get("spent_sku_count") or 0)
+    return {
+        **row,
+        "views": views,
+        "clicks": clicks,
+        "atbs": atbs,
+        "orders": orders,
+        "expense_sum": expense_sum,
+        "spent_sku_count": spent_sku_count,
+        "ctr": _catalog_chart_rate(clicks, views),
+        "cr1": _catalog_chart_rate(atbs, clicks),
+        "cr2": _catalog_chart_rate(orders, atbs),
+        "crf": _catalog_chart_rate(orders, clicks),
+    }
+
+
+def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    totals = {
+        "views": 0.0,
+        "clicks": 0.0,
+        "atbs": 0.0,
+        "orders": 0.0,
+        "expense_sum": 0.0,
+    }
+    for row in rows:
+        totals["views"] += _catalog_chart_number(row.get("views"))
+        totals["clicks"] += _catalog_chart_number(row.get("clicks"))
+        totals["atbs"] += _catalog_chart_number(row.get("atbs"))
+        totals["orders"] += _catalog_chart_number(row.get("orders"))
+        totals["expense_sum"] += _catalog_chart_number(row.get("expense_sum"))
+    return {
+        **totals,
+        "ctr": _catalog_chart_rate(totals["clicks"], totals["views"]),
+        "cr1": _catalog_chart_rate(totals["atbs"], totals["clicks"]),
+        "cr2": _catalog_chart_rate(totals["orders"], totals["atbs"]),
+        "crf": _catalog_chart_rate(totals["orders"], totals["clicks"]),
+    }
+
+
+def _issue_number(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric == numeric else None
+
+
+def _issue_number_or_zero(value: Any) -> float:
+    numeric = _issue_number(value)
+    return numeric if numeric is not None else 0.0
+
+
+def _compute_issue_drr(spend: Any, revenue: Any) -> Optional[float]:
+    spend_value = _issue_number(spend)
+    revenue_value = _issue_number(revenue)
+    if spend_value is None or revenue_value is None or revenue_value <= 0:
+        return None
+    return (spend_value / revenue_value) * 100
+
+
+def _split_pause_reason_tokens(values: Any) -> List[str]:
+    source = values if isinstance(values, list) else [values]
+    tokens: List[str] = []
+    for value in source:
+        for part in re.split(r"[;,/]", str(value or "")):
+            normalized = part.strip()
+            if normalized:
+                tokens.append(normalized)
+    return tokens
+
+
+def _resolve_issue_pause_reason_kinds(item: Dict[str, Any]) -> List[str]:
+    tokens = [
+        *_split_pause_reason_tokens(item.get("pause_reasons") or []),
+        *_split_pause_reason_tokens(item.get("paused_limiter")),
+    ]
+    joined = " ".join(token.lower() for token in tokens)
+    result: List[str] = []
+    if re.search(r"budget|бюджет|money|баланс|остаток|fund", joined):
+        result.append("budget")
+    if re.search(r"campaign_limiter|spend_limit|day_limit|daily_limit|limit|лимит|день|day", joined):
+        result.append("limit")
+    return result
+
+
+def _resolve_issue_activity_status_key(item: Dict[str, Any]) -> str:
+    if item.get("is_freeze"):
+        return "freeze"
+    status = str(item.get("status") or "").lower()
+    reasons = " ".join(
+        str(token or "").lower()
+        for token in [*(item.get("pause_reasons") or []), item.get("paused_limiter")]
+    )
+    if re.search(r"актив|active", status):
+        return "active"
+    if (
+        re.search(r"приост|pause|paused|stop|неактив|inactive", status)
+        or re.search(r"schedule|распис|budget|бюджет|limit|лимит", reasons)
+        or bool(item.get("paused_limiter"))
+        or bool(item.get("paused_user"))
+    ):
+        return "paused"
+    return "unknown"
+
+
+def _campaign_issue_intervals(campaign: Dict[str, Any]) -> List[Dict[str, Any]]:
+    pause_history = ((campaign.get("status_logs") or {}).get("pause_history") or {})
+    intervals = pause_history.get("intervals")
+    if isinstance(intervals, list):
+        return intervals
+    merged = pause_history.get("merged_intervals")
+    return merged if isinstance(merged, list) else []
+
+
+def _issue_day_label(day: str) -> str:
+    try:
+        parsed = date.fromisoformat(day)
+    except ValueError:
+        return day
+    weekday = WEEKDAYS[parsed.weekday()][1].lower()
+    return f"{weekday} {parsed.strftime('%d.%m')}"
+
+
+def _build_campaign_issue_status_day(campaign: Dict[str, Any], day: str) -> Dict[str, Any]:
+    day_date = date.fromisoformat(day)
+    day_start = datetime.combine(day_date, datetime.min.time())
+    day_end = datetime.combine(day_date, datetime.max.time())
+    entries: List[Dict[str, Any]] = []
+
+    for item in _campaign_issue_intervals(campaign):
+        start_at, end_at = _resolve_pause_interval_bounds(item)
+        if start_at is None or end_at is None or start_at > day_end or end_at < day_start:
+            continue
+        effective_start = max(start_at, day_start)
+        effective_end = min(end_at, day_end)
+        entries.append(
+            {
+                "key": _resolve_issue_activity_status_key(item),
+                "startTime": effective_start.strftime("%H:%M"),
+                "endTime": None if effective_end >= day_end else effective_end.strftime("%H:%M"),
+                "issueKinds": _resolve_issue_pause_reason_kinds(item) if not item.get("is_freeze") else [],
+            }
+        )
+
+    entries.sort(key=lambda entry: entry["startTime"])
+    return {"day": day, "label": _issue_day_label(day), "entries": entries}
+
+
+def _parse_issue_clock_to_minutes(value: Any, end_of_day: bool = False) -> int:
+    if not value:
+        return 24 * 60 if end_of_day else 0
+    parts = str(value).split(":")
+    try:
+        hours = int(parts[0] or 0)
+        minutes = int(parts[1] or 0) if len(parts) > 1 else 0
+    except ValueError:
+        return 24 * 60 if end_of_day else 0
+    return hours * 60 + minutes
+
+
+def _build_campaign_issue_summaries(campaign: Dict[str, Any], status_days: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    summaries: Dict[str, Dict[str, Any]] = {}
+    total_stopped_hours_by_day: Dict[str, float] = {}
+    daily_expense_by_day = {
+        str(row.get("day")): _issue_number(row.get("expense_sum"))
+        for row in sorted(campaign.get("daily_exact") or [], key=lambda item: str(item.get("day") or ""))
+    }
+    positive_expenses = [value for value in daily_expense_by_day.values() if value is not None and value > 0]
+    average_hourly_spend_fallback = sum(positive_expenses) / (len(positive_expenses) * 24) if positive_expenses else 0
+
+    for day_payload in status_days:
+        for entry in day_payload.get("entries") or []:
+            if entry.get("key") == "active":
+                continue
+            start_minutes = _parse_issue_clock_to_minutes(entry.get("startTime"))
+            end_minutes = _parse_issue_clock_to_minutes(entry.get("endTime"), True)
+            duration_hours = max(end_minutes - start_minutes, 0) / 60
+            if duration_hours > 0:
+                day_key = day_payload["day"]
+                total_stopped_hours_by_day[day_key] = total_stopped_hours_by_day.get(day_key, 0) + duration_hours
+
+    for day_payload in status_days:
+        for entry in day_payload.get("entries") or []:
+            issue_kinds = entry.get("issueKinds") or []
+            if not issue_kinds or entry.get("key") == "active":
+                continue
+            start_minutes = _parse_issue_clock_to_minutes(entry.get("startTime"))
+            end_minutes = _parse_issue_clock_to_minutes(entry.get("endTime"), True)
+            duration_hours = max(end_minutes - start_minutes, 0) / 60
+            if duration_hours <= 0:
+                continue
+            for kind in issue_kinds:
+                current = summaries.setdefault(
+                    kind,
+                    {
+                        "kind": kind,
+                        "label": "Израсходован лимит" if kind == "limit" else "Нет бюджета",
+                        "hours": 0.0,
+                        "incidents": 0,
+                        "days": [],
+                    },
+                )
+                current["hours"] += duration_hours
+                current["incidents"] += 1
+                day_entry = next((item for item in current["days"] if item["day"] == day_payload["day"]), None)
+                if day_entry is None:
+                    day_entry = {
+                        "day": day_payload["day"],
+                        "label": day_payload["label"],
+                        "hours": 0.0,
+                        "incidents": 0,
+                        "estimatedGap": None,
+                    }
+                    current["days"].append(day_entry)
+                day_entry["hours"] += duration_hours
+                day_entry["incidents"] += 1
+
+    result: List[Dict[str, Any]] = []
+    for kind in ("budget", "limit"):
+        summary = summaries.get(kind)
+        if not summary:
+            continue
+        days: List[Dict[str, Any]] = []
+        for day_entry in summary["days"]:
+            total_stopped_hours = total_stopped_hours_by_day.get(day_entry["day"], 0)
+            active_hours = max(24 - total_stopped_hours, 0)
+            daily_expense = daily_expense_by_day.get(day_entry["day"])
+            estimated_gap = None
+            if daily_expense is not None and daily_expense > 0 and active_hours > 0:
+                estimated_gap = (daily_expense / active_hours) * day_entry["hours"]
+            elif average_hourly_spend_fallback > 0:
+                estimated_gap = average_hourly_spend_fallback * day_entry["hours"]
+            days.append({**day_entry, "estimatedGap": estimated_gap})
+        estimated_values = [
+            day_entry["estimatedGap"]
+            for day_entry in days
+            if isinstance(day_entry.get("estimatedGap"), (int, float))
+        ]
+        result.append(
+            {
+                **summary,
+                "estimatedGapTotal": sum(estimated_values) if estimated_values else None,
+                "days": sorted(days, key=lambda item: item["day"]),
+            }
+        )
+    return result
+
+
+def _format_issue_campaign_name(campaign: Dict[str, Any]) -> str:
+    campaign_id = campaign.get("id")
+    name = str(campaign.get("name") or "").strip()
+    return f"РК {campaign_id} · {name}" if name else f"РК {campaign_id}"
+
+
+def _resolve_issue_campaign_payment_type(campaign: Dict[str, Any]) -> str:
+    payment_type = str(campaign.get("payment_type") or "").strip().lower()
+    source = " ".join(
+        str(campaign.get(field) or "").strip().lower()
+        for field in ("name", "auction_mode", "auto_type")
+    )
+    if payment_type in {"cpc", "click", "clicks"} or re.search(r"оплата\s+за\s+клики|cpc|click|клик", source):
+        return "cpc"
+    return "cpm"
+
+
+def _resolve_issue_campaign_zone_kind(campaign: Dict[str, Any]) -> str:
+    auction_mode = str(campaign.get("auction_mode") or "").strip().lower()
+    auto_type = str(campaign.get("auto_type") or "").strip().lower()
+    name = str(campaign.get("name") or "").strip().lower()
+    payment_type = str(campaign.get("payment_type") or "").strip().lower()
+    search_signal = _issue_number(campaign.get("min_cpm")) is not None or _issue_number(campaign.get("mp_bid")) is not None
+    recom_signal = _issue_number(campaign.get("min_cpm_recom")) is not None or _issue_number(campaign.get("mp_recom_bid")) is not None
+    source = " ".join(item for item in (auction_mode, auto_type, name) if item)
+
+    if campaign.get("unified"):
+        return "both"
+    if re.search(r"search[_\s-]*recom|recom[_\s-]*search|searchrecom|поиск.*реком|реком.*поиск", auction_mode):
+        return "both"
+    if re.search(r"recom|recommend|реком", auction_mode):
+        return "recom"
+    if re.search(r"search|поиск", auction_mode) or "cpc" in payment_type or "click" in payment_type or "клик" in payment_type:
+        return "search"
+    has_search = search_signal or bool(re.search(r"search|поиск", source))
+    has_recom = recom_signal or bool(re.search(r"recom|recommend|реком", source))
+    if has_search and has_recom:
+        return "both"
+    return "recom" if has_recom else "search"
+
+
+def _issue_campaign_status_code(campaign: Dict[str, Any]) -> Optional[str]:
+    raw = campaign.get("status_xway") if campaign.get("status_xway") is not None else campaign.get("status")
+    normalized = str(raw or "").strip().upper()
+    return normalized or None
+
+
+def _issue_campaign_status_label(status_code: Optional[str]) -> Optional[str]:
+    if not status_code:
+        return None
+    return {"ACTIVE": "Активна", "PAUSED": "Пауза", "FROZEN": "Заморожена"}.get(status_code, status_code)
+
+
+def _issue_campaign_display_status(status_code: Optional[str]) -> str:
+    normalized = str(status_code or "").strip().upper()
+    normalized_lower = normalized.lower()
+    if normalized == "ACTIVE" or re.search(r"(^|\s)актив", normalized_lower):
+        return "active"
+    if normalized == "FROZEN" or re.search(r"заморож|freeze|frozen", normalized_lower):
+        return "freeze"
+    if normalized == "PAUSED" or re.search(r"приост|pause|paused|stop|неактив", normalized_lower):
+        return "paused"
+    return "muted"
+
+
+def _collect_issue_campaign_day_metrics(campaign: Dict[str, Any], day: str) -> Dict[str, float]:
+    totals = {"orders_ads": 0.0, "spend": 0.0, "revenue_ads": 0.0}
+    for row in campaign.get("daily_exact") or []:
+        if str(row.get("day") or "") != day:
+            continue
+        totals["orders_ads"] += _issue_number_or_zero(row.get("orders"))
+        totals["spend"] += _issue_number_or_zero(row.get("expense_sum"))
+        totals["revenue_ads"] += _issue_number_or_zero(row.get("sum_price"))
+    return totals
+
+
+def _collect_issue_product_day_metrics(rows: List[Dict[str, Any]], day: str) -> Dict[str, float]:
+    totals = {"total_orders": 0.0, "total_revenue": 0.0}
+    for row in rows or []:
+        if str(row.get("day") or "") != day:
+            continue
+        totals["total_orders"] += _issue_number_or_zero(row.get("ordered_total"))
+        totals["total_revenue"] += _issue_number_or_zero(row.get("ordered_sum_total"))
+    return totals
+
+
+def _build_issue_campaign_meta(campaign: Dict[str, Any], metrics: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    metrics = metrics or {}
+    status_code = _issue_campaign_status_code(campaign)
+    return {
+        "id": int(campaign.get("id") or 0),
+        "label": _format_issue_campaign_name(campaign),
+        "payment_type": _resolve_issue_campaign_payment_type(campaign),
+        "zone_kind": _resolve_issue_campaign_zone_kind(campaign),
+        "status_code": status_code,
+        "status_label": _issue_campaign_status_label(status_code),
+        "display_status": _issue_campaign_display_status(status_code),
+        "hours": metrics.get("hours") if isinstance(metrics.get("hours"), (int, float)) else 0,
+        "incidents": metrics.get("incidents") if isinstance(metrics.get("incidents"), (int, float)) else 0,
+        "orders_ads": metrics.get("orders_ads") if isinstance(metrics.get("orders_ads"), (int, float)) else 0,
+        "drr": metrics.get("drr") if isinstance(metrics.get("drr"), (int, float)) else None,
+        "estimated_gap": metrics.get("estimated_gap") if isinstance(metrics.get("estimated_gap"), (int, float)) and metrics.get("estimated_gap") > 0 else None,
+    }
+
+
+def _aggregate_catalog_issue_summaries(
+    campaigns: List[Dict[str, Any]],
+    product_daily_stats: List[Dict[str, Any]],
+    day: str,
+) -> List[Dict[str, Any]]:
+    product_day_metrics = _collect_issue_product_day_metrics(product_daily_stats, day)
+    aggregated: Dict[str, Dict[str, Any]] = {}
+    for campaign in campaigns or []:
+        campaign_issues = _build_campaign_issue_summaries(campaign, [_build_campaign_issue_status_day(campaign, day)])
+        campaign_day_metrics = _collect_issue_campaign_day_metrics(campaign, day)
+        campaign_drr = _compute_issue_drr(campaign_day_metrics["spend"], campaign_day_metrics["revenue_ads"])
+        for summary in campaign_issues:
+            day_entry = next((entry for entry in summary.get("days") or [] if entry.get("day") == day), None)
+            if not day_entry:
+                continue
+            current = aggregated.setdefault(
+                summary["kind"],
+                {
+                    "kind": summary["kind"],
+                    "title": summary["label"],
+                    "hours": 0.0,
+                    "incidents": 0,
+                    "orders_ads": 0.0,
+                    "total_orders": product_day_metrics["total_orders"],
+                    "drr_overall": None,
+                    "spend": 0.0,
+                    "estimated_gap": 0.0,
+                    "campaign_ids": [],
+                    "campaign_labels": [],
+                    "campaigns": [],
+                    "campaign_id_set": set(),
+                    "campaign_label_set": set(),
+                },
+            )
+            current["hours"] += _issue_number_or_zero(day_entry.get("hours"))
+            current["incidents"] += int(day_entry.get("incidents") or 0)
+            current["orders_ads"] += campaign_day_metrics["orders_ads"]
+            current["spend"] += campaign_day_metrics["spend"]
+            if day_entry.get("estimatedGap") is not None:
+                current["estimated_gap"] += _issue_number_or_zero(day_entry.get("estimatedGap"))
+
+            campaign_id = campaign.get("id")
+            if campaign_id not in current["campaign_id_set"]:
+                current["campaign_id_set"].add(campaign_id)
+                current["campaign_ids"].append(campaign_id)
+                current["campaigns"].append(
+                    _build_issue_campaign_meta(
+                        campaign,
+                        {
+                            "hours": day_entry.get("hours"),
+                            "incidents": day_entry.get("incidents"),
+                            "orders_ads": campaign_day_metrics["orders_ads"],
+                            "drr": campaign_drr,
+                            "estimated_gap": day_entry.get("estimatedGap"),
+                        },
+                    )
+                )
+            else:
+                current_campaign = next((item for item in current["campaigns"] if item["id"] == int(campaign_id or 0)), None)
+                if current_campaign:
+                    current_campaign["hours"] += _issue_number_or_zero(day_entry.get("hours"))
+                    current_campaign["incidents"] += int(day_entry.get("incidents") or 0)
+                    current_campaign["orders_ads"] += campaign_day_metrics["orders_ads"]
+                    current_campaign["drr"] = campaign_drr if campaign_drr is not None else current_campaign.get("drr")
+                    if day_entry.get("estimatedGap") is not None:
+                        current_campaign["estimated_gap"] = _issue_number_or_zero(current_campaign.get("estimated_gap")) + _issue_number_or_zero(day_entry.get("estimatedGap"))
+
+            campaign_label = _format_issue_campaign_name(campaign)
+            if campaign_label not in current["campaign_label_set"]:
+                current["campaign_label_set"].add(campaign_label)
+                current["campaign_labels"].append(campaign_label)
+
+    result: List[Dict[str, Any]] = []
+    for kind in ("budget", "limit"):
+        item = aggregated.get(kind)
+        if not item:
+            continue
+        drr_overall = _compute_issue_drr(item["spend"], product_day_metrics["total_revenue"])
+        campaigns_payload = []
+        for campaign in item["campaigns"]:
+            campaigns_payload.append(
+                {
+                    **campaign,
+                    "drr": campaign.get("drr") if isinstance(campaign.get("drr"), (int, float)) else None,
+                    "estimated_gap": campaign.get("estimated_gap") if isinstance(campaign.get("estimated_gap"), (int, float)) and campaign.get("estimated_gap") > 0 else None,
+                }
+            )
+        campaigns_payload.sort(key=lambda campaign: (-campaign.get("hours", 0), -campaign.get("incidents", 0), str(campaign.get("label") or "")))
+        result.append(
+            {
+                "kind": item["kind"],
+                "title": item["title"],
+                "hours": item["hours"],
+                "incidents": item["incidents"],
+                "orders_ads": item["orders_ads"],
+                "total_orders": item["total_orders"] if isinstance(item["total_orders"], (int, float)) else None,
+                "drr_overall": drr_overall if isinstance(drr_overall, (int, float)) else None,
+                "estimated_gap": item["estimated_gap"] if item["estimated_gap"] > 0 else None,
+                "campaign_ids": item["campaign_ids"],
+                "campaign_labels": item["campaign_labels"],
+                "campaigns": campaigns_payload,
+            }
+        )
+    return result
+
+
+def _collect_single_catalog_issue(
+    storage_state_path: str,
+    range_payload: Dict[str, str],
+    ref: Tuple[int, int, str],
+) -> Dict[str, Any]:
+    shop_id, product_id, product_ref = ref
+    api = XwayApi(storage_state_path, start=range_payload["current_start"], end=range_payload["current_end"])
+    stata = api.product_stata(shop_id, product_id) or {}
+    campaign_rows = stata.get("campaign_wb") or []
+    campaign_ids = [campaign.get("id") for campaign in campaign_rows if campaign.get("id") is not None]
+    if not campaign_ids:
+        return {"product_ref": product_ref, "issues": [], "campaigns": []}
+
+    daily_exact_payload, _ = _safe_call(
+        lambda: api.campaign_daily_exact(shop_id, product_id, campaign_ids, range_payload["current_start"], range_payload["current_end"]),
+        {},
+    )
+    product_daily_stats, _ = _safe_call(
+        lambda: api.product_stats_by_day(shop_id, product_id),
+        [],
+    )
+
+    def collect_campaign(campaign: Dict[str, Any]) -> Dict[str, Any]:
+        campaign_id = campaign.get("id")
+        campaign_api = XwayApi(storage_state_path, start=range_payload["current_start"], end=range_payload["current_end"])
+        pause_payload, _ = _safe_call(
+            lambda: campaign_api.campaign_status_pause_history_full(
+                shop_id,
+                product_id,
+                int(campaign_id),
+                initial_limit=STATUS_PAUSE_HISTORY_INITIAL_LIMIT,
+                target_start=range_payload["current_start"],
+            ),
+            {},
+        )
+        return {
+            "id": campaign_id,
+            "name": campaign.get("name"),
+            "status": campaign.get("status"),
+            "status_xway": campaign.get("status_xway"),
+            "payment_type": campaign.get("payment_type"),
+            "auction_mode": campaign.get("auction_mode"),
+            "auto_type": campaign.get("auto_type"),
+            "unified": bool(campaign.get("unified")),
+            "min_cpm": campaign.get("min_cpm"),
+            "mp_bid": campaign.get("mp_bid"),
+            "min_cpm_recom": campaign.get("min_cpm_recom"),
+            "mp_recom_bid": campaign.get("mp_recom_bid"),
+            "daily_exact": (daily_exact_payload or {}).get(str(campaign_id)) or [],
+            "status_logs": {
+                "pause_history": _normalize_status_pause_history(pause_payload or {}),
+            },
+        }
+
+    campaigns: List[Dict[str, Any]] = []
+    max_workers = min(2, max(1, len(campaign_rows)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(collect_campaign, campaign) for campaign in campaign_rows]
+        for future in as_completed(futures):
+            campaigns.append(future.result())
+
+    return {
+        "product_ref": product_ref,
+        "issues": _aggregate_catalog_issue_summaries(campaigns, product_daily_stats, range_payload["current_start"]),
+        "campaigns": [_build_issue_campaign_meta(campaign) for campaign in campaigns],
+    }
+
+
+def collect_catalog_issues(
+    storage_state_path: str,
+    product_refs: Iterable[str],
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> Dict[str, Any]:
+    base_api = XwayApi(storage_state_path, start=start, end=end)
+    range_payload = base_api.range
+    parsed_refs = _parse_catalog_product_refs(product_refs)
+    rows: List[Dict[str, Any]] = []
+
+    max_workers = min(2, max(1, len(parsed_refs)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_refs = {
+            executor.submit(_collect_single_catalog_issue, storage_state_path, range_payload, ref): ref
+            for ref in parsed_refs
+        }
+        for future in as_completed(future_refs):
+            ref = future_refs[future]
+            try:
+                rows.append(future.result())
+            except Exception:
+                rows.append({"product_ref": ref[2], "issues": [], "campaigns": []})
+
+    rows_by_ref = {row["product_ref"]: row for row in rows}
+    ordered_rows = [rows_by_ref[ref[2]] for ref in parsed_refs if ref[2] in rows_by_ref]
+    return {
+        "ok": True,
+        "generated_at": date.today().isoformat(),
+        "range": range_payload,
+        "rows": ordered_rows,
+        "requested_products": [ref[2] for ref in parsed_refs],
+        "loaded_products_count": len(ordered_rows),
+    }
+
+
+def collect_catalog_chart(
+    storage_state_path: str,
+    product_refs: Iterable[str],
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> Dict[str, Any]:
+    base_api = XwayApi(storage_state_path, start=start, end=end)
+    range_payload = base_api.range
+    parsed_refs = _parse_catalog_product_refs(product_refs)
+    days = _iter_iso_days(range_payload["current_start"], range_payload["current_end"])
+    rows_by_day = {day: _create_catalog_chart_row(day) for day in days}
+    errors: List[Dict[str, str]] = []
+
+    def collect_ref(shop_id: int, product_id: int, ref: str) -> Tuple[str, Optional[List[Dict[str, Any]]], Optional[str]]:
+        try:
+            api = XwayApi(storage_state_path, start=range_payload["current_start"], end=range_payload["current_end"])
+            return ref, api.product_stats_by_day(shop_id, product_id), None
+        except Exception as exc:
+            return ref, None, str(exc)
+
+    max_workers = min(6, max(1, len(parsed_refs)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(collect_ref, shop_id, product_id, ref) for shop_id, product_id, ref in parsed_refs]
+        for future in as_completed(futures):
+            ref, product_rows, error = future.result()
+            if error:
+                errors.append({"product": ref, "error": error})
+                continue
+            spent_days: Set[str] = set()
+            for product_row in product_rows or []:
+                day = product_row.get("day")
+                target = rows_by_day.get(day)
+                if target is None:
+                    continue
+                expense_sum = _catalog_chart_number(product_row.get("expense_sum"))
+                target["views"] += _catalog_chart_number(product_row.get("views"))
+                target["clicks"] += _catalog_chart_number(product_row.get("clicks"))
+                target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
+                target["orders"] += _catalog_chart_number(product_row.get("orders"))
+                target["expense_sum"] += expense_sum
+                if expense_sum > 0:
+                    spent_days.add(day)
+            for day in spent_days:
+                rows_by_day[day]["spent_sku_count"] += 1
+
+    rows = [_finalize_catalog_chart_row(rows_by_day[day]) for day in days]
+    return {
+        "ok": True,
+        "generated_at": date.today().isoformat(),
+        "range": range_payload,
+        "selection_count": len(parsed_refs),
+        "loaded_products_count": max(len(parsed_refs) - len(errors), 0),
+        "rows": rows,
+        "totals": _catalog_chart_totals(rows),
+        "errors": errors,
+    }
+
+
 def collect_cluster_detail(
     storage_state_path: str,
     shop_id: int,

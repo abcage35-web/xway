@@ -465,13 +465,13 @@ export function ProductTopToolbar({
               <span className="inline-flex h-7 items-center rounded-full bg-white px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-ink)] shadow-[0_4px_12px_rgba(44,35,66,0.1)]">
                 Товар
               </span>
-              <Link to={catalogPath} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
+              <Link to={catalogPath} className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
                 Артикулы
               </Link>
             </>
           ) : (
             <>
-              <Link to={productPath} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
+              <Link to={productPath} className="inline-flex h-7 items-center rounded-full px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-muted)] transition-all hover:text-[var(--color-ink)]">
                 Товар
               </Link>
               <span className="inline-flex h-7 items-center rounded-full bg-white px-3 text-sm font-semibold leading-none whitespace-nowrap text-[var(--color-ink)] shadow-[0_4px_12px_rgba(44,35,66,0.1)]">

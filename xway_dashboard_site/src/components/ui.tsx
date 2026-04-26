@@ -55,6 +55,8 @@ export function MetricCard({
   deltaText,
   deltaClassName,
   icon,
+  density = "default",
+  className,
 }: {
   label: string;
   value: ReactNode;
@@ -63,20 +65,23 @@ export function MetricCard({
   deltaText?: ReactNode;
   deltaClassName?: string;
   icon?: ReactNode;
+  density?: "default" | "compact";
+  className?: string;
 }) {
+  const isCompact = density === "compact";
   return (
-    <div className="glass-panel rounded-3xl p-4 sm:p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-2">
-          <p className="text-xs uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</p>
-          <div className="font-display text-2xl font-semibold text-[var(--color-ink)] sm:text-3xl">{value}</div>
-          {hint ? <p className="text-sm text-[var(--color-muted)]">{hint}</p> : null}
+    <div className={cn("glass-panel", isCompact ? "rounded-[22px] p-3 sm:p-3.5" : "rounded-3xl p-4 sm:p-5", className)}>
+      <div className={cn("flex items-start justify-between", isCompact ? "gap-2.5" : "gap-4")}>
+        <div className={cn(isCompact ? "space-y-1.5" : "space-y-2")}>
+          <p className={cn("uppercase text-[var(--color-muted)]", isCompact ? "text-[10px] tracking-[0.22em]" : "text-xs tracking-[0.24em]")}>{label}</p>
+          <div className={cn("font-display font-semibold text-[var(--color-ink)]", isCompact ? "text-xl leading-none sm:text-2xl" : "text-2xl sm:text-3xl")}>{value}</div>
+          {hint ? <p className={cn("text-[var(--color-muted)]", isCompact ? "text-xs" : "text-sm")}>{hint}</p> : null}
         </div>
-        {icon ? <div className="metric-chip rounded-2xl p-3 text-brand-200">{icon}</div> : null}
+        {icon ? <div className={cn("metric-chip text-brand-200", isCompact ? "rounded-[18px] p-2" : "rounded-2xl p-3")}>{icon}</div> : null}
       </div>
       {deltaText !== undefined || delta !== undefined ? (
-        <p className={cn("mt-4 text-sm font-medium", deltaText !== undefined ? deltaClassName : relativeDeltaClass(delta))}>
-          {deltaText !== undefined ? deltaText : delta === null ? "Без сравнения" : `${formatDelta(delta)} к прошлому периоду`}
+        <p className={cn(isCompact ? "mt-2 text-xs font-semibold" : "mt-4 text-sm font-medium", deltaText !== undefined ? deltaClassName : relativeDeltaClass(delta))}>
+          {deltaText !== undefined ? deltaText : delta === null ? "Без сравнения" : `( ${formatDelta(delta)} )`}
         </p>
       ) : null}
     </div>
@@ -499,17 +504,30 @@ export function SkeletonBlock({ className }: { className?: string }) {
   return <div className={cn("skeleton-shimmer rounded-[18px] bg-[var(--color-surface-strong)]", className)} />;
 }
 
-function LoadingScreenCard({ rows = 3 }: { rows?: number }) {
+function LoadingPlaque({
+  title = "Загружаем данные",
+  text = "Верстка останется на месте, обновятся только данные текущего экрана.",
+  className,
+}: {
+  title?: string;
+  text?: string;
+  className?: string;
+}) {
   return (
-    <div className="rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4">
-      <div className="space-y-3">
-        {Array.from({ length: rows }, (_, index) => (
-          <div key={index}>
-            {index > 0 ? <div className="mb-3 h-px bg-[var(--color-line)]" /> : null}
-            <SkeletonBlock className="h-3.5 w-28 rounded-full" />
-            <SkeletonBlock className="mt-2 h-5 w-36 rounded-full" />
-          </div>
-        ))}
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "inline-flex max-w-[380px] items-center gap-3 rounded-[24px] border border-[var(--color-line)] bg-white/95 px-4 py-3 shadow-[0_18px_46px_rgba(44,35,66,0.12)] backdrop-blur-xl",
+        className,
+      )}
+    >
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[var(--color-surface-soft)] text-brand-200">
+        <LoaderCircle className="size-5 animate-spin" />
+      </div>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-[var(--color-ink)]">{title}</p>
+        <p className="mt-0.5 text-xs leading-snug text-[var(--color-muted)]">{text}</p>
       </div>
     </div>
   );
@@ -517,114 +535,23 @@ function LoadingScreenCard({ rows = 3 }: { rows?: number }) {
 
 export function RouteLoadingScreen() {
   return (
-    <div className="space-y-4">
-      <div className="glass-panel rounded-[24px] p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <SkeletonBlock className="size-10 rounded-2xl" />
-          <SkeletonBlock className="h-8 w-px rounded-none" />
-          <SkeletonBlock className="h-12 w-[168px] rounded-[16px]" />
-          <SkeletonBlock className="h-12 w-[168px] rounded-[16px]" />
-          <SkeletonBlock className="h-12 w-[154px] rounded-full" />
-          <div className="min-w-4 flex-1" />
-          <SkeletonBlock className="h-12 w-[108px] rounded-full" />
-          <SkeletonBlock className="h-12 w-[108px] rounded-full" />
-          <SkeletonBlock className="h-12 w-[108px] rounded-full" />
-        </div>
-      </div>
-
-      <div className="glass-panel rounded-[30px] p-4 sm:p-5">
-        <div className="grid min-w-0 grid-cols-[88px_minmax(0,1fr)] gap-4 sm:grid-cols-[102px_minmax(0,1fr)]">
-          <SkeletonBlock className="aspect-[51/68] w-[88px] rounded-[24px] sm:w-[102px]" />
-          <div className="min-w-0 space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <SkeletonBlock className="h-8 w-32 rounded-full" />
-              <SkeletonBlock className="h-8 w-28 rounded-full" />
-              <SkeletonBlock className="h-8 w-40 rounded-full" />
-            </div>
-            <SkeletonBlock className="h-8 w-[62%]" />
-            <SkeletonBlock className="h-4 w-[76%]" />
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {Array.from({ length: 4 }, (_, index) => (
-            <div key={index} className="rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-3">
-              <SkeletonBlock className="h-3.5 w-24 rounded-full" />
-              <SkeletonBlock className="mt-2 h-5 w-28 rounded-full" />
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4 grid gap-3 lg:grid-cols-3">
-          <LoadingScreenCard rows={3} />
-          <LoadingScreenCard rows={2} />
-          <LoadingScreenCard rows={2} />
-        </div>
-
-        <div className="mt-4 overflow-hidden rounded-[20px] border border-[var(--color-line)] bg-white">
-          <div className="grid border-b border-[var(--color-line)] bg-[var(--color-surface-soft)] px-3 py-2 sm:grid-cols-5">
-            {Array.from({ length: 5 }, (_, index) => (
-              <div key={index} className={cn("py-1", index > 0 && "sm:border-l sm:border-[var(--color-line)] sm:pl-3")}>
-                <SkeletonBlock className="h-3.5 w-24 rounded-full" />
-              </div>
-            ))}
-          </div>
-          <div className="grid gap-0 sm:grid-cols-5">
-            {Array.from({ length: 5 }, (_, index) => (
-              <div key={index} className={cn("border-b border-[var(--color-line)] p-3 last:border-b-0 sm:min-h-[124px]", index > 0 && "sm:border-l sm:border-[var(--color-line)]")}>
-                <SkeletonBlock className="h-full min-h-[96px] w-full rounded-[14px]" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="glass-panel rounded-[30px] p-4 sm:p-5">
-        <div className="flex flex-wrap gap-2 rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] p-2">
-          {Array.from({ length: 6 }, (_, index) => (
-            <SkeletonBlock key={index} className="h-10 w-28 rounded-[12px]" />
-          ))}
-        </div>
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <SkeletonBlock className="h-64 w-full rounded-[24px]" />
-          <SkeletonBlock className="h-64 w-full rounded-[24px]" />
-        </div>
-      </div>
+    <div className="flex min-h-[calc(100vh-72px)] items-start justify-center px-4 pt-10">
+      <LoadingPlaque />
     </div>
   );
 }
 
 export function LoadingOverlay({ active }: { active: boolean }) {
+  if (!active) {
+    return null;
+  }
+
   return (
-    <div
-      className={cn(
-        "pointer-events-none fixed inset-0 z-40 transition duration-300",
-        active ? "opacity-100" : "opacity-0",
-      )}
-      aria-hidden={!active}
-    >
-      <div className="absolute inset-0 bg-[rgba(244,243,247,0.52)] backdrop-blur-[6px]" />
-      <div className="mx-auto flex h-full w-full max-w-[1680px] items-start justify-end px-4 pb-8 pt-24 sm:px-6 lg:px-8">
-        <div className="w-full max-w-[360px] rounded-[28px] border border-[var(--color-line)] bg-white/94 p-4 shadow-[0_24px_60px_rgba(44,35,66,0.12)]">
-          <div className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-2xl bg-[var(--color-surface-soft)] text-brand-200">
-              <LoaderCircle className={cn("size-5", active && "animate-spin")} />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-semibold text-[var(--color-ink)]">Загружаем данные</p>
-              <p className="text-xs text-[var(--color-muted)]">Обновляем карточки, таблицы и графики для текущего экрана.</p>
-            </div>
-          </div>
-          <div className="mt-4 space-y-2">
-            <SkeletonBlock className="h-12 w-full rounded-[16px]" />
-            <SkeletonBlock className="h-24 w-full rounded-[18px]" />
-            <div className="grid grid-cols-2 gap-2">
-              <SkeletonBlock className="h-14 w-full rounded-[16px]" />
-              <SkeletonBlock className="h-14 w-full rounded-[16px]" />
-            </div>
-          </div>
-        </div>
-      </div>
+    <div className="pointer-events-none fixed bottom-5 left-5 right-5 z-[5200] flex justify-end sm:left-auto">
+      <LoadingPlaque
+        title="Загружаем страницу"
+        text="Оставляем текущую верстку на экране и подменим данные после ответа."
+      />
     </div>
   );
 }
@@ -634,12 +561,31 @@ export function PageHero({
   subtitle,
   metrics,
   actions,
+  compact = false,
 }: {
   title: string;
-  subtitle: ReactNode;
+  subtitle?: ReactNode;
   metrics?: ReactNode;
   actions?: ReactNode;
+  compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <div className="px-2 py-2 sm:px-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-[var(--color-ink)] sm:text-3xl">{title}</h1>
+            {subtitle ? <div className="mt-1 text-sm leading-5 text-[var(--color-muted)]">{subtitle}</div> : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:pr-32">
+            {metrics}
+            {actions}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="glass-panel relative overflow-hidden rounded-[34px] p-6 sm:p-7">
       <div className="absolute -right-14 -top-14 h-40 w-40 rounded-full bg-[radial-gradient(circle,_rgba(255,157,92,0.14)_0%,_rgba(255,157,92,0)_72%)]" />
@@ -648,7 +594,7 @@ export function PageHero({
         <div className="max-w-3xl">
           <p className="mb-3 text-xs uppercase tracking-[0.28em] text-brand-200">XWAY Dashboard</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight text-[var(--color-ink)] sm:text-5xl">{title}</h1>
-          <div className="mt-3 text-sm leading-6 text-[var(--color-muted)] sm:text-base">{subtitle}</div>
+          {subtitle ? <div className="mt-3 text-sm leading-6 text-[var(--color-muted)] sm:text-base">{subtitle}</div> : null}
         </div>
         <div className="flex flex-col gap-4 xl:items-end">
           {metrics ? <div className="flex flex-wrap gap-2">{metrics}</div> : null}

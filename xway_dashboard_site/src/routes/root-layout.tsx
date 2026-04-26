@@ -1,16 +1,73 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 import { Outlet, useLocation, useNavigation } from "react-router";
 import { AppSurface, LoadingBar, LoadingOverlay } from "../components/ui";
+import { cn } from "../lib/format";
+
+type AppTheme = "light" | "dark";
+
+const APP_THEME_STORAGE_KEY = "xway-dashboard-theme";
+
+function readStoredTheme(): AppTheme {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+  try {
+    return window.localStorage.getItem(APP_THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function ThemeToggle({
+  theme,
+  onChange,
+}: {
+  theme: AppTheme;
+  onChange: (theme: AppTheme) => void;
+}) {
+  return (
+    <div className="theme-toggle" aria-label="Переключение темы">
+      <button
+        type="button"
+        aria-label="Светлая тема"
+        title="Светлая тема"
+        aria-pressed={theme === "light"}
+        onClick={() => onChange("light")}
+        className={cn("theme-toggle-button", theme === "light" && "is-active")}
+      >
+        <Sun className="size-5" />
+      </button>
+      <button
+        type="button"
+        aria-label="Темная тема"
+        title="Темная тема"
+        aria-pressed={theme === "dark"}
+        onClick={() => onChange("dark")}
+        className={cn("theme-toggle-button", theme === "dark" && "is-active")}
+      >
+        <Moon className="size-5" />
+      </button>
+    </div>
+  );
+}
 
 export function RootLayout() {
   const navigation = useNavigation();
   const location = useLocation();
+  const [theme, setTheme] = useState<AppTheme>(() => readStoredTheme());
   const isLoading = navigation.state !== "idle";
-  const navigationPathname = navigation.location?.pathname ?? null;
-  const preserveProductScreenWhileLoading =
-    location.pathname.startsWith("/product") &&
-    navigationPathname === location.pathname;
-  const showLoadingOverlay = isLoading && !preserveProductScreenWhileLoading;
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem(APP_THEME_STORAGE_KEY, theme);
+    } catch {
+      // localStorage can be unavailable in private or restricted contexts.
+    }
+  }, [theme]);
 
   useEffect(() => {
     const body = document.body;
@@ -28,10 +85,11 @@ export function RootLayout() {
   return (
     <>
       <LoadingBar active={isLoading} />
+      <ThemeToggle theme={theme} onChange={setTheme} />
       <AppSurface>
         <main className="relative flex-1">
           <Outlet />
-          <LoadingOverlay active={showLoadingOverlay} />
+          <LoadingOverlay active={isLoading} />
         </main>
       </AppSurface>
     </>

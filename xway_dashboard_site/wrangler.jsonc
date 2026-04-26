@@ -7,6 +7,6 @@
     "XWAY_DEFAULT_ARTICLES": "44392513,60149847"
   }
   // Configure in Cloudflare dashboard or via wrangler secrets:
-  // - API_ORIGIN: optional reserve proxy origin for legacy/unported routes
+  // - API_ORIGIN: optional reserve proxy origin for routes not handled by Pages Functions
   // - XWAY_STORAGE_STATE_JSON or XWAY_STORAGE_STATE_BASE64: auth state for native XWAY API calls
 }

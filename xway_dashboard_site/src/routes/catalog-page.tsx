@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUpDown, ChevronDown, ExternalLink, FolderOpen, Layers3, MousePointerClick, PackageCheck, Pause, Play, Search as SearchIcon, ShoppingBag, ShoppingCart, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUpDown, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -41,22 +41,127 @@ const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolba
 const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
 const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v4";
 const CATALOG_ISSUES_SETTINGS_STORAGE_KEY = "xway-catalog-issues-settings-v1";
-const CATALOG_ISSUES_COLLAPSED_STORAGE_KEY = "xway-catalog-issues-collapsed-v1";
+const CATALOG_SUMMARY_METRICS_SETTINGS_STORAGE_KEY = "xway-catalog-summary-metrics-settings-v1";
+const CATALOG_QUICK_VIEW_STORAGE_KEY = "xway-catalog-quick-view-v1";
+const CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY = "xway-catalog-quick-view-settings-v1";
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
 const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
+const CATALOG_LOW_CR_CLICKS_THRESHOLD_DEFAULT = 20;
+const CATALOG_LOW_CR_PERCENT_THRESHOLD_DEFAULT = 2;
+const CATALOG_SLOW_TURNOVER_DAYS_DEFAULT = 30;
 const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "turnover"] as const;
+const CATALOG_SUMMARY_METRIC_KEYS = [
+  "spend",
+  "views",
+  "clicks",
+  "atbs",
+  "orders",
+  "ctr",
+  "cr",
+  "cpm",
+  "cpc",
+  "atbCost",
+  "cpo",
+  "cr1",
+  "cr2",
+  "revenue",
+  "drr",
+  "shops",
+  "articles",
+] as const;
 
 type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
 type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "turnover">, boolean>;
+type CatalogSummaryMetricKey = (typeof CATALOG_SUMMARY_METRIC_KEYS)[number];
+type CatalogQuickView = "all" | "attention" | "withSpend" | "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
+type CatalogAttentionRuleKey = "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
+
+const CATALOG_QUICK_VIEW_OPTIONS: Array<{ value: CatalogQuickView; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "attention", label: "Внимание" },
+  { value: "withSpend", label: "Есть расход" },
+  { value: "noOrders", label: "Расход без заказов" },
+  { value: "lowCr", label: "Низкий CR" },
+  { value: "slowTurnover", label: "Медленная оборач." },
+  { value: "withoutCampaigns", label: "Без РК" },
+];
+
+const CATALOG_ATTENTION_RULE_OPTIONS: Array<{ value: CatalogAttentionRuleKey; label: string; caption: string }> = [
+  { value: "withoutCampaigns", label: "Без РК", caption: "Есть остаток, но нет рекламных кампаний." },
+  { value: "noOrders", label: "Расход без заказов", caption: "Расход больше 0, заказов нет." },
+  { value: "lowCr", label: "Низкий CR", caption: "Кликов достаточно, но CR ниже заданного порога." },
+  { value: "slowTurnover", label: "Медленная оборачиваемость", caption: "Остатка хватает дольше заданного порога." },
+];
+
+const DEFAULT_CATALOG_ATTENTION_RULES: Record<CatalogAttentionRuleKey, boolean> = {
+  noOrders: true,
+  lowCr: true,
+  slowTurnover: true,
+  withoutCampaigns: true,
+};
+
+interface CatalogQuickViewSettingsState {
+  lowCrClicksThreshold: number;
+  lowCrPercentThreshold: number;
+  slowTurnoverDays: number;
+  attentionRules: Record<CatalogAttentionRuleKey, boolean>;
+}
 
 interface CatalogIssueSettingsState {
   turnoverThreshold: number;
   downtimeThresholdHours: number;
   visibleKinds: CatalogIssueVisibilityState;
 }
+
+interface CatalogSummaryMetricSetting {
+  visible: boolean;
+  compact: boolean;
+}
+
+type CatalogSummaryMetricSettings = Record<CatalogSummaryMetricKey, CatalogSummaryMetricSetting>;
+
+const CATALOG_SUMMARY_METRIC_LABELS: Record<CatalogSummaryMetricKey, string> = {
+  spend: "Расход",
+  views: "Показы",
+  clicks: "Клики",
+  atbs: "Корзины",
+  orders: "Заказы",
+  ctr: "CTR каталога",
+  cr: "CR каталога",
+  cpm: "CPM каталога",
+  cpc: "CPC каталога",
+  atbCost: "Цена корзины",
+  cpo: "CPO каталога",
+  cr1: "CR1 каталога",
+  cr2: "CR2 каталога",
+  revenue: "Выручка РК",
+  drr: "ДРР каталога",
+  shops: "Кабинеты",
+  articles: "Артикулы",
+};
+
+const DEFAULT_CATALOG_SUMMARY_METRIC_SETTINGS: CatalogSummaryMetricSettings = {
+  spend: { visible: true, compact: false },
+  views: { visible: true, compact: true },
+  clicks: { visible: true, compact: true },
+  atbs: { visible: true, compact: true },
+  orders: { visible: true, compact: false },
+  ctr: { visible: true, compact: false },
+  cr: { visible: true, compact: false },
+  cpm: { visible: false, compact: false },
+  cpc: { visible: false, compact: false },
+  atbCost: { visible: false, compact: false },
+  cpo: { visible: false, compact: false },
+  cr1: { visible: false, compact: false },
+  cr2: { visible: false, compact: false },
+  revenue: { visible: false, compact: true },
+  drr: { visible: false, compact: false },
+  shops: { visible: false, compact: true },
+  articles: { visible: false, compact: true },
+};
 
 interface CatalogIssueTargetMeta {
   ref: string;
@@ -368,73 +473,230 @@ function CatalogIssueCampaignEntry({
   );
 }
 
-function CatalogIssueCell({
-  issue,
-}: {
-  issue: CatalogArticleYesterdayIssues["issues"][number] | null;
-}) {
-  if (!issue) {
-    return <div className="min-h-[72px]" aria-hidden="true" />;
+function resolveCatalogIssueKindShortLabel(kind: CatalogIssueKind) {
+  if (kind === "budget") {
+    return "Бюджет";
+  }
+  if (kind === "limit") {
+    return "Лимит";
+  }
+  return "Оборач.";
+}
+
+function getArticleIssueEstimatedGapTotal(item: CatalogIssueDisplayRow) {
+  return item.issues.reduce((sum, issue) => sum + (issue.estimatedGap ?? 0), 0);
+}
+
+function formatCatalogIssueInlineText(issue: CatalogArticleYesterdayIssues["issues"][number]) {
+  if (issue.kind === "turnover") {
+    const turnoverText = issue.turnoverDays !== undefined && issue.turnoverDays !== null ? formatTurnoverDays(issue.turnoverDays) : null;
+    return turnoverText ? `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${turnoverText}` : resolveCatalogIssueKindShortLabel(issue.kind);
   }
 
-  const tone = resolveCatalogIssueKindTone(issue.kind);
+  if (issue.hours > 0) {
+    return `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${formatNumber(issue.hours, 1)} ч`;
+  }
+
+  if (issue.incidents > 0) {
+    return `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${formatIssueIncidents(issue.incidents)}`;
+  }
+
+  return resolveCatalogIssueKindShortLabel(issue.kind);
+}
+
+function CatalogIssueInlineBadges({
+  item,
+  isLoaded,
+  isLoading,
+  onSelect,
+}: {
+  item: CatalogIssueDisplayRow | null;
+  isLoaded: boolean;
+  isLoading: boolean;
+  onSelect: (kind: CatalogIssueKind) => void;
+}) {
+  if (!item) {
+    return (
+      <span className={cn("catalog-issue-empty-badge", !isLoaded && "is-pending")}>
+        {isLoading && !isLoaded ? "Сбор" : isLoaded ? "Нет ошибок" : "Не собрано"}
+      </span>
+    );
+  }
 
   return (
-    <div className={cn("flex h-full flex-col gap-2 rounded-[20px] border p-3", tone.shell)}>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", tone.badge)}>
-          {issue.title}
-        </span>
-        {issue.kind === "turnover" ? (
-          <>
-            {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                {formatTurnoverDays(issue.turnoverDays)}
-              </span>
-            ) : null}
-            {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                ≤ {formatTurnoverDays(issue.thresholdDays)}
-              </span>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {issue.hours > 0 ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                {formatNumber(issue.hours, 1)} ч
-              </span>
-            ) : null}
-            {issue.incidents > 0 ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                {formatIssueIncidents(issue.incidents)}
-              </span>
-            ) : null}
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-              {issue.totalOrders !== null
-                ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
-                : `Заказы ${formatNumber(issue.ordersAds)}`}
-            </span>
-            {issue.drrOverall !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                ДРР общ. {formatPercent(issue.drrOverall)}
-              </span>
-            ) : null}
-            {issue.estimatedGap !== null ? (
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
-                ≈ {formatMoney(issue.estimatedGap)}
-              </span>
-            ) : null}
-          </>
-        )}
-      </div>
-      {issue.campaigns.length ? (
-        <div className="space-y-2">
-          {issue.campaigns.map((campaign) => (
-            <CatalogIssueCampaignEntry key={`${issue.kind}-${campaign.id}`} campaign={campaign} issueKind={issue.kind} />
-          ))}
+    <div className="catalog-issue-badge-list">
+      {item.issues.map((issue) => (
+        <button
+          key={`${item.ref}-${issue.kind}`}
+          type="button"
+          onClick={() => onSelect(issue.kind)}
+          title={`${resolveCatalogIssueKindLabel(issue.kind)} · ${resolveCatalogIssueKindCaption(issue.kind)}`}
+          className={cn("catalog-issue-inline-badge", `is-${issue.kind}`)}
+        >
+          {formatCatalogIssueInlineText(issue)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CatalogIssueDrawer({
+  item,
+  preferredKind,
+  yesterdayIso,
+  yesterdayLabel,
+  onClose,
+}: {
+  item: CatalogIssueDisplayRow;
+  preferredKind: CatalogIssueKind | null;
+  yesterdayIso: string;
+  yesterdayLabel: string;
+  onClose: () => void;
+}) {
+  const preferredIssue = preferredKind ? getArticleIssueByKind(item, preferredKind) : null;
+  const issues = preferredIssue ? [preferredIssue, ...item.issues.filter((issue) => issue.kind !== preferredIssue.kind)] : item.issues;
+  const totalHours = getArticleIssueHoursTotal(item);
+  const totalIncidents = getArticleIssueIncidentsTotal(item);
+  const estimatedGap = getArticleIssueEstimatedGapTotal(item);
+
+  return (
+    <div className="catalog-issue-drawer-backdrop" role="presentation" onClick={onClose}>
+      <aside
+        className="catalog-issue-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="catalog-issue-drawer-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="catalog-issue-drawer-head">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-200">Ошибки за {yesterdayLabel}</p>
+            <h2 id="catalog-issue-drawer-title" className="font-display text-lg font-semibold text-[var(--color-ink)]">
+              {item.article}
+            </h2>
+            <p className="mt-1 truncate text-sm text-[var(--color-muted)]" title={item.name}>
+              {item.name}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            title="Закрыть"
+            aria-label="Закрыть детали ошибок"
+            className="metric-chip inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <X className="size-4" />
+          </button>
         </div>
-      ) : null}
+
+        <div className="catalog-issue-drawer-body">
+          <div className="catalog-issue-drawer-product">
+            <Link
+              to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+              className="h-[76px] w-[58px] shrink-0 overflow-hidden rounded-[16px] border border-[var(--color-line)] bg-[var(--color-surface-soft)]"
+              aria-label={`Открыть товар ${item.name}`}
+            >
+              {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" /> : null}
+            </Link>
+            <div className="grid min-w-0 flex-1 grid-cols-3 gap-2">
+              <div className="catalog-issue-drawer-metric">
+                <span>Простой</span>
+                <strong>{totalHours > 0 ? `${formatNumber(totalHours, 1)} ч` : "—"}</strong>
+              </div>
+              <div className="catalog-issue-drawer-metric">
+                <span>Остановки</span>
+                <strong>{totalIncidents > 0 ? formatNumber(totalIncidents) : "—"}</strong>
+              </div>
+              <div className="catalog-issue-drawer-metric">
+                <span>Потери</span>
+                <strong>{estimatedGap > 0 ? `≈ ${formatMoney(estimatedGap)}` : "—"}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {issues.map((issue) => {
+              const tone = resolveCatalogIssueKindTone(issue.kind);
+              return (
+                <section key={`${item.ref}-${issue.kind}`} className={cn("rounded-[18px] border p-3", tone.shell)}>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", tone.badge)}>
+                      {resolveCatalogIssueKindLabel(issue.kind)}
+                    </span>
+                    {issue.kind === "turnover" ? (
+                      <>
+                        {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            {formatTurnoverDays(issue.turnoverDays)}
+                          </span>
+                        ) : null}
+                        {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            порог {formatTurnoverDays(issue.thresholdDays)}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {issue.hours > 0 ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            {formatNumber(issue.hours, 1)} ч
+                          </span>
+                        ) : null}
+                        {issue.incidents > 0 ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            {formatIssueIncidents(issue.incidents)}
+                          </span>
+                        ) : null}
+                        <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          {issue.totalOrders !== null
+                            ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
+                            : `Заказы ${formatNumber(issue.ordersAds)}`}
+                        </span>
+                        {issue.drrOverall !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            ДРР {formatPercent(issue.drrOverall)}
+                          </span>
+                        ) : null}
+                        {issue.estimatedGap !== null ? (
+                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                            ≈ {formatMoney(issue.estimatedGap)}
+                          </span>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                  {issue.campaigns.length ? (
+                    <div className="mt-2 space-y-2">
+                      {issue.campaigns.map((campaign) => (
+                        <CatalogIssueCampaignEntry key={`${issue.kind}-${campaign.id}`} campaign={campaign} issueKind={issue.kind} />
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+              className="inline-flex min-h-9 items-center rounded-2xl bg-brand-200 px-3.5 text-sm font-medium text-white transition hover:bg-brand-500"
+            >
+              Карточка товара
+            </Link>
+            <a
+              href={item.productUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="metric-chip inline-flex min-h-9 items-center gap-1.5 rounded-2xl px-3.5 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)]"
+            >
+              XWAY
+              <ExternalLink className="size-3.5" />
+            </a>
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }
@@ -564,6 +826,343 @@ function CatalogIssuesSettingsDialog({
   );
 }
 
+function CatalogSummaryMetricsSettingsDialog({
+  open,
+  settings,
+  onClose,
+  onAddMetric,
+  onToggleVisible,
+  onToggleCompact,
+  onReset,
+}: {
+  open: boolean;
+  settings: CatalogSummaryMetricSettings;
+  onClose: () => void;
+  onAddMetric: (key: CatalogSummaryMetricKey) => void;
+  onToggleVisible: (key: CatalogSummaryMetricKey) => void;
+  onToggleCompact: (key: CatalogSummaryMetricKey) => void;
+  onReset: () => void;
+}) {
+  const visibleMetricKeys = CATALOG_SUMMARY_METRIC_KEYS.filter((key) => settings[key].visible);
+  const hiddenMetricKeys = CATALOG_SUMMARY_METRIC_KEYS.filter((key) => !settings[key].visible);
+  const hiddenMetricKeysSignature = hiddenMetricKeys.join("|");
+  const [selectedMetricKey, setSelectedMetricKey] = useState<CatalogSummaryMetricKey | "">("");
+  const selectedMetricValue =
+    selectedMetricKey !== "" && hiddenMetricKeys.includes(selectedMetricKey)
+      ? selectedMetricKey
+      : hiddenMetricKeys[0] ?? "";
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setSelectedMetricKey((current) => (current !== "" && hiddenMetricKeys.includes(current) ? current : hiddenMetricKeys[0] ?? ""));
+  }, [hiddenMetricKeysSignature, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
+      <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
+      <div className="glass-panel relative z-[5001] w-full max-w-[760px] overflow-hidden rounded-[34px]">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-brand-200">Каталог</p>
+            <h2 className="mt-2 font-display text-2xl font-semibold text-[var(--color-ink)]">Метрики сводки</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Закрыть настройки метрик"
+            className="metric-chip rounded-2xl p-3 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+        <div className="space-y-3 px-6 py-5">
+          <div className="metric-chip grid gap-3 rounded-[22px] px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <label className="space-y-1.5">
+              <span className="text-xs uppercase tracking-[0.22em] text-[var(--color-muted)]">Добавить метрику</span>
+              <select
+                value={selectedMetricValue}
+                disabled={!hiddenMetricKeys.length}
+                onChange={(event) => setSelectedMetricKey(event.target.value as CatalogSummaryMetricKey)}
+                className="w-full rounded-2xl border border-[var(--color-line)] bg-white px-3 py-2 text-sm font-semibold text-[var(--color-ink)] outline-none transition focus:border-[var(--color-brand-300)] disabled:text-[var(--color-muted)]"
+              >
+                {hiddenMetricKeys.length ? (
+                  hiddenMetricKeys.map((key) => (
+                    <option key={key} value={key}>
+                      {CATALOG_SUMMARY_METRIC_LABELS[key]}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">Все доступные метрики уже выведены</option>
+                )}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={!selectedMetricValue}
+              onClick={() => {
+                if (selectedMetricValue) {
+                  onAddMetric(selectedMetricValue);
+                }
+              }}
+              className="rounded-2xl bg-[var(--color-ink)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-500)] disabled:cursor-not-allowed disabled:bg-[var(--color-line-strong)]"
+            >
+              Добавить
+            </button>
+          </div>
+          <div className="grid gap-2">
+            {visibleMetricKeys.length ? (
+              visibleMetricKeys.map((key) => (
+                <div key={key} className="metric-chip grid gap-3 rounded-[22px] px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                  <strong className="text-sm text-[var(--color-ink)]">{CATALOG_SUMMARY_METRIC_LABELS[key]}</strong>
+                  <label className="inline-flex items-center gap-2 text-sm text-[var(--color-muted)]">
+                    <input
+                      type="checkbox"
+                      checked={settings[key].visible}
+                      onChange={() => onToggleVisible(key)}
+                      className="h-4 w-4 accent-[var(--color-brand-500)]"
+                    />
+                    Показывать
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-sm text-[var(--color-muted)]">
+                    <input
+                      type="checkbox"
+                      checked={settings[key].compact}
+                      onChange={() => onToggleCompact(key)}
+                      className="h-4 w-4 accent-[var(--color-brand-500)]"
+                    />
+                    Сокращать
+                  </label>
+                </div>
+              ))
+            ) : (
+              <div className="metric-chip rounded-[22px] px-4 py-3 text-sm text-[var(--color-muted)]">
+                Сейчас ни одна метрика не выведена. Добавьте показатель из списка выше.
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onReset}
+              className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+            >
+              По умолчанию
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CatalogQuickViewSettingsDialog({
+  open,
+  settings,
+  onClose,
+  onSettingsChange,
+  onReset,
+}: {
+  open: boolean;
+  settings: CatalogQuickViewSettingsState;
+  onClose: () => void;
+  onSettingsChange: (settings: CatalogQuickViewSettingsState) => void;
+  onReset: () => void;
+}) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const updateNumberSetting = (
+    key: keyof Pick<CatalogQuickViewSettingsState, "lowCrClicksThreshold" | "lowCrPercentThreshold" | "slowTurnoverDays">,
+    value: string,
+  ) => {
+    const nextValue = Number(value);
+    if (!Number.isFinite(nextValue) || nextValue <= 0) {
+      return;
+    }
+    onSettingsChange({
+      ...settings,
+      [key]: nextValue,
+    });
+  };
+
+  const toggleAttentionRule = (rule: CatalogAttentionRuleKey) => {
+    onSettingsChange({
+      ...settings,
+      attentionRules: {
+        ...settings.attentionRules,
+        [rule]: !settings.attentionRules[rule],
+      },
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[5000] flex items-center justify-center p-1 sm:p-2">
+      <button type="button" aria-label="Закрыть" className="absolute inset-0 bg-[rgba(38,33,58,0.28)] backdrop-blur-sm" onClick={onClose} />
+      <div className="glass-panel relative z-[5001] w-full max-w-[760px] overflow-hidden rounded-[34px]">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-brand-200">Каталог</p>
+            <h2 className="mt-2 font-display text-2xl font-semibold text-[var(--color-ink)]">Условия быстрых фильтров</h2>
+            <p className="mt-2 text-sm text-[var(--color-muted)]">
+              Счетчики считаются по текущей выборке после поиска, кабинетов, категорий, остатка и оборачиваемости.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Закрыть условия быстрых фильтров"
+            className="metric-chip rounded-2xl p-3 text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+        <div className="space-y-4 px-6 py-5">
+          <div className="grid gap-2 text-sm text-[var(--color-muted)] sm:grid-cols-2">
+            <div className="metric-chip rounded-[22px] px-4 py-3">
+              <strong className="block text-[var(--color-ink)]">Есть расход</strong>
+              Расход больше 0.
+            </div>
+            <div className="metric-chip rounded-[22px] px-4 py-3">
+              <strong className="block text-[var(--color-ink)]">Расход без заказов</strong>
+              Расход больше 0, заказов нет.
+            </div>
+            <div className="metric-chip rounded-[22px] px-4 py-3">
+              <strong className="block text-[var(--color-ink)]">Без РК</strong>
+              Есть остаток, рекламных кампаний нет.
+            </div>
+            <div className="metric-chip rounded-[22px] px-4 py-3">
+              <strong className="block text-[var(--color-ink)]">Внимание</strong>
+              Объединяет выбранные ниже проблемные условия только для артикулов с остатком.
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-3">
+            <label className="metric-chip flex flex-col gap-2 rounded-[22px] px-4 py-3">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Минимум кликов для низкого CR</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={String(settings.lowCrClicksThreshold)}
+                  onChange={(event) => updateNumberSetting("lowCrClicksThreshold", event.target.value)}
+                  className="w-full min-w-0 bg-transparent text-base font-semibold text-[var(--color-ink)] outline-none"
+                />
+                <span className="text-sm text-[var(--color-muted)]">кликов</span>
+              </div>
+            </label>
+            <label className="metric-chip flex flex-col gap-2 rounded-[22px] px-4 py-3">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Порог низкого CR</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0.1"
+                  max="100"
+                  step="0.1"
+                  value={String(settings.lowCrPercentThreshold)}
+                  onChange={(event) => updateNumberSetting("lowCrPercentThreshold", event.target.value)}
+                  className="w-full min-w-0 bg-transparent text-base font-semibold text-[var(--color-ink)] outline-none"
+                />
+                <span className="text-sm text-[var(--color-muted)]">%</span>
+              </div>
+            </label>
+            <label className="metric-chip flex flex-col gap-2 rounded-[22px] px-4 py-3">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">Медленная оборачиваемость</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={String(settings.slowTurnoverDays)}
+                  onChange={(event) => updateNumberSetting("slowTurnoverDays", event.target.value)}
+                  className="w-full min-w-0 bg-transparent text-base font-semibold text-[var(--color-ink)] outline-none"
+                />
+                <span className="text-sm text-[var(--color-muted)]">дней</span>
+              </div>
+              <span className="text-xs text-[var(--color-muted)]">Считается по остатку и заказам за последние 3 дня.</span>
+            </label>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-xs uppercase tracking-[0.22em] text-[var(--color-muted)]">Что входит во "Внимание"</div>
+            {CATALOG_ATTENTION_RULE_OPTIONS.map((rule) => (
+              <label key={rule.value} className="metric-chip flex items-center justify-between gap-4 rounded-[22px] px-4 py-3">
+                <span className="min-w-0">
+                  <strong className="block text-sm text-[var(--color-ink)]">{rule.label}</strong>
+                  <span className="block text-xs text-[var(--color-muted)]">{rule.caption}</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.attentionRules[rule.value]}
+                  onChange={() => toggleAttentionRule(rule.value)}
+                  className="h-4 w-4 shrink-0 accent-[var(--color-brand-500)]"
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onReset}
+              className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+            >
+              По умолчанию
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot[] {
   const byKey = new Map(article.campaign_states.map((state) => [state.key, state]));
   const slots: CatalogCampaignSlot[] = [];
@@ -678,11 +1277,78 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
   }
 }
 
-function readCatalogIssuesCollapsed() {
+function getDefaultCatalogSummaryMetricSettings(): CatalogSummaryMetricSettings {
+  return CATALOG_SUMMARY_METRIC_KEYS.reduce((settings, key) => {
+    settings[key] = { ...DEFAULT_CATALOG_SUMMARY_METRIC_SETTINGS[key] };
+    return settings;
+  }, {} as CatalogSummaryMetricSettings);
+}
+
+function readCatalogSummaryMetricSettings(): CatalogSummaryMetricSettings {
+  const defaults = getDefaultCatalogSummaryMetricSettings();
   if (typeof window === "undefined") {
-    return false;
+    return defaults;
   }
-  return window.localStorage.getItem(CATALOG_ISSUES_COLLAPSED_STORAGE_KEY) === "1";
+  try {
+    const raw = window.localStorage.getItem(CATALOG_SUMMARY_METRICS_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return defaults;
+    }
+    const parsed = JSON.parse(raw) as Partial<Record<CatalogSummaryMetricKey, Partial<CatalogSummaryMetricSetting>>>;
+    return CATALOG_SUMMARY_METRIC_KEYS.reduce((settings, key) => {
+      const defaultSetting = DEFAULT_CATALOG_SUMMARY_METRIC_SETTINGS[key];
+      settings[key] = {
+        visible: typeof parsed[key]?.visible === "boolean" ? Boolean(parsed[key]?.visible) : defaultSetting.visible,
+        compact: typeof parsed[key]?.compact === "boolean" ? Boolean(parsed[key]?.compact) : defaultSetting.compact,
+      };
+      return settings;
+    }, {} as CatalogSummaryMetricSettings);
+  } catch {
+    return defaults;
+  }
+}
+
+function getDefaultCatalogQuickViewSettings(): CatalogQuickViewSettingsState {
+  return {
+    lowCrClicksThreshold: CATALOG_LOW_CR_CLICKS_THRESHOLD_DEFAULT,
+    lowCrPercentThreshold: CATALOG_LOW_CR_PERCENT_THRESHOLD_DEFAULT,
+    slowTurnoverDays: CATALOG_SLOW_TURNOVER_DAYS_DEFAULT,
+    attentionRules: { ...DEFAULT_CATALOG_ATTENTION_RULES },
+  };
+}
+
+function resolveCatalogPositiveNumber(value: unknown, fallback: number) {
+  const nextValue = Number(value);
+  return Number.isFinite(nextValue) && nextValue > 0 ? nextValue : fallback;
+}
+
+function readCatalogQuickViewSettings(): CatalogQuickViewSettingsState {
+  const defaults = getDefaultCatalogQuickViewSettings();
+  if (typeof window === "undefined") {
+    return defaults;
+  }
+  try {
+    const raw = window.localStorage.getItem(CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return defaults;
+    }
+    const parsed = JSON.parse(raw) as Partial<CatalogQuickViewSettingsState> & {
+      attentionRules?: Partial<Record<CatalogAttentionRuleKey, boolean>>;
+    };
+    return {
+      lowCrClicksThreshold: resolveCatalogPositiveNumber(parsed.lowCrClicksThreshold, defaults.lowCrClicksThreshold),
+      lowCrPercentThreshold: resolveCatalogPositiveNumber(parsed.lowCrPercentThreshold, defaults.lowCrPercentThreshold),
+      slowTurnoverDays: resolveCatalogPositiveNumber(parsed.slowTurnoverDays, defaults.slowTurnoverDays),
+      attentionRules: {
+        noOrders: parsed.attentionRules?.noOrders ?? defaults.attentionRules.noOrders,
+        lowCr: parsed.attentionRules?.lowCr ?? defaults.attentionRules.lowCr,
+        slowTurnover: parsed.attentionRules?.slowTurnover ?? defaults.attentionRules.slowTurnover,
+        withoutCampaigns: parsed.attentionRules?.withoutCampaigns ?? defaults.attentionRules.withoutCampaigns,
+      },
+    };
+  } catch {
+    return defaults;
+  }
 }
 
 function readCatalogIssuesCache(day: string): Record<string, CatalogIssueCacheEntry> {
@@ -1238,6 +1904,21 @@ function formatProductsWord(count: number) {
   return "товаров";
 }
 
+function formatArticlesWord(count: number) {
+  const abs = Math.abs(count) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 19) {
+    return "артикулов";
+  }
+  if (last === 1) {
+    return "артикул";
+  }
+  if (last >= 2 && last <= 4) {
+    return "артикула";
+  }
+  return "артикулов";
+}
+
 function summarizeCatalogArticles(articles: CatalogArticle[]) {
   return articles.reduce(
     (totals, article) => {
@@ -1269,6 +1950,117 @@ function computeTurnoverDays(stock: number | string | null | undefined, orderedR
     return Number.POSITIVE_INFINITY;
   }
   return stockValue / (orderedValue / windowDays);
+}
+
+function readCatalogQuickView(): CatalogQuickView {
+  if (typeof window === "undefined") {
+    return "all";
+  }
+  try {
+    const storedValue = window.localStorage.getItem(CATALOG_QUICK_VIEW_STORAGE_KEY);
+    return CATALOG_QUICK_VIEW_OPTIONS.some((option) => option.value === storedValue) ? (storedValue as CatalogQuickView) : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function getCatalogCrPercent(article: CatalogArticle) {
+  const directValue = toNumber(article.cr);
+  if (directValue !== null) {
+    return directValue;
+  }
+  const clicks = toNumber(article.clicks) ?? 0;
+  if (clicks <= 0) {
+    return null;
+  }
+  return ((toNumber(article.orders) ?? 0) / clicks) * 100;
+}
+
+function isCatalogSlowTurnover(turnoverDays: number | null, settings: CatalogQuickViewSettingsState) {
+  return turnoverDays !== null && (!Number.isFinite(turnoverDays) || turnoverDays > settings.slowTurnoverDays);
+}
+
+function isCatalogLowCrArticle(article: CatalogArticle, settings: CatalogQuickViewSettingsState) {
+  const clicks = toNumber(article.clicks) ?? 0;
+  const crValue = getCatalogCrPercent(article);
+  return clicks >= settings.lowCrClicksThreshold && crValue !== null && crValue < settings.lowCrPercentThreshold;
+}
+
+function isCatalogAttentionArticle(article: CatalogArticle, turnoverDays: number | null, settings: CatalogQuickViewSettingsState) {
+  const stockValue = toNumber(article.stock) ?? 0;
+  if (stockValue <= 0) {
+    return false;
+  }
+  const spend = toNumber(article.expense_sum) ?? 0;
+  const orders = toNumber(article.orders) ?? 0;
+  return (
+    (settings.attentionRules.withoutCampaigns && article.campaign_states.length === 0) ||
+    (settings.attentionRules.noOrders && spend > 0 && orders <= 0) ||
+    (settings.attentionRules.lowCr && isCatalogLowCrArticle(article, settings)) ||
+    (settings.attentionRules.slowTurnover && isCatalogSlowTurnover(turnoverDays, settings))
+  );
+}
+
+function matchesCatalogQuickView(
+  article: CatalogArticle,
+  quickView: CatalogQuickView,
+  turnoverDays: number | null,
+  settings: CatalogQuickViewSettingsState,
+) {
+  const stockValue = toNumber(article.stock) ?? 0;
+  const spend = toNumber(article.expense_sum) ?? 0;
+  const orders = toNumber(article.orders) ?? 0;
+
+  switch (quickView) {
+    case "attention":
+      return isCatalogAttentionArticle(article, turnoverDays, settings);
+    case "withSpend":
+      return spend > 0;
+    case "noOrders":
+      return spend > 0 && orders <= 0;
+    case "lowCr":
+      return isCatalogLowCrArticle(article, settings);
+    case "slowTurnover":
+      return stockValue > 0 && isCatalogSlowTurnover(turnoverDays, settings);
+    case "withoutCampaigns":
+      return stockValue > 0 && article.campaign_states.length === 0;
+    case "all":
+    default:
+      return true;
+  }
+}
+
+function buildCatalogQuickViewMetrics(
+  shops: CatalogShop[],
+  turnoverOrdersByRef: Map<string, number | string | null | undefined>,
+  settings: CatalogQuickViewSettingsState,
+): Record<CatalogQuickView, number> {
+  const metrics: Record<CatalogQuickView, number> = {
+    all: 0,
+    attention: 0,
+    withSpend: 0,
+    noOrders: 0,
+    lowCr: 0,
+    slowTurnover: 0,
+    withoutCampaigns: 0,
+  };
+
+  shops.forEach((shop) => {
+    shop.articles.forEach((article) => {
+      const turnoverDays = computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
+      metrics.all += 1;
+      CATALOG_QUICK_VIEW_OPTIONS.forEach((option) => {
+        if (option.value === "all") {
+          return;
+        }
+        if (matchesCatalogQuickView(article, option.value, turnoverDays, settings)) {
+          metrics[option.value] += 1;
+        }
+      });
+    });
+  });
+
+  return metrics;
 }
 
 function formatTurnoverDays(value: number | null | undefined) {
@@ -1657,6 +2449,35 @@ function filterShops(
     .filter(Boolean) as CatalogShop[];
 }
 
+function computeCatalogTotals(shops: CatalogShop[]) {
+  return shops.reduce(
+    (totals, shop) => {
+      shop.articles.forEach((article) => {
+        totals.expense_sum += toNumber(article.expense_sum) ?? 0;
+        totals.views += toNumber(article.views) ?? 0;
+        totals.clicks += toNumber(article.clicks) ?? 0;
+        totals.atbs += toNumber(article.atbs) ?? 0;
+        totals.orders += toNumber(article.orders) ?? 0;
+      });
+      return totals;
+    },
+    {
+      expense_sum: 0,
+      orders: 0,
+      atbs: 0,
+      clicks: 0,
+      views: 0,
+    },
+  );
+}
+
+function sumCatalogShopArticleField(shops: CatalogShop[], field: keyof Pick<CatalogArticle, "sum_price">) {
+  return shops.reduce(
+    (total, shop) => total + shop.articles.reduce((shopTotal, article) => shopTotal + (toNumber(article[field]) ?? 0), 0),
+    0,
+  );
+}
+
 export function CatalogPage() {
   const { payload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
@@ -1671,6 +2492,9 @@ export function CatalogPage() {
   const [turnoverTo, setTurnoverTo] = useState("");
   const [sortField, setSortField] = useState<CatalogSortField>("stock");
   const [sortDirection, setSortDirection] = useState<CatalogSortDirection>("desc");
+  const [quickView, setQuickView] = useState<CatalogQuickView>(() => readCatalogQuickView());
+  const [quickViewSettingsOpen, setQuickViewSettingsOpen] = useState(false);
+  const [quickViewSettings, setQuickViewSettings] = useState<CatalogQuickViewSettingsState>(() => readCatalogQuickViewSettings());
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartWindow, setChartWindow] = useState<CatalogChartWindow>(() => resolveCatalogChartWindow(payload.range.span_days));
   const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
@@ -1681,9 +2505,12 @@ export function CatalogPage() {
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssuesCopyState, setArticleIssuesCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
-  const [articleIssuesCollapsed, setArticleIssuesCollapsed] = useState(() => readCatalogIssuesCollapsed());
   const [articleIssueSettingsOpen, setArticleIssueSettingsOpen] = useState(false);
   const [articleIssueSettings, setArticleIssueSettings] = useState<CatalogIssueSettingsState>(() => readCatalogIssueSettings());
+  const [selectedArticleIssueRef, setSelectedArticleIssueRef] = useState<string | null>(null);
+  const [selectedArticleIssueKind, setSelectedArticleIssueKind] = useState<CatalogIssueKind | null>(null);
+  const [summaryMetricSettingsOpen, setSummaryMetricSettingsOpen] = useState(false);
+  const [summaryMetricSettings, setSummaryMetricSettings] = useState<CatalogSummaryMetricSettings>(() => readCatalogSummaryMetricSettings());
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -1691,6 +2518,20 @@ export function CatalogPage() {
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_QUICK_VIEW_STORAGE_KEY, quickView);
+  }, [quickView]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY, JSON.stringify(quickViewSettings));
+  }, [quickViewSettings]);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -1700,7 +2541,7 @@ export function CatalogPage() {
       shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
     ),
   );
-  const visibleShops = filterShops(payload, {
+  const baseVisibleShops = filterShops(payload, {
     query: deferredQuery,
     selectedShopIds,
     selectedCategories,
@@ -1766,6 +2607,66 @@ export function CatalogPage() {
       };
     })
     .filter(Boolean) as CatalogShop[];
+  const quickViewMetrics = buildCatalogQuickViewMetrics(baseVisibleShops, turnoverOrdersByRef, quickViewSettings);
+  const visibleShops = baseVisibleShops
+    .map((shop) => {
+      if (quickView === "all") {
+        return shop;
+      }
+
+      const articles = shop.articles.filter((article) =>
+        matchesCatalogQuickView(
+          article,
+          quickView,
+          computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)),
+          quickViewSettings,
+        ),
+      );
+      if (!articles.length) {
+        return null;
+      }
+
+      return {
+        ...shop,
+        articles,
+      };
+    })
+    .filter(Boolean) as CatalogShop[];
+  const visibleTotals = computeCatalogTotals(visibleShops);
+  const compareTurnoverOrdersByRef = new Map(
+    (comparePayload?.shops || []).flatMap((shop) =>
+      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
+    ),
+  );
+  const compareVisibleShops = comparePayload
+    ? filterShops(comparePayload, {
+        query: deferredQuery,
+        selectedShopIds,
+        selectedCategories,
+        selectedSkus,
+      })
+        .map((shop) => {
+          const articles = shop.articles.filter((article) => {
+            const turnoverDays = computeTurnoverDays(article.stock, compareTurnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
+            if (!matchesNumericRange(toNumber(article.stock), stockFrom, stockTo) || !matchesNumericRange(turnoverDays, turnoverFrom, turnoverTo)) {
+              return false;
+            }
+            return quickView === "all" || matchesCatalogQuickView(article, quickView, turnoverDays, quickViewSettings);
+          });
+
+          if (!articles.length) {
+            return null;
+          }
+
+          return {
+            ...shop,
+            articles,
+          };
+        })
+        .filter(Boolean) as CatalogShop[]
+    : [];
+  const compareVisibleTotals = comparePayload ? computeCatalogTotals(compareVisibleShops) : null;
+  const compareVisibleArticlesCount = compareVisibleShops.reduce((sum, shop) => sum + shop.articles.length, 0);
   const issueShopOptions = buildShopOptionsFromShops(visibleShops);
   const issueShopOptionKey = issueShopOptions.map((option) => option.value).join(",");
   const issueScopedShops = visibleShops.filter(
@@ -1788,7 +2689,6 @@ export function CatalogPage() {
       ]),
     ),
   ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0) as CatalogIssueTargetMeta[];
-  const visibleArticleCodes = [...new Set(visibleShops.flatMap((shop) => shop.articles.map((article) => article.article)))].sort((left, right) => left.localeCompare(right, "ru"));
   const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
   const visibleArticles = [...new Map(
     visibleShops.flatMap((shop) =>
@@ -1811,18 +2711,62 @@ export function CatalogPage() {
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
+  const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
   const preset = getRangePreset(start, end);
   const catalogSearch = buildCatalogSearch(start, end);
-  const issueScopeShopCount = issueScopedShops.length;
+  const articleIssueRowsAllKinds = mapCatalogIssueRows(visibleIssueTargets, articleIssueCacheByRef, {
+    ...articleIssueSettings,
+    visibleKinds: DEFAULT_CATALOG_ISSUE_VISIBILITY,
+  });
   const articleIssueRows = mapCatalogIssueRows(visibleIssueTargets, articleIssueCacheByRef, articleIssueSettings);
   const enabledIssueKinds = CATALOG_ISSUE_KIND_ORDER.filter((kind) => articleIssueSettings.visibleKinds[kind]);
   const articleIssuesCompletedCount = visibleIssueTargetRefs.filter((ref) => Boolean(articleIssueCacheByRef[ref])).length;
   const articleIssuesTotalCount = visibleIssueTargetRefs.length;
   const articleIssuesPendingCount = Math.max(articleIssuesTotalCount - articleIssuesCompletedCount, 0);
-  const articleIssueGridTemplate =
-    enabledIssueKinds.length > 0
-      ? `minmax(280px,1.1fr) repeat(${enabledIssueKinds.length}, minmax(250px,1fr))`
-      : "minmax(280px,1fr)";
+  const articleIssueRowsByRef = new Map(articleIssueRows.map((item) => [item.ref, item]));
+  const selectedArticleIssueRow = selectedArticleIssueRef ? articleIssueRowsByRef.get(selectedArticleIssueRef) ?? null : null;
+  const articleIssueKindCounts = CATALOG_ISSUE_KIND_ORDER.reduce(
+    (counts, kind) => {
+      counts[kind] = articleIssueRowsAllKinds.reduce((sum, item) => sum + (getArticleIssueByKind(item, kind) ? 1 : 0), 0);
+      return counts;
+    },
+    {} as Record<CatalogIssueKind, number>,
+  );
+  const articleIssuesHoursTotal = articleIssueRows.reduce((sum, item) => sum + getArticleIssueHoursTotal(item), 0);
+  const articleIssuesEstimatedGapTotal = articleIssueRows.reduce((sum, item) => sum + getArticleIssueEstimatedGapTotal(item), 0);
+  const articleIssuesPanelState = !articleIssuesTotalCount
+    ? "no-targets"
+    : articleIssuesLoading
+      ? "loading"
+      : articleIssuesError && articleIssuesCompletedCount < articleIssuesTotalCount
+        ? "partial-error"
+        : articleIssuesError
+          ? "error"
+          : articleIssuesCompletedCount === 0
+            ? "idle"
+            : articleIssuesPendingCount > 0
+              ? "partial"
+              : articleIssueRowsAllKinds.length
+                ? "complete-with-issues"
+                : "complete-empty";
+  const articleIssuesStatusText =
+    articleIssuesPanelState === "no-targets"
+      ? "В текущем списке нет артикулов с остатком для проверки."
+      : articleIssuesPanelState === "idle"
+        ? `Сбор за ${yesterdaySentenceLabel} еще не запускался.`
+        : articleIssuesPanelState === "loading"
+          ? articleIssueRows.length
+            ? `Сбор идет: обработано ${formatNumber(articleIssuesCompletedCount)} / ${formatNumber(articleIssuesTotalCount)}. Уже показаны найденные ошибки.`
+            : `Собираем ошибки за ${yesterdaySentenceLabel} по текущему списку.`
+          : articleIssuesPanelState === "partial"
+            ? `Показаны частичные данные: обработано ${formatNumber(articleIssuesCompletedCount)} / ${formatNumber(articleIssuesTotalCount)}.`
+            : articleIssuesPanelState === "partial-error"
+              ? `Часть данных не догрузилась: обработано ${formatNumber(articleIssuesCompletedCount)} / ${formatNumber(articleIssuesTotalCount)}.`
+              : articleIssuesPanelState === "error"
+                ? "Сбор завершился ошибкой. Можно повторить загрузку."
+                : articleIssuesPanelState === "complete-empty"
+                  ? `За ${yesterdaySentenceLabel} по текущему списку ошибок не найдено.`
+                  : `За ${yesterdaySentenceLabel}: ${formatNumber(articleIssueRowsAllKinds.length)} ${formatArticlesWord(articleIssueRowsAllKinds.length)} с ошибками.`;
 
   const handleRangeChange = (next: { start: string; end: string }) => {
     navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
@@ -1840,6 +2784,16 @@ export function CatalogPage() {
     setCollapsedShopIds((current) =>
       current.includes(String(shopId)) ? current.filter((item) => item !== String(shopId)) : [...current, String(shopId)],
     );
+  };
+
+  const toggleArticleIssueKind = (kind: CatalogIssueKind) => {
+    setArticleIssueSettings((current) => ({
+      ...current,
+      visibleKinds: {
+        ...current.visibleKinds,
+        [kind]: !current.visibleKinds[kind],
+      },
+    }));
   };
 
   useEffect(() => {
@@ -1860,15 +2814,15 @@ export function CatalogPage() {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(CATALOG_ISSUES_COLLAPSED_STORAGE_KEY, articleIssuesCollapsed ? "1" : "0");
-  }, [articleIssuesCollapsed]);
+    window.localStorage.setItem(CATALOG_ISSUES_SETTINGS_STORAGE_KEY, JSON.stringify(articleIssueSettings));
+  }, [articleIssueSettings]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(CATALOG_ISSUES_SETTINGS_STORAGE_KEY, JSON.stringify(articleIssueSettings));
-  }, [articleIssueSettings]);
+    window.localStorage.setItem(CATALOG_SUMMARY_METRICS_SETTINGS_STORAGE_KEY, JSON.stringify(summaryMetricSettings));
+  }, [summaryMetricSettings]);
 
   useEffect(() => {
     setArticleIssueCacheByRef(readCatalogIssuesCache(yesterdayIso));
@@ -1993,10 +2947,40 @@ export function CatalogPage() {
     };
   }, [chartCacheKey, chartCollapsed, chartProductRefsKey, chartSelectionCount, chartRangeEnd, chartRangeStart]);
 
-  const ctr = payload.totals.views > 0 ? (payload.totals.clicks / payload.totals.views) * 100 : 0;
-  const cr = payload.totals.clicks > 0 ? (payload.totals.orders / payload.totals.clicks) * 100 : 0;
-  const compareCtr = comparePayload && comparePayload.totals.views > 0 ? (comparePayload.totals.clicks / comparePayload.totals.views) * 100 : null;
-  const compareCr = comparePayload && comparePayload.totals.clicks > 0 ? (comparePayload.totals.orders / comparePayload.totals.clicks) * 100 : null;
+  const ctr = visibleTotals.views > 0 ? (visibleTotals.clicks / visibleTotals.views) * 100 : 0;
+  const cr = visibleTotals.clicks > 0 ? (visibleTotals.orders / visibleTotals.clicks) * 100 : 0;
+  const compareCtr = compareVisibleTotals && compareVisibleTotals.views > 0 ? (compareVisibleTotals.clicks / compareVisibleTotals.views) * 100 : null;
+  const compareCr = compareVisibleTotals && compareVisibleTotals.clicks > 0 ? (compareVisibleTotals.orders / compareVisibleTotals.clicks) * 100 : null;
+  const summaryCost = (numerator: number | string | null | undefined, denominator: number | string | null | undefined, multiplier = 1) => {
+    const numeratorValue = toNumber(numerator);
+    const denominatorValue = toNumber(denominator);
+    if (numeratorValue === null || denominatorValue === null || denominatorValue <= 0) {
+      return null;
+    }
+    return (numeratorValue / denominatorValue) * multiplier;
+  };
+  const sumCatalogArticleField = (shops: CatalogShop[] | null | undefined, field: keyof Pick<CatalogArticle, "sum_price">) => {
+    if (!shops) {
+      return null;
+    }
+    return sumCatalogShopArticleField(shops, field);
+  };
+  const revenue = sumCatalogArticleField(visibleShops, "sum_price");
+  const compareRevenue = comparePayload ? sumCatalogArticleField(compareVisibleShops, "sum_price") : null;
+  const cpm = summaryCost(visibleTotals.expense_sum, visibleTotals.views, 1000);
+  const cpc = summaryCost(visibleTotals.expense_sum, visibleTotals.clicks);
+  const atbCost = summaryCost(visibleTotals.expense_sum, visibleTotals.atbs);
+  const cpo = summaryCost(visibleTotals.expense_sum, visibleTotals.orders);
+  const cr1 = catalogChartRate(visibleTotals.atbs, visibleTotals.clicks);
+  const cr2 = catalogChartRate(visibleTotals.orders, visibleTotals.atbs);
+  const drr = catalogChartRate(toNumber(visibleTotals.expense_sum) ?? 0, toNumber(revenue) ?? 0);
+  const compareCpm = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.views, 1000);
+  const compareCpc = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.clicks);
+  const compareAtbCost = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.atbs);
+  const compareCpo = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.orders);
+  const compareCr1 = compareVisibleTotals ? catalogChartRate(compareVisibleTotals.atbs, compareVisibleTotals.clicks) : null;
+  const compareCr2 = compareVisibleTotals ? catalogChartRate(compareVisibleTotals.orders, compareVisibleTotals.atbs) : null;
+  const compareDrr = compareVisibleTotals ? catalogChartRate(toNumber(compareVisibleTotals.expense_sum) ?? 0, toNumber(compareRevenue) ?? 0) : null;
   const diffValue = (current: number | string | null | undefined, previous: number | string | null | undefined) => {
     const currentValue = toNumber(current);
     const previousValue = toNumber(previous);
@@ -2034,7 +3018,171 @@ export function CatalogPage() {
     }
     return `${numeric > 0 ? "+" : ""}${formatPercent(numeric)}`;
   };
-  const renderDeltaText = (value: string | null) => (value ? `${value} к прошлому периоду` : undefined);
+  const renderDeltaText = (value: string | null) => (value ? `( ${value} )` : undefined);
+  const formatSummaryNumber = (key: CatalogSummaryMetricKey, value: number | string | null | undefined) =>
+    summaryMetricSettings[key].compact ? formatCompactNumber(value) : formatNumber(value);
+  const formatSummaryMoney = (key: CatalogSummaryMetricKey, value: number | string | null | undefined) => {
+    const numeric = toNumber(value);
+    if (numeric === null) {
+      return "—";
+    }
+    return summaryMetricSettings[key].compact ? `${formatCompactNumber(numeric)} ₽` : formatMoney(numeric);
+  };
+  const summaryMetrics: Array<{
+    key: CatalogSummaryMetricKey;
+    label: string;
+    value: string;
+    deltaText?: ReactNode;
+    deltaClassName: string;
+  }> = [
+    {
+      key: "spend",
+      label: "Расход",
+      value: formatSummaryMoney("spend", visibleTotals.expense_sum),
+      deltaText: renderDeltaText(formatSignedMoney(diffValue(visibleTotals.expense_sum, compareVisibleTotals?.expense_sum))),
+      deltaClassName: deltaClassName(diffValue(visibleTotals.expense_sum, compareVisibleTotals?.expense_sum), false),
+    },
+    {
+      key: "views",
+      label: "Показы",
+      value: formatSummaryNumber("views", visibleTotals.views),
+      deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.views, compareVisibleTotals?.views))),
+      deltaClassName: deltaClassName(diffValue(visibleTotals.views, compareVisibleTotals?.views), true),
+    },
+    {
+      key: "clicks",
+      label: "Клики",
+      value: formatSummaryNumber("clicks", visibleTotals.clicks),
+      deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.clicks, compareVisibleTotals?.clicks))),
+      deltaClassName: deltaClassName(diffValue(visibleTotals.clicks, compareVisibleTotals?.clicks), true),
+    },
+    {
+      key: "atbs",
+      label: "Корзины",
+      value: formatSummaryNumber("atbs", visibleTotals.atbs),
+      deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.atbs, compareVisibleTotals?.atbs))),
+      deltaClassName: deltaClassName(diffValue(visibleTotals.atbs, compareVisibleTotals?.atbs), true),
+    },
+    {
+      key: "orders",
+      label: "Заказы",
+      value: formatSummaryNumber("orders", visibleTotals.orders),
+      deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.orders, compareVisibleTotals?.orders))),
+      deltaClassName: deltaClassName(diffValue(visibleTotals.orders, compareVisibleTotals?.orders), true),
+    },
+    {
+      key: "ctr",
+      label: "CTR каталога",
+      value: formatPercent(ctr),
+      deltaText: renderDeltaText(formatSignedPercent(diffValue(ctr, compareCtr))),
+      deltaClassName: deltaClassName(diffValue(ctr, compareCtr), true),
+    },
+    {
+      key: "cr",
+      label: "CR каталога",
+      value: formatPercent(cr),
+      deltaText: renderDeltaText(formatSignedPercent(diffValue(cr, compareCr))),
+      deltaClassName: deltaClassName(diffValue(cr, compareCr), true),
+    },
+    {
+      key: "cpm",
+      label: "CPM каталога",
+      value: formatSummaryMoney("cpm", cpm),
+      deltaText: renderDeltaText(formatSignedMoney(diffValue(cpm, compareCpm))),
+      deltaClassName: deltaClassName(diffValue(cpm, compareCpm), false),
+    },
+    {
+      key: "cpc",
+      label: "CPC каталога",
+      value: formatSummaryMoney("cpc", cpc),
+      deltaText: renderDeltaText(formatSignedMoney(diffValue(cpc, compareCpc))),
+      deltaClassName: deltaClassName(diffValue(cpc, compareCpc), false),
+    },
+    {
+      key: "atbCost",
+      label: "Цена корзины",
+      value: formatSummaryMoney("atbCost", atbCost),
+      deltaText: renderDeltaText(formatSignedMoney(diffValue(atbCost, compareAtbCost))),
+      deltaClassName: deltaClassName(diffValue(atbCost, compareAtbCost), false),
+    },
+    {
+      key: "cpo",
+      label: "CPO каталога",
+      value: formatSummaryMoney("cpo", cpo),
+      deltaText: renderDeltaText(formatSignedMoney(diffValue(cpo, compareCpo))),
+      deltaClassName: deltaClassName(diffValue(cpo, compareCpo), false),
+    },
+    {
+      key: "cr1",
+      label: "CR1 каталога",
+      value: formatPercent(cr1),
+      deltaText: renderDeltaText(formatSignedPercent(diffValue(cr1, compareCr1))),
+      deltaClassName: deltaClassName(diffValue(cr1, compareCr1), true),
+    },
+    {
+      key: "cr2",
+      label: "CR2 каталога",
+      value: formatPercent(cr2),
+      deltaText: renderDeltaText(formatSignedPercent(diffValue(cr2, compareCr2))),
+      deltaClassName: deltaClassName(diffValue(cr2, compareCr2), true),
+    },
+    {
+      key: "revenue",
+      label: "Выручка РК",
+      value: formatSummaryMoney("revenue", revenue),
+      deltaText: renderDeltaText(formatSignedMoney(diffValue(revenue, compareRevenue))),
+      deltaClassName: deltaClassName(diffValue(revenue, compareRevenue), true),
+    },
+    {
+      key: "drr",
+      label: "ДРР каталога",
+      value: formatPercent(drr),
+      deltaText: renderDeltaText(formatSignedPercent(diffValue(drr, compareDrr))),
+      deltaClassName: deltaClassName(diffValue(drr, compareDrr), false),
+    },
+    {
+      key: "shops",
+      label: "Кабинеты",
+      value: formatSummaryNumber("shops", visibleShops.length),
+      deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleShops.length, comparePayload ? compareVisibleShops.length : null))),
+      deltaClassName: deltaClassName(diffValue(visibleShops.length, comparePayload ? compareVisibleShops.length : null), true),
+    },
+    {
+      key: "articles",
+      label: "Артикулы",
+      value: formatSummaryNumber("articles", visibleArticles.length),
+      deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleArticles.length, comparePayload ? compareVisibleArticlesCount : null))),
+      deltaClassName: deltaClassName(diffValue(visibleArticles.length, comparePayload ? compareVisibleArticlesCount : null), true),
+    },
+  ];
+  const visibleSummaryMetrics = summaryMetrics.filter((metric) => summaryMetricSettings[metric.key].visible);
+  const addSummaryMetric = (key: CatalogSummaryMetricKey) => {
+    setSummaryMetricSettings((current) => ({
+      ...current,
+      [key]: {
+        ...current[key],
+        visible: true,
+      },
+    }));
+  };
+  const toggleSummaryMetricVisible = (key: CatalogSummaryMetricKey) => {
+    setSummaryMetricSettings((current) => ({
+      ...current,
+      [key]: {
+        ...current[key],
+        visible: !current[key].visible,
+      },
+    }));
+  };
+  const toggleSummaryMetricCompact = (key: CatalogSummaryMetricKey) => {
+    setSummaryMetricSettings((current) => ({
+      ...current,
+      [key]: {
+        ...current[key],
+        compact: !current[key].compact,
+      },
+    }));
+  };
   const clearLocalFilters = () => {
     setQuery("");
     setSelectedShopIds([]);
@@ -2047,6 +3195,7 @@ export function CatalogPage() {
     setTurnoverTo("");
     setSortField("stock");
     setSortDirection("desc");
+    setQuickView("all");
   };
   const activeListFilterCount =
     (query.trim() ? 1 : 0) +
@@ -2054,7 +3203,14 @@ export function CatalogPage() {
     (selectedCategories.length ? 1 : 0) +
     (selectedSkus.length ? 1 : 0) +
     (stockFrom || stockTo ? 1 : 0) +
-    (turnoverFrom || turnoverTo ? 1 : 0);
+    (turnoverFrom || turnoverTo ? 1 : 0) +
+    (quickView !== "all" ? 1 : 0);
+  const articleIssuesCollectLabel = articleIssuesLoading
+    ? "Собираем ошибки..."
+    : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
+      ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
+      : "Собрать ошибки за вчера";
+  const quickViewSettingsTitle = `Низкий CR: кликов >= ${formatNumber(quickViewSettings.lowCrClicksThreshold)}, CR < ${formatNumber(quickViewSettings.lowCrPercentThreshold, 1)}%; медленная оборачиваемость > ${formatNumber(quickViewSettings.slowTurnoverDays, 1)} дн.`;
 
   const collectArticleIssues = async () => {
     articleIssuesAbortRef.current?.abort();
@@ -2238,21 +3394,13 @@ export function CatalogPage() {
   return (
     <div className="space-y-6">
       <PageHero
-        title="Каталог артикулов"
-        subtitle={
-          <>
-            <p>
-              Сводка по всем магазинам и товарам за <span className="font-medium text-[var(--color-ink)]">{formatDateRange(start, end)}</span>.
-            </p>
-            <p className="mt-2">
-              В каталоге сейчас {formatNumber(payload.total_articles)} артикулов из {formatNumber(payload.total_shops)} магазинов.
-            </p>
-          </>
-        }
+        compact
+        title="Каталог"
         metrics={
           <>
-            <span className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)]">{formatNumber(payload.total_shops)} магазинов</span>
-            <span className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)]">{formatNumber(payload.total_articles)} артикулов</span>
+            <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{formatNumber(payload.total_shops)} магазинов</span>
+            <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{formatNumber(payload.total_articles)} артикулов</span>
+            <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{formatDateRange(start, end)}</span>
           </>
         }
       />
@@ -2261,56 +3409,98 @@ export function CatalogPage() {
         onHeightChange={setToolbarHeight}
         activeFiltersCount={activeListFilterCount}
         toolbar={({ collapseAll, detailsExpanded, toggleDetails }) => (
-          <RangeToolbar
-            start={start}
-            end={end}
-            preset={preset}
-            onPresetChange={handlePresetChange}
-            onRangeChange={handleRangeChange}
-            extra={
-              <>
-                <button
-                  type="button"
-                  onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-                >
-                  <ArrowUpDown className="size-4 rotate-90" />
-                  Наверх
-                </button>
-                <button
-                  type="button"
-                  onClick={collapseAll}
-                  className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-                >
-                  <SlidersHorizontal className="size-4" />
-                  Скрыть фильтры
-                </button>
-                {activeListFilterCount > 0 ? (
+          <>
+            <RangeToolbar
+              start={start}
+              end={end}
+              preset={preset}
+              onPresetChange={handlePresetChange}
+              onRangeChange={handleRangeChange}
+              extra={
+                <>
                   <button
                     type="button"
-                    onClick={clearLocalFilters}
-                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
+                    onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
                   >
-                    Сбросить выборку
+                    <ArrowUpDown className="size-4 rotate-90" />
+                    Наверх
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={toggleDetails}
-                  className={cn(
-                    "metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm transition hover:bg-[var(--color-surface-strong)]",
-                    activeListFilterCount > 0 ? "text-brand-200" : "text-[var(--color-ink)]",
-                  )}
-                >
-                  <span>
-                    {detailsExpanded ? "Свернуть параметры" : "Параметры списка"}
-                    {activeListFilterCount > 0 ? ` · ${formatNumber(activeListFilterCount)}` : ""}
-                  </span>
-                  <ChevronDown className={cn("size-4 transition-transform", detailsExpanded && "rotate-180")} />
-                </button>
-              </>
-            }
-          />
+                  <button
+                    type="button"
+                    onClick={collapseAll}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                  >
+                    <SlidersHorizontal className="size-4" />
+                    Скрыть фильтры
+                  </button>
+                  {activeListFilterCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={clearLocalFilters}
+                      className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
+                    >
+                      Сбросить выборку
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={toggleDetails}
+                    className={cn(
+                      "metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm transition hover:bg-[var(--color-surface-strong)]",
+                      activeListFilterCount > 0 ? "text-brand-200" : "text-[var(--color-ink)]",
+                    )}
+                  >
+                    <span>
+                      {detailsExpanded ? "Свернуть параметры" : "Параметры списка"}
+                      {activeListFilterCount > 0 ? ` · ${formatNumber(activeListFilterCount)}` : ""}
+                    </span>
+                    <ChevronDown className={cn("size-4 transition-transform", detailsExpanded && "rotate-180")} />
+                  </button>
+                </>
+              }
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
+                {CATALOG_QUICK_VIEW_OPTIONS.map((option) => {
+                  const isActive = option.value === quickView;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setQuickView(option.value)}
+                      aria-pressed={isActive}
+                      className={cn(
+                        "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
+                        isActive
+                          ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
+                          : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
+                      )}
+                    >
+                      <span>{option.label}</span>
+                      <span
+                        className={cn(
+                          "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                          isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
+                        )}
+                      >
+                        {formatNumber(quickViewMetrics[option.value])}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickViewSettingsOpen(true)}
+                title={quickViewSettingsTitle}
+                className="metric-chip inline-flex h-8 shrink-0 items-center gap-1.5 rounded-2xl px-3 text-xs text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+              >
+                <SlidersHorizontal className="size-3.5" />
+                Условия
+              </button>
+            </div>
+          </>
         )}
         filters={
           <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
@@ -2413,6 +3603,14 @@ export function CatalogPage() {
         caption={`Отображение за ${chartWindow} дн. · ${chartRangeLabel}. Отдельная шкала рассчитывается для каждого показателя, поэтому сильные расхождения по абсолютным значениям не сжимают остальные линии.`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSummaryMetricSettingsOpen(true)}
+              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+            >
+              <SlidersHorizontal className="size-4" />
+              Метрики
+            </button>
             <div className="chart-window-switch" aria-label="Период графика каталога">
               {[7, 14, 30, 60].map((windowValue) => (
                 <button
@@ -2435,99 +3633,138 @@ export function CatalogPage() {
           </div>
         }
       >
-        {!chartCollapsed ? (
-          <CatalogSelectionChart
-            rows={chartData?.rows ?? []}
-            totals={chartData?.totals ?? null}
-            selectionCount={chartSelectionCount}
-            loadedProductsCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedProductsCount : chartData?.loaded_products_count ?? null}
-            chunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.chunkCount : null}
-            loadedChunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedChunkCount : null}
-            errorCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
-            isLoading={chartLoading}
-            error={chartError}
-            rangeLabel={chartRangeLabel}
-            windowDays={chartWindow}
-          />
-        ) : (
-          <div className="text-sm text-[var(--color-muted)]">
-            График скрыт. В текущую выборку попало {formatNumber(chartSelectionCount)} {formatProductsWord(chartSelectionCount)}. При открытии он загрузится отдельно за последние {chartWindow} дн.
-          </div>
-        )}
+        <div className="space-y-5">
+          {visibleSummaryMetrics.length ? (
+            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))" }}>
+              {visibleSummaryMetrics.map((metric) => (
+                <MetricCard
+                  key={metric.key}
+                  label={metric.label}
+                  value={metric.value}
+                  deltaText={metric.deltaText}
+                  deltaClassName={metric.deltaClassName}
+                  density="compact"
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[22px] border border-dashed border-[var(--color-line-strong)] px-4 py-3 text-sm text-[var(--color-muted)]">
+              Метрики скрыты в настройках.
+            </div>
+          )}
+
+          {!chartCollapsed ? (
+            <CatalogSelectionChart
+              rows={chartData?.rows ?? []}
+              totals={chartData?.totals ?? null}
+              selectionCount={chartSelectionCount}
+              loadedProductsCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedProductsCount : chartData?.loaded_products_count ?? null}
+              chunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.chunkCount : null}
+              loadedChunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedChunkCount : null}
+              errorCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
+              isLoading={chartLoading}
+              error={chartError}
+              rangeLabel={chartRangeLabel}
+              windowDays={chartWindow}
+            />
+          ) : (
+            <div className="text-sm text-[var(--color-muted)]">
+              График скрыт. В текущую выборку попало {formatNumber(chartSelectionCount)} {formatProductsWord(chartSelectionCount)}. При открытии он загрузится отдельно за последние {chartWindow} дн.
+            </div>
+          )}
+        </div>
       </SectionCard>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-        <MetricCard
-          label="Расход"
-          value={formatMoney(payload.totals.expense_sum)}
-          icon={<Layers3 className="size-5" />}
-          deltaText={renderDeltaText(formatSignedMoney(diffValue(payload.totals.expense_sum, comparePayload?.totals.expense_sum)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.expense_sum, comparePayload?.totals.expense_sum), false)}
-        />
-        <MetricCard
-          label="Показы"
-          value={formatCompactNumber(payload.totals.views)}
-          icon={<ShoppingBag className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.views, comparePayload?.totals.views)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.views, comparePayload?.totals.views), true)}
-        />
-        <MetricCard
-          label="Клики"
-          value={formatCompactNumber(payload.totals.clicks)}
-          icon={<MousePointerClick className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.clicks, comparePayload?.totals.clicks)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.clicks, comparePayload?.totals.clicks), true)}
-        />
-        <MetricCard
-          label="Корзины"
-          value={formatCompactNumber(payload.totals.atbs)}
-          icon={<ShoppingCart className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.atbs, comparePayload?.totals.atbs)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.atbs, comparePayload?.totals.atbs), true)}
-        />
-        <MetricCard
-          label="Заказы"
-          value={formatNumber(payload.totals.orders)}
-          icon={<PackageCheck className="size-5" />}
-          deltaText={renderDeltaText(formatSignedNumber(diffValue(payload.totals.orders, comparePayload?.totals.orders)))}
-          deltaClassName={deltaClassName(diffValue(payload.totals.orders, comparePayload?.totals.orders), true)}
-        />
-        <MetricCard
-          label="CTR каталога"
-          value={formatPercent(ctr)}
-          icon={<FolderOpen className="size-5" />}
-          deltaText={renderDeltaText(formatSignedPercent(diffValue(ctr, compareCtr)))}
-          deltaClassName={deltaClassName(diffValue(ctr, compareCtr), true)}
-        />
-        <MetricCard
-          label="CR каталога"
-          value={formatPercent(cr)}
-          icon={<ExternalLink className="size-5" />}
-          deltaText={renderDeltaText(formatSignedPercent(diffValue(cr, compareCr)))}
-          deltaClassName={deltaClassName(diffValue(cr, compareCr), true)}
-        />
-      </div>
+      <section className="catalog-issues-panel glass-panel" aria-labelledby="catalog-issues-title">
+        <div className="catalog-issues-panel-main">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 id="catalog-issues-title" className="font-display text-base font-semibold text-[var(--color-ink)]">
+                Ошибки за {yesterdayLabel}
+              </h2>
+              <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                {formatNumber(articleIssueRowsAllKinds.length)} с ошибками
+              </span>
+              {articleIssuesHoursTotal > 0 ? (
+                <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                  {formatNumber(articleIssuesHoursTotal, 1)} ч простоя
+                </span>
+              ) : null}
+              {articleIssuesEstimatedGapTotal > 0 ? (
+                <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                  ≈ {formatMoney(articleIssuesEstimatedGapTotal)}
+                </span>
+              ) : null}
+            </div>
+            <p className="catalog-issues-status" role="status" aria-live="polite">
+              {articleIssuesStatusText}
+            </p>
+            {articleIssuesError ? (
+              <p className="mt-1 line-clamp-2 text-xs text-rose-600" role="alert">
+                {articleIssuesError}
+              </p>
+            ) : null}
+          </div>
 
-      <SectionCard
-        title="Ошибки по артикулам"
-        caption={`Бюджет и лимиты догружаются по видимым артикулам с остатком > 0 за ${yesterdayLabel}. Простои короче ${formatNumber(articleIssueSettings.downtimeThresholdHours, 1)} ч в этом блоке не считаются ошибкой. Оборачиваемость считается сразу по текущей выборке, порог сейчас ${formatTurnoverDays(articleIssueSettings.turnoverThreshold)}.`}
-        actions={
-          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+          <div className="catalog-issues-progress" aria-label={`Обработано ${articleIssuesCompletedCount} из ${articleIssuesTotalCount}`}>
+            <div className="catalog-issues-progress-track">
+              <div style={{ width: `${articleIssuesTotalCount ? Math.round((articleIssuesCompletedCount / articleIssuesTotalCount) * 100) : 0}%` }} />
+            </div>
+            <span>
+              {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
+            </span>
+          </div>
+        </div>
+
+        <div className="catalog-issues-controls">
+          <div className="catalog-issues-kind-row" aria-label="Типы ошибок">
+            <button
+              type="button"
+              onClick={() =>
+                setArticleIssueSettings((current) => ({
+                  ...current,
+                  visibleKinds: DEFAULT_CATALOG_ISSUE_VISIBILITY,
+                }))
+              }
+              aria-pressed={enabledIssueKinds.length === CATALOG_ISSUE_KIND_ORDER.length}
+              className={cn("catalog-issue-filter-chip", enabledIssueKinds.length === CATALOG_ISSUE_KIND_ORDER.length && "is-active")}
+            >
+              Все
+              <span>{formatNumber(articleIssueRowsAllKinds.length)}</span>
+            </button>
+            {CATALOG_ISSUE_KIND_ORDER.map((kind) => {
+              const isActive = articleIssueSettings.visibleKinds[kind];
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => toggleArticleIssueKind(kind)}
+                  aria-pressed={isActive}
+                  className={cn("catalog-issue-filter-chip", `is-${kind}`, isActive && "is-active")}
+                >
+                  {resolveCatalogIssueKindShortLabel(kind)}
+                  <span>{formatNumber(articleIssueKindCounts[kind])}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="catalog-issues-action-row">
             <SearchableMultiSelect
-              label="Кабинеты для сбора"
+              label="Кабинеты"
               allLabel="Все кабинеты"
               options={issueShopOptions}
               selectedValues={selectedIssueShopIds}
               onChange={setSelectedIssueShopIds}
               emptyText="Кабинеты в текущей выборке не найдены"
-              className="min-w-[280px]"
+              className="catalog-issues-shop-select"
             />
             <button
               type="button"
               onClick={handleCopyArticleIssues}
               disabled={!articleIssueRows.length}
               className={cn(
-                "metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm transition",
+                "metric-chip inline-flex h-9 items-center rounded-2xl px-3.5 text-sm transition",
                 articleIssueRows.length
                   ? articleIssuesCopyState === "copied"
                     ? "text-emerald-700 hover:bg-[var(--color-surface-strong)]"
@@ -2540,197 +3777,38 @@ export function CatalogPage() {
               {articleIssuesCopyState === "copied"
                 ? "Скопировано"
                 : articleIssuesCopyState === "error"
-                  ? "Ошибка копирования"
-                  : "Скопировать ошибки"}
+                  ? "Ошибка"
+                  : "Скопировать"}
             </button>
             <button
               type="button"
               onClick={() => setArticleIssueSettingsOpen(true)}
-              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)]"
+              title="Настройки блока ошибок"
+              aria-label="Настройки блока ошибок"
+              className="metric-chip inline-flex h-9 w-9 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
             >
               <SlidersHorizontal className="size-4" />
-              Настройки
             </button>
             <button
               type="button"
               onClick={collectArticleIssues}
               disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
               className={cn(
-                "metric-chip rounded-2xl px-4 py-2 text-sm transition",
+                "inline-flex h-9 items-center rounded-2xl px-3.5 text-sm font-medium transition",
                 articleIssuesLoading || !visibleIssueTargetRefs.length
-                  ? "cursor-not-allowed text-[var(--color-muted)] opacity-70"
-                  : "text-[var(--color-ink)] hover:bg-[var(--color-surface-strong)]",
+                  ? "cursor-not-allowed border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] opacity-70"
+                  : "bg-brand-200 text-white shadow-[0_12px_28px_rgba(241,120,40,0.18)] hover:bg-brand-500",
               )}
             >
-              {articleIssuesLoading
-                ? "Собираем ошибки..."
-                : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
-                  ? `Догрузить ${formatNumber(articleIssuesPendingCount)}`
-                  : "Собрать ошибки за вчера"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setArticleIssuesCollapsed((current) => !current)}
-              className="metric-chip inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-            >
-              <span>{articleIssuesCollapsed ? "Развернуть блок" : "Свернуть блок"}</span>
-              <ChevronDown className={cn("size-4 transition-transform", !articleIssuesCollapsed && "rotate-180")} />
+              {articleIssuesCollectLabel}
             </button>
           </div>
-        }
-      >
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-muted)]">
-            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleArticleCodes.length)} артикулов в текущей выборке</span>
-            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(issueScopeShopCount)} кабинетов для сбора</span>
-            <span className="metric-chip rounded-2xl px-3 py-2">{formatNumber(visibleIssueTargetRefs.length)} с остатком &gt; 0</span>
-            {articleIssuesTotalCount ? (
-              <span className="metric-chip rounded-2xl px-3 py-2">
-                Обработано {formatNumber(articleIssuesCompletedCount)} / {formatNumber(articleIssuesTotalCount)}
-              </span>
-            ) : null}
-            <span className="metric-chip rounded-2xl px-3 py-2">
-              Порог простоя {formatNumber(articleIssueSettings.downtimeThresholdHours, 1)} ч
-            </span>
-            <span className="metric-chip rounded-2xl px-3 py-2">
-              Порог оборачиваемости {formatTurnoverDays(articleIssueSettings.turnoverThreshold)}
-            </span>
-            {enabledIssueKinds.map((kind) => (
-              <span key={kind} className="metric-chip rounded-2xl px-3 py-2">
-                {resolveCatalogIssueKindLabel(kind)}
-              </span>
-            ))}
-            {articleIssueRows.length ? (
-              <span className="metric-chip rounded-2xl px-3 py-2">
-                {formatNumber(articleIssueRows.length)} с ошибками в блоке
-              </span>
-            ) : null}
-          </div>
-
-          {articleIssuesError ? (
-            <div className="rounded-[22px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {articleIssuesError}
-            </div>
-          ) : null}
-
-          {!articleIssuesCollapsed ? (
-            <>
-              {articleIssuesLoading ? (
-                <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-                  {articleIssueRows.length
-                    ? `Обработано ${formatNumber(articleIssuesCompletedCount)} из ${formatNumber(articleIssuesTotalCount)} артикулов. Уже показаны найденные ошибки.`
-                    : `Загружаю вчерашние ошибки по ${formatNumber(visibleIssueTargetRefs.length)} артикулам с остатком > 0.`}
-                </div>
-              ) : null}
-
-              {!enabledIssueKinds.length ? (
-                <div className="rounded-[22px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-4 py-4 text-sm text-[var(--color-muted)]">
-                  Все типы ошибок скрыты в настройках блока.
-                </div>
-              ) : null}
-
-              {!articleIssuesLoading && !articleIssuesError && enabledIssueKinds.length > 0 && !articleIssueRows.length ? (
-                <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
-                  За {yesterdayLabel} по текущей выборке не найдено ошибок по выбранным типам.
-                </div>
-              ) : null}
-
-              {articleIssueRows.length ? (
-                <div className="overflow-x-auto pb-1">
-                  <div className="space-y-2" style={{ minWidth: `${280 + enabledIssueKinds.length * 250}px` }}>
-                    <div
-                      className="grid gap-3 px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]"
-                      style={{ gridTemplateColumns: articleIssueGridTemplate }}
-                    >
-                      <div>Товар</div>
-                      {enabledIssueKinds.map((kind) => (
-                        <div key={`issue-header-${kind}`} className="px-1">
-                          <div>{resolveCatalogIssueKindLabel(kind)}</div>
-                          <div className="mt-1 text-[10px] font-normal normal-case tracking-normal text-[var(--color-muted)]">
-                            {resolveCatalogIssueKindCaption(kind)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {articleIssueRows.map((item) => {
-                      const totalHours = getArticleIssueHoursTotal(item);
-                      const totalIncidents = getArticleIssueIncidentsTotal(item);
-                      const turnoverIssue = getArticleIssueByKind(item, "turnover");
-                      return (
-                        <article
-                          key={item.ref}
-                          className="rounded-[22px] border border-[var(--color-line)] bg-white/92 p-3 shadow-[0_10px_24px_rgba(44,35,66,0.05)]"
-                        >
-                          <div className="grid gap-3" style={{ gridTemplateColumns: articleIssueGridTemplate }}>
-                            <div className="min-w-0">
-                              <div className="flex items-start gap-3">
-                                <Link
-                                  to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="h-[86px] w-[64px] shrink-0 overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface-soft)] shadow-[0_8px_20px_rgba(44,35,66,0.06)]"
-                                  aria-label={`Открыть товар ${item.name}`}
-                                >
-                                  {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" /> : null}
-                                </Link>
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <Link
-                                      to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="min-w-0 font-display text-[1.05rem] font-semibold leading-tight text-[var(--color-ink)] hover:text-brand-200"
-                                      title={item.name}
-                                    >
-                                      <span className="line-clamp-2">{item.name}</span>
-                                    </Link>
-                                    {totalHours > 0 ? (
-                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                                        {formatNumber(totalHours, 1)} ч простоя
-                                      </span>
-                                    ) : null}
-                                    {totalIncidents > 0 ? (
-                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                                        {formatIssueIncidents(totalIncidents)}
-                                      </span>
-                                    ) : null}
-                                    {turnoverIssue?.turnoverDays !== undefined && turnoverIssue?.turnoverDays !== null ? (
-                                      <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
-                                        {formatTurnoverDays(turnoverIssue.turnoverDays)}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                  <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={item.name}>
-                                    Артикул {item.article}
-                                  </p>
-                                </div>
-                                <a
-                                  href={item.productUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex shrink-0 items-center gap-1 rounded-2xl border border-[var(--color-line)] px-2.5 py-1.5 text-xs text-brand-200 transition hover:bg-[var(--color-surface-soft)]"
-                                >
-                                  XWAY
-                                  <ExternalLink className="size-3.5" />
-                                </a>
-                              </div>
-                            </div>
-
-                            {enabledIssueKinds.map((kind) => (
-                              <CatalogIssueCell key={`${item.ref}-${kind}`} issue={getArticleIssueByKind(item, kind)} />
-                            ))}
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : null}
         </div>
-      </SectionCard>
+
+        {!enabledIssueKinds.length ? (
+          <div className="catalog-issues-note">Все типы ошибок скрыты. Включите хотя бы один chip, чтобы увидеть отметки в таблице.</div>
+        ) : null}
+      </section>
 
       <div className="space-y-5">
         {visibleShops.map((shop) => {
@@ -2812,6 +3890,26 @@ export function CatalogPage() {
                           </div>
                         ),
                       },
+                      {
+                        key: "issues",
+                        header: <span className="inline-block w-[190px]">Ошибки</span>,
+                        render: (article) => {
+                          const ref = `${shop.id}:${article.product_id}`;
+                          return (
+                            <div className="w-[190px] max-w-[190px]">
+                              <CatalogIssueInlineBadges
+                                item={articleIssueRowsByRef.get(ref) ?? null}
+                                isLoaded={Boolean(articleIssueCacheByRef[ref])}
+                                isLoading={articleIssuesLoading}
+                                onSelect={(kind) => {
+                                  setSelectedArticleIssueRef(ref);
+                                  setSelectedArticleIssueKind(kind);
+                                }}
+                              />
+                            </div>
+                          );
+                        },
+                      },
                       { key: "stock", header: "Остаток", align: "right", render: (article) => formatNumber(article.stock) },
                       {
                         key: "turnover",
@@ -2876,8 +3974,6 @@ export function CatalogPage() {
                         render: (article) => (
                           <Link
                             to={`/product${buildProductSearch(article.article, start, end)}`}
-                            target="_blank"
-                            rel="noreferrer"
                             className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-ink)] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#342f49]"
                           >
                             Детали
@@ -2911,6 +4007,37 @@ export function CatalogPage() {
         </SectionCard>
       ) : null}
 
+      {selectedArticleIssueRow ? (
+        <CatalogIssueDrawer
+          item={selectedArticleIssueRow}
+          preferredKind={selectedArticleIssueKind}
+          yesterdayIso={yesterdayIso}
+          yesterdayLabel={yesterdayLabel}
+          onClose={() => {
+            setSelectedArticleIssueRef(null);
+            setSelectedArticleIssueKind(null);
+          }}
+        />
+      ) : null}
+
+      <CatalogSummaryMetricsSettingsDialog
+        open={summaryMetricSettingsOpen}
+        settings={summaryMetricSettings}
+        onClose={() => setSummaryMetricSettingsOpen(false)}
+        onAddMetric={addSummaryMetric}
+        onToggleVisible={toggleSummaryMetricVisible}
+        onToggleCompact={toggleSummaryMetricCompact}
+        onReset={() => setSummaryMetricSettings(getDefaultCatalogSummaryMetricSettings())}
+      />
+
+      <CatalogQuickViewSettingsDialog
+        open={quickViewSettingsOpen}
+        settings={quickViewSettings}
+        onClose={() => setQuickViewSettingsOpen(false)}
+        onSettingsChange={setQuickViewSettings}
+        onReset={() => setQuickViewSettings(getDefaultCatalogQuickViewSettings())}
+      />
+
       <CatalogIssuesSettingsDialog
         open={articleIssueSettingsOpen}
         onClose={() => setArticleIssueSettingsOpen(false)}
@@ -2929,15 +4056,7 @@ export function CatalogPage() {
           }))
         }
         visibleKinds={articleIssueSettings.visibleKinds}
-        onToggleKind={(kind) =>
-          setArticleIssueSettings((current) => ({
-            ...current,
-            visibleKinds: {
-              ...current.visibleKinds,
-              [kind]: !current.visibleKinds[kind],
-            },
-          }))
-        }
+        onToggleKind={toggleArticleIssueKind}
       />
     </div>
   );

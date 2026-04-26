@@ -31,6 +31,30 @@
   --radius-sm: 14px;
 }
 
+html[data-theme="dark"] {
+  --bg: #0b0d14;
+  --surface: #151821;
+  --surface-soft: #1b1f2a;
+  --surface-muted: #202534;
+  --surface-strong: #292f3f;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --ink: #f4f0ff;
+  --muted: #a39cb5;
+  --accent: #ffa866;
+  --accent-soft: #3a251d;
+  --accent-deep: #ff8d3a;
+  --blue: #6f95ff;
+  --blue-soft: #17233e;
+  --green-soft: #14291e;
+  --amber-soft: #332910;
+  --rose-soft: #351a1f;
+  --violet-soft: #241c3d;
+  --good: #58c08a;
+  --bad: #ff7a7a;
+  --shadow: 0 26px 70px rgba(0, 0, 0, 0.38);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -51,6 +75,11 @@ body {
   color: var(--ink);
   background: linear-gradient(180deg, #f4f3f7 0%, var(--bg) 100%);
   font-family: "IBM Plex Sans", sans-serif;
+}
+
+html[data-theme="dark"],
+html[data-theme="dark"] body {
+  background: linear-gradient(180deg, #11131b 0%, var(--bg) 100%);
 }
 
 @supports (zoom: 1) {

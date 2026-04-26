@@ -21,7 +21,7 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        app: resolve(__dirname, "index.react.html"),
+        app: resolve(__dirname, "index.html"),
       },
     },
   },

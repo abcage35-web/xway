@@ -9,7 +9,8 @@
 
 Что уже подготовлено в репозитории:
 
-- билд фронта теперь дополнительно создаёт `dist/index.html`, чтобы Cloudflare Pages мог отдавать SPA как обычный entrypoint;
+- React SPA использует корневой `index.html`, поэтому dev-сервер и Cloudflare Pages больше не могут случайно открыть старый статический UI;
+- билд фронта создаёт `dist/index.html`, чтобы Cloudflare Pages мог отдавать SPA как обычный entrypoint;
 - в `xway_dashboard_site/functions/api/[[path]].js` добавлен гибридный Pages backend;
 - нативно в Cloudflare уже работают `/api/health`, `/api/catalog`, `/api/catalog-chart`, `/api/products` и `/api/cluster-detail`;
 - внешний `API_ORIGIN` теперь нужен только если ты хочешь оставить запасной proxy на не перенесённые маршруты;

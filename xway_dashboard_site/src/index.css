@@ -57,6 +57,57 @@
 @layer base {
   :root {
     color-scheme: light;
+    --color-page-gradient: linear-gradient(180deg, #f4f3f7 0%, var(--color-bg) 100%);
+    --color-glass-bg: rgb(255 255 255 / 0.94);
+    --color-chip-bg: rgb(247 246 250 / 0.94);
+    --color-elevated-shadow:
+      0 24px 60px rgb(44 35 66 / 0.08),
+      0 2px 10px rgb(44 35 66 / 0.04);
+    --color-skeleton-gradient: linear-gradient(90deg, rgb(236 234 242 / 0.92) 0%, rgb(255 255 255 / 0.92) 48%, rgb(236 234 242 / 0.92) 100%);
+    --color-scroll-thumb: rgb(128 122 147 / 0.28);
+  }
+
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    --color-bg: #0b0d14;
+    --color-surface: #151821;
+    --color-surface-soft: #1b1f2a;
+    --color-surface-muted: #202534;
+    --color-surface-strong: #292f3f;
+    --color-line: rgb(255 255 255 / 0.1);
+    --color-line-strong: rgb(255 255 255 / 0.18);
+    --color-ink: #f4f0ff;
+    --color-muted: #a39cb5;
+
+    --color-brand-100: #3a251d;
+    --color-brand-200: #ff8d3a;
+    --color-brand-300: #ffa866;
+    --color-brand-400: #ffc89e;
+    --color-brand-500: #f17828;
+    --color-brand-700: #ffd1ad;
+
+    --color-accent-100: #18223c;
+    --color-accent-300: #344b82;
+    --color-accent-500: #6f95ff;
+    --color-accent-700: #a8bdff;
+    --color-blue-soft: #17233e;
+    --color-green-soft: #14291e;
+    --color-amber-soft: #332910;
+    --color-rose-soft: #351a1f;
+    --color-violet-soft: #241c3d;
+    --color-coral-100: #241c3d;
+    --color-coral-300: #4d3f79;
+    --color-good: #58c08a;
+    --color-bad: #ff7a7a;
+
+    --color-page-gradient: linear-gradient(180deg, #11131b 0%, var(--color-bg) 100%);
+    --color-glass-bg: rgb(19 22 31 / 0.92);
+    --color-chip-bg: rgb(27 31 42 / 0.92);
+    --color-elevated-shadow:
+      0 26px 70px rgb(0 0 0 / 0.38),
+      0 1px 0 rgb(255 255 255 / 0.03) inset;
+    --color-skeleton-gradient: linear-gradient(90deg, rgb(34 39 54 / 0.92) 0%, rgb(47 54 72 / 0.92) 48%, rgb(34 39 54 / 0.92) 100%);
+    --color-scroll-thumb: rgb(163 156 181 / 0.32);
   }
 
   * {
@@ -69,14 +120,14 @@
 
   html {
     scroll-behavior: smooth;
-    background: linear-gradient(180deg, #f4f3f7 0%, var(--color-bg) 100%);
+    background: var(--color-page-gradient);
   }
 
   body {
     margin: 0;
     min-height: 100vh;
     overflow-x: hidden;
-    background: linear-gradient(180deg, #f4f3f7 0%, var(--color-bg) 100%);
+    background: var(--color-page-gradient);
     color: var(--color-ink);
     font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
@@ -120,7 +171,7 @@
 
   ::-webkit-scrollbar-thumb {
     border-radius: 999px;
-    background: rgb(128 122 147 / 0.28);
+    background: var(--color-scroll-thumb);
   }
 
   ::-webkit-scrollbar-track {
@@ -130,18 +181,70 @@
 
 @layer components {
   .glass-panel {
-    background: rgb(255 255 255 / 0.94);
+    background: var(--color-glass-bg);
     border: 1px solid var(--color-line);
-    box-shadow:
-      0 24px 60px rgb(44 35 66 / 0.08),
-      0 2px 10px rgb(44 35 66 / 0.04);
+    box-shadow: var(--color-elevated-shadow);
     backdrop-filter: blur(18px);
   }
 
   .metric-chip {
     border: 1px solid var(--color-line);
-    background: rgb(247 246 250 / 0.94);
+    background: var(--color-chip-bg);
     backdrop-filter: blur(12px);
+  }
+
+  .theme-toggle {
+    position: fixed;
+    top: 14px;
+    right: 18px;
+    z-index: 80;
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.78);
+    box-shadow: 0 14px 38px rgb(44 35 66 / 0.12);
+    backdrop-filter: blur(18px);
+  }
+
+  .theme-toggle-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 999px;
+    color: var(--color-muted);
+    transition:
+      color 160ms ease,
+      background 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .theme-toggle-button:hover {
+    color: var(--color-ink);
+    background: var(--color-surface-soft);
+  }
+
+  .theme-toggle-button.is-active {
+    color: var(--color-ink);
+    background: var(--color-surface);
+    box-shadow: 0 8px 22px rgb(44 35 66 / 0.14);
+  }
+
+  html[data-theme="dark"] .theme-toggle {
+    background: rgb(13 16 24 / 0.82);
+    box-shadow:
+      0 18px 46px rgb(0 0 0 / 0.4),
+      0 0 0 1px rgb(255 255 255 / 0.03) inset;
+  }
+
+  html[data-theme="dark"] .theme-toggle-button.is-active {
+    color: white;
+    background: linear-gradient(135deg, #405f9e 0%, #273d72 100%);
+    box-shadow: 0 10px 26px rgb(47 76 141 / 0.34);
   }
 
   .surface-soft {
@@ -155,8 +258,7 @@
   }
 
   .skeleton-shimmer {
-    background:
-      linear-gradient(90deg, rgb(236 234 242 / 0.92) 0%, rgb(255 255 255 / 0.92) 48%, rgb(236 234 242 / 0.92) 100%);
+    background: var(--color-skeleton-gradient);
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.5s linear infinite;
   }
@@ -337,7 +439,7 @@
     border: 1px solid var(--color-line);
     border-radius: var(--radius-lg);
     background: var(--color-surface);
-    box-shadow: 0 24px 60px rgb(44 35 66 / 0.08);
+    box-shadow: var(--color-elevated-shadow);
   }
 
   .catalog-range-toolbar-sticky {
@@ -348,6 +450,26 @@
 }
 
 @layer utilities {
+  html[data-theme="dark"] .bg-white,
+  html[data-theme="dark"] .bg-white\/45,
+  html[data-theme="dark"] .bg-white\/52,
+  html[data-theme="dark"] .bg-white\/55,
+  html[data-theme="dark"] .bg-white\/72,
+  html[data-theme="dark"] .bg-white\/78,
+  html[data-theme="dark"] .bg-white\/80,
+  html[data-theme="dark"] .bg-white\/84,
+  html[data-theme="dark"] .bg-white\/86,
+  html[data-theme="dark"] .bg-white\/88,
+  html[data-theme="dark"] .bg-white\/90,
+  html[data-theme="dark"] .bg-white\/95,
+  html[data-theme="dark"] .bg-white\/96 {
+    background-color: var(--color-surface) !important;
+  }
+
+  html[data-theme="dark"] .border-white\/60 {
+    border-color: var(--color-line) !important;
+  }
+
   @media (max-width: 1320px) {
     .product-toolbar {
       grid-template-columns: 1fr;

@@ -228,8 +228,8 @@ function resolveHoursSectionPreset(spanDays: number | null | undefined): HoursSe
 
 export async function productLoader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
-  const legacySelectedArticle = url.searchParams.get("selected");
-  const requestedArticles = parseArticlesParam(url.searchParams.get("articles") || legacySelectedArticle);
+  const selectedArticleParam = url.searchParams.get("selected");
+  const requestedArticles = parseArticlesParam(url.searchParams.get("articles") || selectedArticleParam);
   const trackedArticles = requestedArticles.length ? [requestedArticles[0]!] : [];
   const requestedStart = url.searchParams.get("start");
   const requestedEnd = url.searchParams.get("end");
@@ -7896,7 +7896,9 @@ export function ProductPage() {
   const topLevelErrors = Object.entries(currentProduct.errors || {}).filter(([, value]) => Boolean(value));
   const productPath = `/product${buildProductSearch({ article: currentProduct.article, start: draftStart, end: draftEnd })}`;
   const catalogPath = `/catalog${buildCatalogSearch(draftStart, draftEnd)}`;
-  const toolbarRefreshing = revalidator.state !== "idle" || navigation.state !== "idle" || isPayloadRefreshing;
+  const routeNavigationRefreshing = navigation.state !== "idle";
+  const dataRefreshing = revalidator.state !== "idle" || isPayloadRefreshing;
+  const toolbarRefreshing = dataRefreshing || routeNavigationRefreshing;
   const heroMetrics = buildBoardMetrics(currentProduct);
   const previousHeroMetrics = effectiveCompareProduct ? buildBoardMetrics(effectiveCompareProduct) : null;
   const stocksRuleSummary = resolveStocksRuleSummary(currentProduct);
@@ -7927,10 +7929,10 @@ export function ProductPage() {
     ? buildWildberriesProductUrl(currentProduct.article)
     : null;
   const loadingBadges = [
-    toolbarRefreshing
+    dataRefreshing
       ? {
           key: "page",
-          label: isPayloadRefreshing ? "Обновляю данные на странице" : navigation.state !== "idle" ? "Загружаю страницу" : "Обновляю данные",
+          label: isPayloadRefreshing ? "Обновляю данные на странице" : "Обновляю данные",
           tone: "page" as const,
         }
       : null,
