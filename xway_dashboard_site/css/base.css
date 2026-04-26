@@ -753,14 +753,6 @@ body.page-view-articles .article-nav-inline {
   padding-bottom: 8px;
 }
 
-.catalog-range-toolbar-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 34;
-  margin-top: 0;
-  margin-bottom: 0;
-}
-
 .articles-page-shell {
   display: grid;
   gap: 18px;

@@ -404,23 +404,23 @@ export function RangeToolbar({
           </select>
         </div>
 
-        <div className="grid flex-1 gap-3 sm:grid-cols-2">
-          <label className="metric-chip flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm">
-            <span className="text-[var(--color-muted)]">Начало</span>
+        <div className="metric-chip grid min-w-0 flex-1 overflow-hidden rounded-2xl text-sm sm:grid-cols-2 xl:max-w-[640px]">
+          <label className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
+            <span className="shrink-0 text-[var(--color-muted)]">Начало</span>
             <input
               type="date"
               value={start || ""}
               onChange={(event) => onRangeChange({ start: event.target.value, end: end || event.target.value })}
-              className="ml-auto bg-transparent text-[var(--color-ink)] outline-none"
+              className="min-w-[8.6rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
             />
           </label>
-          <label className="metric-chip flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm">
-            <span className="text-[var(--color-muted)]">Конец</span>
+          <label className="flex min-w-0 items-center gap-2 border-t border-[var(--color-line)] px-3.5 py-2.5 sm:border-l sm:border-t-0">
+            <span className="shrink-0 text-[var(--color-muted)]">Конец</span>
             <input
               type="date"
               value={end || ""}
               onChange={(event) => onRangeChange({ start: start || event.target.value, end: event.target.value })}
-              className="ml-auto bg-transparent text-[var(--color-ink)] outline-none"
+              className="min-w-[8.6rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
             />
           </label>
         </div>
@@ -577,7 +577,7 @@ export function PageHero({
             <h1 className="font-display text-2xl font-semibold tracking-tight text-[var(--color-ink)] sm:text-3xl">{title}</h1>
             {subtitle ? <div className="mt-1 text-sm leading-5 text-[var(--color-muted)]">{subtitle}</div> : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:pr-32">
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:pr-14">
             {metrics}
             {actions}
           </div>

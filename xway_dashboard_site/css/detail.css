@@ -788,8 +788,8 @@
 .catalog-issues-status {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.35;
+  font-size: 0.875rem;
+  line-height: 1.42;
 }
 
 .catalog-issues-progress {

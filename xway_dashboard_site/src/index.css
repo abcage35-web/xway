@@ -193,29 +193,22 @@
     backdrop-filter: blur(12px);
   }
 
-  .theme-toggle {
-    position: fixed;
+  .theme-settings-button {
+    position: absolute;
     top: 14px;
     right: 18px;
     z-index: 80;
-    display: inline-flex;
-    gap: 4px;
-    padding: 4px;
-    border: 1px solid var(--color-line);
-    border-radius: 999px;
-    background: rgb(255 255 255 / 0.78);
-    box-shadow: 0 14px 38px rgb(44 35 66 / 0.12);
-    backdrop-filter: blur(18px);
-  }
-
-  .theme-toggle-button {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     justify-content: center;
-    width: 42px;
-    height: 42px;
+    width: 46px;
+    height: 46px;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
     color: var(--color-muted);
+    background: var(--color-chip-bg);
+    box-shadow: 0 14px 38px rgb(44 35 66 / 0.12);
+    backdrop-filter: blur(18px);
     transition:
       color 160ms ease,
       background 160ms ease,
@@ -223,28 +216,23 @@
       transform 160ms ease;
   }
 
-  .theme-toggle-button:hover {
-    color: var(--color-ink);
-    background: var(--color-surface-soft);
-  }
-
-  .theme-toggle-button.is-active {
+  .theme-settings-button:hover {
     color: var(--color-ink);
     background: var(--color-surface);
-    box-shadow: 0 8px 22px rgb(44 35 66 / 0.14);
+    box-shadow: 0 18px 42px rgb(44 35 66 / 0.16);
   }
 
-  html[data-theme="dark"] .theme-toggle {
-    background: rgb(13 16 24 / 0.82);
+  html[data-theme="dark"] .theme-settings-button {
+    color: rgb(244 240 255 / 0.72);
+    background: rgb(27 31 42 / 0.86);
     box-shadow:
       0 18px 46px rgb(0 0 0 / 0.4),
       0 0 0 1px rgb(255 255 255 / 0.03) inset;
   }
 
-  html[data-theme="dark"] .theme-toggle-button.is-active {
+  html[data-theme="dark"] .theme-settings-button:hover {
     color: white;
-    background: linear-gradient(135deg, #405f9e 0%, #273d72 100%);
-    box-shadow: 0 10px 26px rgb(47 76 141 / 0.34);
+    background: var(--color-surface);
   }
 
   .surface-soft {
@@ -442,11 +430,6 @@
     box-shadow: var(--color-elevated-shadow);
   }
 
-  .catalog-range-toolbar-sticky {
-    position: sticky;
-    top: 0;
-    z-index: 36;
-  }
 }
 
 @layer utilities {

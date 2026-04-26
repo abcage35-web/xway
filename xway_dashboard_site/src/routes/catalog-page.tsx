@@ -1661,12 +1661,6 @@ function CatalogStickyFilterShell({
     }
     return window.localStorage.getItem(CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY) === "1";
   });
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const innerRef = useRef<HTMLDivElement | null>(null);
-  const [isPinned, setIsPinned] = useState(false);
-  const [layout, setLayout] = useState({ height: 0, left: 0, right: 0 });
-  const topOffset = 12;
-
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -1682,58 +1676,13 @@ function CatalogStickyFilterShell({
   }, [detailsExpanded]);
 
   useEffect(() => {
-    if (!rootRef.current || !innerRef.current) {
-      return;
-    }
-    const rootNode = rootRef.current;
-    const innerNode = innerRef.current;
-
-    const updateLayout = () => {
-      const wrapperRect = rootNode.getBoundingClientRect();
-      const innerRect = innerNode.getBoundingClientRect();
-      const nextLayout = {
-        height: Math.ceil(innerRect.height),
-        left: Math.round(wrapperRect.left),
-        right: Math.max(0, Math.round(window.innerWidth - wrapperRect.right)),
-      };
-      setLayout((current) =>
-        current.height === nextLayout.height && current.left === nextLayout.left && current.right === nextLayout.right ? current : nextLayout,
-      );
-      const pinned = wrapperRect.top <= topOffset;
-      setIsPinned(pinned);
-      const effectiveHeight = pinned ? topOffset + nextLayout.height + 8 : Math.ceil(wrapperRect.top + innerRect.height);
-      onHeightChange(effectiveHeight);
-    };
-
-    updateLayout();
-    window.addEventListener("scroll", updateLayout, { passive: true });
-    window.addEventListener("resize", updateLayout);
-
-    if (typeof ResizeObserver !== "undefined") {
-      const observer = new ResizeObserver(updateLayout);
-      observer.observe(rootNode);
-      observer.observe(innerNode);
-      return () => {
-        observer.disconnect();
-        window.removeEventListener("scroll", updateLayout);
-        window.removeEventListener("resize", updateLayout);
-      };
-    }
-
-    return () => {
-      window.removeEventListener("scroll", updateLayout);
-      window.removeEventListener("resize", updateLayout);
-    };
+    onHeightChange(0);
   }, [collapsed, detailsExpanded, onHeightChange]);
 
   if (collapsed) {
     return (
-      <div ref={rootRef} className="relative z-[39] w-full" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
-        <div
-          ref={innerRef}
-          className="ml-auto flex w-fit items-center gap-2 rounded-[20px] border border-[var(--color-line)] bg-white/95 px-2.5 py-1.5 shadow-[0_12px_40px_rgba(44,35,66,0.1)] backdrop-blur-xl"
-          style={isPinned ? { position: "fixed", top: `${topOffset}px`, right: "18px", zIndex: 39 } : undefined}
-        >
+      <div className="relative z-[39] flex w-full justify-end">
+        <div className="flex w-fit items-center gap-2 rounded-[20px] border border-[var(--color-line)] bg-white/95 px-2.5 py-1.5 shadow-[0_12px_40px_rgba(44,35,66,0.1)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => setCollapsed(false)}
@@ -1749,22 +1698,8 @@ function CatalogStickyFilterShell({
   }
 
   return (
-    <div ref={rootRef} className="relative z-[39] w-full" style={layout.height ? { minHeight: `${layout.height}px` } : undefined}>
-      <div
-        ref={innerRef}
-        className="space-y-2.5"
-        style={
-          isPinned
-            ? {
-                position: "fixed",
-                top: `${topOffset}px`,
-                left: `${layout.left}px`,
-                right: `${layout.right}px`,
-                zIndex: 39,
-              }
-            : undefined
-        }
-      >
+    <div className="relative z-[39] w-full">
+      <div className="space-y-2.5">
         {toolbar({
           collapseAll: () => setCollapsed(true),
           detailsExpanded,
@@ -3460,46 +3395,6 @@ export function CatalogPage() {
                 </>
               }
             />
-            <div className="mt-2 flex items-center gap-2">
-              <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
-                {CATALOG_QUICK_VIEW_OPTIONS.map((option) => {
-                  const isActive = option.value === quickView;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setQuickView(option.value)}
-                      aria-pressed={isActive}
-                      className={cn(
-                        "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
-                        isActive
-                          ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
-                          : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
-                      )}
-                    >
-                      <span>{option.label}</span>
-                      <span
-                        className={cn(
-                          "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                          isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
-                        )}
-                      >
-                        {formatNumber(quickViewMetrics[option.value])}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={() => setQuickViewSettingsOpen(true)}
-                title={quickViewSettingsTitle}
-                className="metric-chip inline-flex h-8 shrink-0 items-center gap-1.5 rounded-2xl px-3 text-xs text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-              >
-                <SlidersHorizontal className="size-3.5" />
-                Условия
-              </button>
-            </div>
           </>
         )}
         filters={
@@ -3598,6 +3493,49 @@ export function CatalogPage() {
         }
       />
 
+      <section className="glass-panel rounded-[26px] p-2.5 sm:p-3" aria-label="Быстрые фильтры каталога">
+        <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
+            {CATALOG_QUICK_VIEW_OPTIONS.map((option) => {
+              const isActive = option.value === quickView;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setQuickView(option.value)}
+                  aria-pressed={isActive}
+                  className={cn(
+                    "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
+                    isActive
+                      ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
+                      : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
+                  )}
+                >
+                  <span>{option.label}</span>
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                      isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
+                    )}
+                  >
+                    {formatNumber(quickViewMetrics[option.value])}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => setQuickViewSettingsOpen(true)}
+            title={quickViewSettingsTitle}
+            className="metric-chip inline-flex h-8 shrink-0 items-center gap-1.5 rounded-2xl px-3 text-xs text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            <SlidersHorizontal className="size-3.5" />
+            Условия
+          </button>
+        </div>
+      </section>
+
       <SectionCard
         title="График каталога"
         caption={`Отображение за ${chartWindow} дн. · ${chartRangeLabel}. Отдельная шкала рассчитывается для каждого показателя, поэтому сильные расхождения по абсолютным значениям не сжимают остальные линии.`}
@@ -3679,7 +3617,7 @@ export function CatalogPage() {
         <div className="catalog-issues-panel-main">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 id="catalog-issues-title" className="font-display text-base font-semibold text-[var(--color-ink)]">
+              <h2 id="catalog-issues-title" className="font-display text-xl font-semibold text-[var(--color-ink)] sm:text-2xl">
                 Ошибки за {yesterdayLabel}
               </h2>
               <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
