@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { LoaderCircle, RefreshCw } from "lucide-react";
-import { Bar, CartesianGrid, ComposedChart, LabelList, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent } from "../lib/format";
 import type { CatalogChartRow, CatalogChartTotals } from "../lib/types";
 
@@ -30,12 +30,6 @@ type SplitChartConfig = {
   title: string;
   primaryKey: CatalogSeriesKey;
   rateKey?: CatalogSeriesKey;
-};
-type DrrLineLabelProps = {
-  x?: number | string;
-  y?: number | string;
-  value?: unknown;
-  viewBox?: unknown;
 };
 type CatalogChartAxisMetric = {
   key: string;
@@ -69,6 +63,25 @@ const DEFAULT_SPLIT_HIDDEN_SERIES: Record<SplitPanelKey, CatalogSeriesKey[]> = {
   orders: [],
   crf: [],
 };
+
+function formatChartDateLabel(value: string | null | undefined) {
+  const rawValue = String(value || "");
+  const dottedDate = rawValue.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dottedDate) {
+    const day = dottedDate[1] || "";
+    const month = dottedDate[2] || "";
+    const year = dottedDate[3] || "";
+    return `${day}.${month}.${year.slice(-2)}`;
+  }
+  const isoDate = rawValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDate) {
+    const year = isoDate[1] || "";
+    const month = isoDate[2] || "";
+    const day = isoDate[3] || "";
+    return `${day}.${month}.${year.slice(-2)}`;
+  }
+  return rawValue;
+}
 const CATALOG_SERIES: Array<{
   key: CatalogSeriesKey;
   label: string;
@@ -341,7 +354,7 @@ function CatalogChartValueTable({
 
 function catalogChartAxisHeight(metrics: CatalogChartAxisMetric[], compact = false) {
   const visibleMetricCount = metrics.filter((metric) => metric.active !== false).length;
-  return (compact ? 22 : 26) + visibleMetricCount * (compact ? 14 : 16);
+  return (compact ? 30 : 38) + visibleMetricCount * (compact ? 14 : 16);
 }
 
 function CatalogChartXAxisTick({ x = 0, y = 0, payload, rows, metrics, compact = false }: CatalogChartXAxisTickProps) {
@@ -352,10 +365,11 @@ function CatalogChartXAxisTick({ x = 0, y = 0, payload, rows, metrics, compact =
   const visibleMetrics = metrics.filter((metric) => metric.active !== false);
   const valueFontSize = compact ? 9 : 10;
   const lineHeight = compact ? 14 : 16;
+  const axisTopGap = compact ? 8 : 12;
 
   return (
     <g transform={`translate(${tickX},${tickY})`} className="catalog-chart-axis-tick">
-      <text className="catalog-chart-axis-date" textAnchor="middle" x={0} y={0}>
+      <text className="catalog-chart-axis-date" textAnchor="middle" x={0} y={axisTopGap}>
         {label}
       </text>
       {row
@@ -364,7 +378,7 @@ function CatalogChartXAxisTick({ x = 0, y = 0, payload, rows, metrics, compact =
               key={metric.key}
               textAnchor="middle"
               x={0}
-              y={(index + 1) * lineHeight}
+              y={axisTopGap + (index + 1) * lineHeight}
               fill={metric.color}
               fontSize={valueFontSize}
               fontWeight={800}
@@ -375,62 +389,6 @@ function CatalogChartXAxisTick({ x = 0, y = 0, payload, rows, metrics, compact =
         : null}
     </g>
   );
-}
-
-function createDrrLineLabel({
-  color,
-  compact,
-  offset,
-}: {
-  color: string;
-  compact: boolean;
-  offset: number;
-}) {
-  return function DrrLineLabel({ x = 0, y = 0, value, viewBox }: DrrLineLabelProps) {
-    const numericValue = Number(value);
-    const pointX = Number(x);
-    const pointY = Number(y);
-    if (!Number.isFinite(numericValue) || !Number.isFinite(pointX) || !Number.isFinite(pointY)) {
-      return null;
-    }
-
-    const viewBoxRecord = viewBox && typeof viewBox === "object" ? (viewBox as Record<string, unknown>) : {};
-    const viewBoxY = Number(viewBoxRecord.y ?? 0);
-    const viewBoxHeight = Number(viewBoxRecord.height ?? 160);
-    const top = viewBoxY + 10;
-    const bottom = viewBoxY + viewBoxHeight - 8;
-    const labelY = Math.max(top, Math.min(bottom, pointY + offset));
-    const label = formatPercent(numericValue);
-
-    return (
-      <g pointerEvents="none">
-        <text
-          x={pointX}
-          y={labelY}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fill="var(--color-surface)"
-          stroke="var(--color-surface)"
-          strokeWidth={compact ? 4 : 5}
-          fontSize={compact ? 11 : 13}
-          fontWeight={800}
-        >
-          {label}
-        </text>
-        <text
-          x={pointX}
-          y={labelY}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fill={color}
-          fontSize={compact ? 11 : 13}
-          fontWeight={800}
-        >
-          {label}
-        </text>
-      </g>
-    );
-  };
 }
 
 function SplitMetricChart({
@@ -481,10 +439,11 @@ function SplitMetricChart({
                 tick={DATE_TICK_PROPS}
                 axisLine={false}
                 tickLine={false}
+                tickMargin={12}
                 interval="preserveStartEnd"
                 minTickGap={18}
                 angle={-35}
-                height={58}
+                height={68}
                 textAnchor="end"
               />
               <YAxis yAxisId={primaryKey} hide allowDecimals={primaryMeta.kind !== "count"} domain={["auto", "auto"]} />
@@ -590,6 +549,7 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
       <div className="h-[160px]">
         <ResponsiveContainer>
           <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+            <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />
             <XAxis
               dataKey="label"
               tick={(props) => <CatalogChartXAxisTick {...props} rows={rows} metrics={skuMetrics} compact />}
@@ -686,16 +646,7 @@ function CatalogDrrChart({
                   activeDot={{ r: 4.5 }}
                   connectNulls
                   isAnimationActive={false}
-                >
-                  <LabelList
-                    dataKey={series.key}
-                    content={createDrrLineLabel({
-                      color: series.color,
-                      compact,
-                      offset: series.key === "drr_ads" ? -12 : 14,
-                    })}
-                  />
-                </Line>
+                />
               ))}
             </ComposedChart>
           </ResponsiveContainer>
@@ -778,10 +729,11 @@ function SplitCrfChart({
                 tick={DATE_TICK_PROPS}
                 axisLine={false}
                 tickLine={false}
+                tickMargin={12}
                 interval="preserveStartEnd"
                 minTickGap={18}
                 angle={-35}
-                height={58}
+                height={68}
                 textAnchor="end"
               />
               <YAxis yAxisId="crf" hide orientation="right" allowDecimals domain={["auto", "auto"]} />
@@ -873,7 +825,7 @@ export function CatalogSelectionChart({
   const activeSeries = CATALOG_SERIES.filter((series) => !hiddenSeries.includes(series.key));
   const chartRows = rows.map((row) => ({
     ...row,
-    label: row.day_label,
+    label: formatChartDateLabel(row.day_label || row.day),
   }));
   const skuAxisMetrics: CatalogChartAxisMetric[] = [
     {
@@ -985,10 +937,11 @@ export function CatalogSelectionChart({
                       tick={DATE_TICK_PROPS}
                       axisLine={false}
                       tickLine={false}
+                      tickMargin={12}
                       interval="preserveStartEnd"
                       minTickGap={18}
                       angle={-35}
-                      height={58}
+                      height={68}
                       textAnchor="end"
                     />
                     {CATALOG_SERIES.map((series, index) => (
@@ -1030,6 +983,7 @@ export function CatalogSelectionChart({
                 <div className="h-[118px]">
                   <ResponsiveContainer>
                     <ComposedChart data={chartRows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                      <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />
                       <XAxis
                         dataKey="label"
                         tick={(props) => <CatalogChartXAxisTick {...props} rows={chartRows} metrics={skuAxisMetrics} compact />}

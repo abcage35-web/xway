@@ -15,12 +15,10 @@ function useAnchoredPanel(open: boolean) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const viewportWidth = typeof window !== "undefined" ? window.visualViewport?.width ?? window.innerWidth : 0;
-  const maxPanelWidth = viewportWidth ? Math.max(260, Math.min(420, viewportWidth - 24)) : 420;
+  const panelLeft = anchorRect ? Math.max(12, anchorRect.left) : 0;
+  const availableRightWidth = viewportWidth ? Math.max(180, viewportWidth - panelLeft - 12) : 420;
+  const maxPanelWidth = Math.min(420, availableRightWidth);
   const panelWidth = anchorRect ? Math.min(Math.max(anchorRect.width, 280), maxPanelWidth) : 280;
-  const panelLeft =
-    anchorRect && viewportWidth
-      ? Math.max(12, Math.min(anchorRect.left, viewportWidth - panelWidth - 12))
-      : anchorRect?.left ?? 0;
 
   useEffect(() => {
     if (!open) {

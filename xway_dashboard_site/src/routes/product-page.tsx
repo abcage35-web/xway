@@ -3891,7 +3891,7 @@ function CampaignBudgetProgressCard({
   const percent = currentValue !== null && totalValue !== null && totalValue > 0 ? (currentValue / totalValue) * 100 : null;
   const fillWidth = percent === null ? 0 : Math.max(currentValue && currentValue > 0 ? 6 : 0, Math.min(percent, 100));
   const shouldShowDashPercent = disabled && showDashPercentWhenDisabled;
-  const percentText = shouldShowDashPercent ? "—" : percent !== null ? `${Math.round(percent)}%` : null;
+  const percentText = shouldShowDashPercent ? "—" : percent !== null ? `${Math.round(percent)}%` : "—";
   const currentText = formatMoney(currentValue, true);
   const shouldShowDashTotal = disabled && showDashTotalWhenDisabled;
   const totalText = !shouldShowDashTotal && totalValue !== null ? formatMoney(totalValue, true) : "—";
@@ -5039,8 +5039,8 @@ function CampaignOverviewCard({
   );
   const isBudgetRuleEnabled = Boolean(budgetRule?.active);
   const isSpendLimitEnabled = Boolean(spendLimit?.active);
-  const limitCardCurrent = isSpendLimitEnabled ? limitSpent ?? campaignSpendToday : campaignSpendToday;
-  const limitCardTotal = isSpendLimitEnabled ? limitTotal : isBudgetRuleEnabled ? budgetLimit : limitTotal;
+  const limitCardCurrent = limitSpent ?? campaignSpendToday;
+  const limitCardTotal = limitTotal ?? budgetLimit;
   const limitCardPercent =
     limitCardCurrent !== null && limitCardTotal !== null && limitCardTotal > 0 ? (limitCardCurrent / limitCardTotal) * 100 : null;
   const budgetPercent = budgetSpentToday !== null && budgetLimit !== null && budgetLimit > 0 ? (budgetSpentToday / budgetLimit) * 100 : null;

@@ -1246,7 +1246,7 @@ export function ProductListCard({
         active && "border-brand-300/40 bg-brand-100/80",
       )}
     >
-      <div className="h-16 aspect-[51/68] shrink-0 overflow-hidden rounded-2xl bg-[var(--color-surface-strong)]">
+      <div className="h-16 aspect-[51/68] shrink-0 overflow-hidden rounded-[4px] bg-[var(--color-surface-strong)]">
         {imageUrl ? (
           <img src={imageUrl} alt={title} className="h-full w-full object-cover" />
         ) : (

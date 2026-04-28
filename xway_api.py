@@ -2046,6 +2046,14 @@ def _catalog_number_or_none(value: Any) -> Optional[float]:
     return numeric if math.isfinite(numeric) else None
 
 
+def _catalog_first_number(*values: Any) -> Optional[float]:
+    for value in values:
+        numeric = _catalog_number_or_none(value)
+        if numeric is not None:
+            return numeric
+    return None
+
+
 def _normalize_catalog_spend_limit_period(period: Any) -> str:
     value = str(period or "").lower()
     if "day" in value or "дн" in value:
@@ -2097,16 +2105,63 @@ def _collect_catalog_campaign_rows_from_source(source: Any) -> List[Dict[str, An
 
 
 def _unique_catalog_campaign_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    result: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
+    order: List[str] = []
+    by_key: Dict[str, Dict[str, Any]] = {}
+
+    def merge_dict(left: Any, right: Any) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        if isinstance(left, dict):
+            merged.update(left)
+        if isinstance(right, dict):
+            merged.update(right)
+        return merged
+
+    def merge_row(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(left or {})
+        for field, value in (right or {}).items():
+            if value not in (None, ""):
+                merged[field] = value
+        for field in ("limits_by_period", "spend", "budget_rule", "budget_rule_config"):
+            merged[field] = merge_dict((left or {}).get(field), (right or {}).get(field))
+        left_limits = (left or {}).get("spend_limits")
+        right_limits = (right or {}).get("spend_limits")
+        if isinstance(left_limits, list) or isinstance(right_limits, list):
+            seen_limits: Set[str] = set()
+            merged_limits: List[Dict[str, Any]] = []
+            for limit_index, limit_item in enumerate(
+                [
+                    *(left_limits if isinstance(left_limits, list) else []),
+                    *(right_limits if isinstance(right_limits, list) else []),
+                ]
+            ):
+                if not isinstance(limit_item, dict):
+                    continue
+                limit_key = json.dumps(
+                    [
+                        limit_item.get("period") or limit_item.get("limit_period") or limit_index,
+                        limit_item.get("limit") or limit_item.get("limit_sum") or limit_item.get("value"),
+                        limit_item.get("spent") or limit_item.get("spent_today") or limit_item.get("current") or limit_item.get("used"),
+                        limit_item.get("active"),
+                    ],
+                    sort_keys=True,
+                    default=str,
+                )
+                if limit_key in seen_limits:
+                    continue
+                seen_limits.add(limit_key)
+                merged_limits.append(limit_item)
+            merged["spend_limits"] = merged_limits
+        return merged
+
     for index, row in enumerate(rows):
         key_value = row.get("id") or row.get("campaign_id") or row.get("external_id") or row.get("wb_id") or f"idx-{index}"
         key = str(key_value)
-        if key in seen:
+        if key not in by_key:
+            order.append(key)
+            by_key[key] = row
             continue
-        seen.add(key)
-        result.append(row)
-    return result
+        by_key[key] = merge_row(by_key[key], row)
+    return [by_key[key] for key in order]
 
 
 def _catalog_campaign_rows_for_key(payload: Dict[str, Any], key: str, extra_sources: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
@@ -2135,21 +2190,27 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
     items: List[Dict[str, Any]] = []
     raw_spend = source.get("spend") or {}
 
+    def read_spend_value(value: Any) -> Optional[float]:
+        if isinstance(value, dict):
+            return _catalog_first_number(
+                value.get("spent"),
+                value.get("spent_today"),
+                value.get("current"),
+                value.get("used"),
+                value.get("value"),
+                value.get("sum"),
+                value.get("amount"),
+            )
+        return _catalog_first_number(value)
+
     def read_period_spend(period: Any) -> Optional[float]:
         if not isinstance(raw_spend, dict):
             return None
         period_text = str(period or "")
         for key in (period, period_text.upper(), period_text.lower()):
-            value = _catalog_number_or_none(raw_spend.get(key))
+            value = read_spend_value(raw_spend.get(key))
             if value is not None:
                 return value
-        return None
-
-    def first_number(*values: Any) -> Optional[float]:
-        for value in values:
-            numeric = _catalog_number_or_none(value)
-            if numeric is not None:
-                return numeric
         return None
 
     limits_by_period = source.get("limits_by_period") or {}
@@ -2160,7 +2221,16 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
                     {
                         "period": period,
                         "active": bool(config.get("active")),
-                        "limit": _catalog_number_or_none(config.get("limit")),
+                        "limit": _catalog_first_number(
+                            config.get("limit"),
+                            config.get("limit_sum"),
+                            config.get("limitSum"),
+                            config.get("value"),
+                            config.get("sum"),
+                            config.get("amount"),
+                            config.get("max"),
+                            config.get("max_sum"),
+                        ),
                         "spent": read_period_spend(period),
                     }
                 )
@@ -2174,17 +2244,37 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
                     {
                         "period": item.get("period") or item.get("limit_period"),
                         "active": bool(item.get("active")),
-                        "limit": _catalog_number_or_none(item.get("limit")),
-                        "spent": first_number(
+                        "limit": _catalog_first_number(
+                            item.get("limit"),
+                            item.get("limit_sum"),
+                            item.get("limitSum"),
+                            item.get("value"),
+                            item.get("sum"),
+                            item.get("amount"),
+                            item.get("max"),
+                            item.get("max_sum"),
+                        ),
+                        "spent": _catalog_first_number(
                             item.get("spent"),
                             item.get("spent_today"),
                             item.get("current"),
                             item.get("used"),
+                            item.get("value_spent"),
+                            item.get("spent_sum"),
+                            item.get("amount_spent"),
                             read_period_spend(item.get("period") or item.get("limit_period")),
                         ),
                     }
                 )
-    direct_limit = first_number(source.get("spend_limit"), source.get("day_limit"), source.get("daily_limit"), source.get("limit"))
+    direct_limit = _catalog_first_number(
+        source.get("spend_limit"),
+        source.get("day_limit"),
+        source.get("daily_limit"),
+        source.get("limit"),
+        source.get("limit_sum"),
+        source.get("spend_limit_sum"),
+        source.get("daily_limit_sum"),
+    )
     if direct_limit is not None or source.get("spend_limit_active"):
         direct_period = source.get("spend_limit_period") or source.get("limit_period") or "day"
         items.append(
@@ -2192,11 +2282,13 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
                 "period": direct_period,
                 "active": bool(source.get("spend_limit_active") if "spend_limit_active" in source else source.get("active")),
                 "limit": direct_limit,
-                "spent": first_number(
+                "spent": _catalog_first_number(
                     source.get("spend_limit_spent"),
                     source.get("spend_limit_spent_today"),
                     source.get("day_limit_spent"),
                     source.get("daily_limit_spent"),
+                    source.get("spent_today"),
+                    source.get("spent_day"),
                     read_period_spend(direct_period),
                 ),
             }
@@ -2227,15 +2319,19 @@ def _read_catalog_campaign_spend_today(source: Dict[str, Any]) -> Optional[float
 
 
 def _read_catalog_budget_spent_today(source: Dict[str, Any], budget_rule: Dict[str, Any]) -> Optional[float]:
-    for key in ("spent", "spent_today", "current", "used"):
-        value = _catalog_number_or_none(budget_rule.get(key))
-        if value is not None:
-            return value
-    for key in ("budget_spent_today", "budget_spent"):
-        value = _catalog_number_or_none(source.get(key))
-        if value is not None:
-            return value
-    return None
+    return _catalog_first_number(
+        budget_rule.get("spent"),
+        budget_rule.get("spent_today"),
+        budget_rule.get("current"),
+        budget_rule.get("used"),
+        budget_rule.get("value"),
+        budget_rule.get("sum"),
+        budget_rule.get("amount"),
+        source.get("budget_spent_today"),
+        source.get("budget_spent"),
+        source.get("budget_used"),
+        source.get("budget_current"),
+    )
 
 
 def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2253,7 +2349,17 @@ def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Di
         budget_rule = source.get("budget_rule_config") or source.get("budget_rule") or {}
         if not isinstance(budget_rule, dict):
             budget_rule = {}
-        budget_limit = _catalog_number_or_none(budget_rule.get("limit") or source.get("budget_limit") or source.get("budget_rule_limit"))
+        budget_limit = _catalog_first_number(
+            budget_rule.get("limit"),
+            budget_rule.get("limit_sum"),
+            budget_rule.get("limitSum"),
+            budget_rule.get("max"),
+            budget_rule.get("max_sum"),
+            budget_rule.get("value"),
+            source.get("budget_limit"),
+            source.get("budget_rule_limit"),
+            source.get("budget_limit_sum"),
+        )
         spend_limit = _resolve_catalog_spend_limit_config(source)
         spend_today = _read_catalog_campaign_spend_today(source)
         budget_spent_today = _read_catalog_budget_spent_today(source, budget_rule)
@@ -3154,8 +3260,13 @@ def _create_catalog_chart_row(day: str) -> Dict[str, Any]:
         "clicks": 0.0,
         "atbs": 0.0,
         "orders": 0.0,
+        "ordered_total": 0.0,
+        "avg_stock": 0.0,
         "expense_sum": 0.0,
         "sum_price": 0.0,
+        "rel_sum_price": 0.0,
+        "rel_shks": 0.0,
+        "rel_atbs": 0.0,
         "ordered_sum_total": 0.0,
         "spent_sku_count": 0,
     }
@@ -3166,8 +3277,13 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
     clicks = _catalog_chart_number(row.get("clicks"))
     atbs = _catalog_chart_number(row.get("atbs"))
     orders = _catalog_chart_number(row.get("orders"))
+    ordered_total = _catalog_chart_number(row.get("ordered_total"))
+    avg_stock = _catalog_chart_number(row.get("avg_stock"))
     expense_sum = _catalog_chart_number(row.get("expense_sum"))
     sum_price = _catalog_chart_number(row.get("sum_price"))
+    rel_sum_price = _catalog_chart_number(row.get("rel_sum_price"))
+    rel_shks = _catalog_chart_number(row.get("rel_shks"))
+    rel_atbs = _catalog_chart_number(row.get("rel_atbs"))
     ordered_sum_total = _catalog_chart_number(row.get("ordered_sum_total"))
     spent_sku_count = int(row.get("spent_sku_count") or 0)
     return {
@@ -3176,14 +3292,20 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "clicks": clicks,
         "atbs": atbs,
         "orders": orders,
+        "ordered_total": ordered_total,
+        "avg_stock": avg_stock,
         "expense_sum": expense_sum,
         "sum_price": sum_price,
+        "rel_sum_price": rel_sum_price,
+        "rel_shks": rel_shks,
+        "rel_atbs": rel_atbs,
         "ordered_sum_total": ordered_sum_total,
         "spent_sku_count": spent_sku_count,
         "ctr": _catalog_chart_rate(clicks, views),
         "cr1": _catalog_chart_rate(atbs, clicks),
         "cr2": _catalog_chart_rate(orders, atbs),
         "crf": _catalog_chart_rate(orders, clicks),
+        "cr_total": _catalog_chart_rate(ordered_total, views),
         "drr_total": _catalog_chart_rate(expense_sum, ordered_sum_total),
         "drr_ads": _catalog_chart_rate(expense_sum, sum_price),
     }
@@ -3195,8 +3317,13 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "clicks": 0.0,
         "atbs": 0.0,
         "orders": 0.0,
+        "ordered_total": 0.0,
+        "avg_stock": 0.0,
         "expense_sum": 0.0,
         "sum_price": 0.0,
+        "rel_sum_price": 0.0,
+        "rel_shks": 0.0,
+        "rel_atbs": 0.0,
         "ordered_sum_total": 0.0,
     }
     for row in rows:
@@ -3204,8 +3331,13 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         totals["clicks"] += _catalog_chart_number(row.get("clicks"))
         totals["atbs"] += _catalog_chart_number(row.get("atbs"))
         totals["orders"] += _catalog_chart_number(row.get("orders"))
+        totals["ordered_total"] += _catalog_chart_number(row.get("ordered_total"))
+        totals["avg_stock"] += _catalog_chart_number(row.get("avg_stock"))
         totals["expense_sum"] += _catalog_chart_number(row.get("expense_sum"))
         totals["sum_price"] += _catalog_chart_number(row.get("sum_price"))
+        totals["rel_sum_price"] += _catalog_chart_number(row.get("rel_sum_price"))
+        totals["rel_shks"] += _catalog_chart_number(row.get("rel_shks"))
+        totals["rel_atbs"] += _catalog_chart_number(row.get("rel_atbs"))
         totals["ordered_sum_total"] += _catalog_chart_number(row.get("ordered_sum_total"))
     return {
         **totals,
@@ -3213,6 +3345,7 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "cr1": _catalog_chart_rate(totals["atbs"], totals["clicks"]),
         "cr2": _catalog_chart_rate(totals["orders"], totals["atbs"]),
         "crf": _catalog_chart_rate(totals["orders"], totals["clicks"]),
+        "cr_total": _catalog_chart_rate(totals["ordered_total"], totals["views"]),
         "drr_total": _catalog_chart_rate(totals["expense_sum"], totals["ordered_sum_total"]),
         "drr_ads": _catalog_chart_rate(totals["expense_sum"], totals["sum_price"]),
     }
@@ -3782,20 +3915,35 @@ def collect_catalog_chart(
                     continue
                 expense_sum = _catalog_chart_number(product_row.get("expense_sum"))
                 sum_price = _catalog_chart_number(product_row.get("sum_price"))
+                rel_sum_price = _catalog_chart_number(product_row.get("rel_sum_price"))
+                rel_shks = _catalog_chart_number(product_row.get("rel_shks"))
+                rel_atbs = _catalog_chart_number(product_row.get("rel_atbs"))
                 ordered_sum_total = _catalog_chart_number(product_row.get("ordered_sum_total"))
+                ordered_total = _catalog_chart_number(product_row.get("ordered_total"))
+                avg_stock = _catalog_chart_number(product_row.get("avg_stock"))
                 target["views"] += _catalog_chart_number(product_row.get("views"))
                 target["clicks"] += _catalog_chart_number(product_row.get("clicks"))
                 target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
                 target["orders"] += _catalog_chart_number(product_row.get("orders"))
+                target["ordered_total"] += ordered_total
+                target["avg_stock"] += avg_stock
                 target["expense_sum"] += expense_sum
                 target["sum_price"] += sum_price
+                target["rel_sum_price"] += rel_sum_price
+                target["rel_shks"] += rel_shks
+                target["rel_atbs"] += rel_atbs
                 target["ordered_sum_total"] += ordered_sum_total
                 product_target["views"] += _catalog_chart_number(product_row.get("views"))
                 product_target["clicks"] += _catalog_chart_number(product_row.get("clicks"))
                 product_target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
                 product_target["orders"] += _catalog_chart_number(product_row.get("orders"))
+                product_target["ordered_total"] += ordered_total
+                product_target["avg_stock"] += avg_stock
                 product_target["expense_sum"] += expense_sum
                 product_target["sum_price"] += sum_price
+                product_target["rel_sum_price"] += rel_sum_price
+                product_target["rel_shks"] += rel_shks
+                product_target["rel_atbs"] += rel_atbs
                 product_target["ordered_sum_total"] += ordered_sum_total
                 if expense_sum > 0:
                     target["spent_sku_count"] += 1

@@ -125,6 +125,16 @@ function numberOrNull(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function firstNumber(...values) {
+  for (const value of values) {
+    const numeric = numberOrNull(value);
+    if (numeric !== null) {
+      return numeric;
+    }
+  }
+  return null;
+}
+
 function normalizeSpendLimitPeriod(period) {
   const value = String(period || "").toLowerCase();
   if (value.includes("day") || value.includes("дн")) {
@@ -194,17 +204,63 @@ function collectCampaignRowsFromSource(source) {
   return rows;
 }
 
-function uniqueCampaignRows(rows) {
+function mergePlainObjects(left, right) {
+  return {
+    ...(left && typeof left === "object" && !Array.isArray(left) ? left : {}),
+    ...(right && typeof right === "object" && !Array.isArray(right) ? right : {}),
+  };
+}
+
+function mergeSpendLimitArrays(left, right) {
   const seen = new Set();
-  return rows.filter((row, index) => {
-    const key = row?.id ?? row?.campaign_id ?? row?.external_id ?? row?.wb_id ?? `idx-${index}`;
-    const normalized = String(key);
-    if (seen.has(normalized)) {
+  return [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])].filter((item, index) => {
+    if (!item || typeof item !== "object") {
       return false;
     }
-    seen.add(normalized);
+    const key = JSON.stringify([
+      item.period ?? item.limit_period ?? index,
+      item.limit ?? item.limit_sum ?? item.value ?? null,
+      item.spent ?? item.spent_today ?? item.current ?? item.used ?? null,
+      item.active ?? null,
+    ]);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
     return true;
   });
+}
+
+function mergeCampaignRow(left, right) {
+  const merged = { ...left };
+  for (const [key, value] of Object.entries(right || {})) {
+    if (value !== null && value !== undefined && value !== "") {
+      merged[key] = value;
+    }
+  }
+  for (const key of ["limits_by_period", "spend", "budget_rule", "budget_rule_config"]) {
+    merged[key] = mergePlainObjects(left?.[key], right?.[key]);
+  }
+  if (Array.isArray(left?.spend_limits) || Array.isArray(right?.spend_limits)) {
+    merged.spend_limits = mergeSpendLimitArrays(left?.spend_limits, right?.spend_limits);
+  }
+  return merged;
+}
+
+function uniqueCampaignRows(rows) {
+  const order = [];
+  const byKey = new Map();
+  rows.forEach((row, index) => {
+    const key = row?.id ?? row?.campaign_id ?? row?.external_id ?? row?.wb_id ?? `idx-${index}`;
+    const normalized = String(key);
+    if (!byKey.has(normalized)) {
+      order.push(normalized);
+      byKey.set(normalized, row);
+      return;
+    }
+    byKey.set(normalized, mergeCampaignRow(byKey.get(normalized), row));
+  });
+  return order.map((key) => byKey.get(key));
 }
 
 function catalogCampaignRowsForKey(payload, key, extraSources = []) {
@@ -225,15 +281,17 @@ function catalogCampaignRowsForKey(payload, key, extraSources = []) {
 function resolveSpendLimitConfig(source) {
   const limitsByPeriod = source?.limits_by_period || {};
   const spendByPeriod = source?.spend || {};
+  const readSpendValue = (value) =>
+    firstNumber(value, value?.spent, value?.spent_today, value?.current, value?.used, value?.value, value?.sum, value?.amount);
   const readPeriodSpend = (period) =>
-    numberOrNull(spendByPeriod?.[period]) ??
-    numberOrNull(spendByPeriod?.[String(period || "").toUpperCase()]) ??
-    numberOrNull(spendByPeriod?.[String(period || "").toLowerCase()]) ??
+    readSpendValue(spendByPeriod?.[period]) ??
+    readSpendValue(spendByPeriod?.[String(period || "").toUpperCase()]) ??
+    readSpendValue(spendByPeriod?.[String(period || "").toLowerCase()]) ??
     null;
   const periodItems = Object.entries(limitsByPeriod).map(([period, config]) => ({
     period,
     active: Boolean(config?.active),
-    limit: numberOrNull(config?.limit),
+    limit: firstNumber(config?.limit, config?.limit_sum, config?.limitSum, config?.value, config?.sum, config?.amount, config?.max, config?.max_sum),
     spent: readPeriodSpend(period),
   }));
   const rawSpendLimits = Array.isArray(source?.spend_limits)
@@ -244,15 +302,12 @@ function resolveSpendLimitConfig(source) {
   const spendLimitItems = rawSpendLimits.map((item) => ({
     period: item?.period ?? item?.limit_period,
     active: Boolean(item?.active),
-    limit: numberOrNull(item?.limit),
+    limit: firstNumber(item?.limit, item?.limit_sum, item?.limitSum, item?.value, item?.sum, item?.amount, item?.max, item?.max_sum),
     spent:
-      numberOrNull(item?.spent) ??
-      numberOrNull(item?.spent_today) ??
-      numberOrNull(item?.current) ??
-      numberOrNull(item?.used) ??
+      firstNumber(item?.spent, item?.spent_today, item?.current, item?.used, item?.value_spent, item?.spent_sum, item?.amount_spent) ??
       readPeriodSpend(item?.period ?? item?.limit_period),
   }));
-  const directLimit = numberOrNull(source?.spend_limit ?? source?.day_limit ?? source?.daily_limit ?? source?.limit);
+  const directLimit = firstNumber(source?.spend_limit, source?.day_limit, source?.daily_limit, source?.limit, source?.limit_sum, source?.spend_limit_sum, source?.daily_limit_sum);
   const directLimitItem =
     directLimit !== null || source?.spend_limit_active
       ? {
@@ -260,10 +315,7 @@ function resolveSpendLimitConfig(source) {
           active: Boolean(source?.spend_limit_active ?? source?.active),
           limit: directLimit,
           spent:
-            numberOrNull(source?.spend_limit_spent) ??
-            numberOrNull(source?.spend_limit_spent_today) ??
-            numberOrNull(source?.day_limit_spent) ??
-            numberOrNull(source?.daily_limit_spent) ??
+            firstNumber(source?.spend_limit_spent, source?.spend_limit_spent_today, source?.day_limit_spent, source?.daily_limit_spent, source?.spent_today, source?.spent_day) ??
             readPeriodSpend(source?.spend_limit_period ?? source?.limit_period ?? "day"),
         }
       : null;
@@ -295,12 +347,8 @@ function readCampaignSpendToday(source) {
 
 function readBudgetSpentToday(source, budgetRule) {
   return (
-    numberOrNull(budgetRule?.spent) ??
-    numberOrNull(budgetRule?.spent_today) ??
-    numberOrNull(budgetRule?.current) ??
-    numberOrNull(budgetRule?.used) ??
-    numberOrNull(source?.budget_spent_today) ??
-    numberOrNull(source?.budget_spent) ??
+    firstNumber(budgetRule?.spent, budgetRule?.spent_today, budgetRule?.current, budgetRule?.used, budgetRule?.value, budgetRule?.sum, budgetRule?.amount) ??
+    firstNumber(source?.budget_spent_today, source?.budget_spent, source?.budget_used, source?.budget_current) ??
     null
   );
 }
@@ -319,7 +367,17 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
 
   for (const source of sources) {
     const budgetRule = source.budget_rule_config || source.budget_rule || {};
-    const budgetLimit = numberOrNull(budgetRule.limit ?? source.budget_limit ?? source.budget_rule_limit);
+    const budgetLimit = firstNumber(
+      budgetRule.limit,
+      budgetRule.limit_sum,
+      budgetRule.limitSum,
+      budgetRule.max,
+      budgetRule.max_sum,
+      budgetRule.value,
+      source.budget_limit,
+      source.budget_rule_limit,
+      source.budget_limit_sum,
+    );
     const spendLimit = resolveSpendLimitConfig(source);
     const spendToday = numberOrNull(spendLimit?.spent) ?? readCampaignSpendToday(source);
     const budgetSpentToday = readBudgetSpentToday(source, budgetRule);
@@ -615,8 +673,13 @@ function createEmptyCatalogChartRow(day) {
     clicks: 0,
     atbs: 0,
     orders: 0,
+    ordered_total: 0,
+    avg_stock: 0,
     expense_sum: 0,
     sum_price: 0,
+    rel_sum_price: 0,
+    rel_shks: 0,
+    rel_atbs: 0,
     ordered_sum_total: 0,
     spent_sku_count: 0,
   };
@@ -627,8 +690,13 @@ function finalizeCatalogChartRow(row) {
   const clicks = asFloat(row.clicks);
   const atbs = asFloat(row.atbs);
   const orders = asFloat(row.orders);
+  const orderedTotal = asFloat(row.ordered_total);
+  const avgStock = asFloat(row.avg_stock);
   const expenseSum = asFloat(row.expense_sum);
   const sumPrice = asFloat(row.sum_price);
+  const relSumPrice = asFloat(row.rel_sum_price);
+  const relShks = asFloat(row.rel_shks);
+  const relAtbs = asFloat(row.rel_atbs);
   const orderedSumTotal = asFloat(row.ordered_sum_total);
   const spentSkuCount = Number.parseInt(String(row.spent_sku_count || 0), 10) || 0;
   return {
@@ -637,14 +705,20 @@ function finalizeCatalogChartRow(row) {
     clicks,
     atbs,
     orders,
+    ordered_total: orderedTotal,
+    avg_stock: avgStock,
     expense_sum: expenseSum,
     sum_price: sumPrice,
+    rel_sum_price: relSumPrice,
+    rel_shks: relShks,
+    rel_atbs: relAtbs,
     ordered_sum_total: orderedSumTotal,
     spent_sku_count: spentSkuCount,
     ctr: catalogChartRate(clicks, views),
     cr1: catalogChartRate(atbs, clicks),
     cr2: catalogChartRate(orders, atbs),
     crf: catalogChartRate(orders, clicks),
+    cr_total: catalogChartRate(orderedTotal, views),
     drr_total: catalogChartRate(expenseSum, orderedSumTotal),
     drr_ads: catalogChartRate(expenseSum, sumPrice),
   };
@@ -656,8 +730,13 @@ function buildCatalogChartTotals(rows) {
     clicks: 0,
     atbs: 0,
     orders: 0,
+    ordered_total: 0,
+    avg_stock: 0,
     expense_sum: 0,
     sum_price: 0,
+    rel_sum_price: 0,
+    rel_shks: 0,
+    rel_atbs: 0,
     ordered_sum_total: 0,
   };
   for (const row of rows) {
@@ -665,8 +744,13 @@ function buildCatalogChartTotals(rows) {
     totals.clicks += asFloat(row.clicks);
     totals.atbs += asFloat(row.atbs);
     totals.orders += asFloat(row.orders);
+    totals.ordered_total += asFloat(row.ordered_total);
+    totals.avg_stock += asFloat(row.avg_stock);
     totals.expense_sum += asFloat(row.expense_sum);
     totals.sum_price += asFloat(row.sum_price);
+    totals.rel_sum_price += asFloat(row.rel_sum_price);
+    totals.rel_shks += asFloat(row.rel_shks);
+    totals.rel_atbs += asFloat(row.rel_atbs);
     totals.ordered_sum_total += asFloat(row.ordered_sum_total);
   }
   return {
@@ -675,6 +759,7 @@ function buildCatalogChartTotals(rows) {
     cr1: catalogChartRate(totals.atbs, totals.clicks),
     cr2: catalogChartRate(totals.orders, totals.atbs),
     crf: catalogChartRate(totals.orders, totals.clicks),
+    cr_total: catalogChartRate(totals.ordered_total, totals.views),
     drr_total: catalogChartRate(totals.expense_sum, totals.ordered_sum_total),
     drr_ads: catalogChartRate(totals.expense_sum, totals.sum_price),
   };
@@ -702,20 +787,35 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
         }
         const expenseSum = asFloat(row.expense_sum);
         const sumPrice = asFloat(row.sum_price);
+        const relSumPrice = asFloat(row.rel_sum_price);
+        const relShks = asFloat(row.rel_shks);
+        const relAtbs = asFloat(row.rel_atbs);
         const orderedSumTotal = asFloat(row.ordered_sum_total);
+        const orderedTotal = asFloat(row.ordered_total);
+        const avgStock = asFloat(row.avg_stock);
         target.views += asFloat(row.views);
         target.clicks += asFloat(row.clicks);
         target.atbs += asFloat(row.atbs);
         target.orders += asFloat(row.orders);
+        target.ordered_total += orderedTotal;
+        target.avg_stock += avgStock;
         target.expense_sum += expenseSum;
         target.sum_price += sumPrice;
+        target.rel_sum_price += relSumPrice;
+        target.rel_shks += relShks;
+        target.rel_atbs += relAtbs;
         target.ordered_sum_total += orderedSumTotal;
         productTarget.views += asFloat(row.views);
         productTarget.clicks += asFloat(row.clicks);
         productTarget.atbs += asFloat(row.atbs);
         productTarget.orders += asFloat(row.orders);
+        productTarget.ordered_total += orderedTotal;
+        productTarget.avg_stock += avgStock;
         productTarget.expense_sum += expenseSum;
         productTarget.sum_price += sumPrice;
+        productTarget.rel_sum_price += relSumPrice;
+        productTarget.rel_shks += relShks;
+        productTarget.rel_atbs += relAtbs;
         productTarget.ordered_sum_total += orderedSumTotal;
         if (expenseSum > 0) {
           target.spent_sku_count += 1;

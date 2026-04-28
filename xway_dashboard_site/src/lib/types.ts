@@ -560,14 +560,20 @@ export interface CatalogChartRow {
   clicks: number;
   atbs: number;
   orders: number;
+  ordered_total: number;
+  avg_stock: number;
   expense_sum: number;
   sum_price: number;
+  rel_sum_price: number;
+  rel_shks: number;
+  rel_atbs: number;
   ordered_sum_total: number;
   spent_sku_count: number;
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
   crf: number | null;
+  cr_total: number | null;
   drr_total: number | null;
   drr_ads: number | null;
 }
@@ -577,13 +583,19 @@ export interface CatalogChartTotals {
   clicks: number;
   atbs: number;
   orders: number;
+  ordered_total: number;
+  avg_stock: number;
   expense_sum: number;
   sum_price: number;
+  rel_sum_price: number;
+  rel_shks: number;
+  rel_atbs: number;
   ordered_sum_total: number;
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
   crf: number | null;
+  cr_total: number | null;
   drr_total: number | null;
   drr_ads: number | null;
 }

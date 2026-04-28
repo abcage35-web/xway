@@ -6,6 +6,15 @@ import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api"
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
+import { CatalogArticleAnalyticsPanel, formatCatalogShortDate, type CatalogArticleAnalyticsState } from "../features/catalog/article-analytics-panel";
+import {
+  aggregateCatalogChartResponse,
+  mergeCatalogChartResponses,
+  mergeCatalogChartRetryResponse,
+  resolveCachedCatalogChartResponse,
+  type CatalogChartCacheEntry,
+  type CatalogChartProgressState,
+} from "../features/catalog/chart-service";
 import { CatalogSelectionChart } from "../components/catalog-selection-chart";
 import { SearchableMultiSelect, SearchableSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
 import { MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
@@ -233,6 +242,35 @@ type CatalogSortField =
   | "categoryAvgCr";
 
 type CatalogSortDirection = "asc" | "desc";
+type CatalogSortValue = `${CatalogSortField}:${CatalogSortDirection}`;
+
+const CATALOG_SORT_FIELD_OPTIONS: Array<{ value: CatalogSortField; label: string }> = [
+  { value: "stock", label: "Остаток" },
+  { value: "turnover", label: "Оборачиваемость" },
+  { value: "campaigns", label: "Кол-во РК" },
+  { value: "spend", label: "Расход" },
+  { value: "views", label: "Показы" },
+  { value: "clicks", label: "Клики" },
+  { value: "orders", label: "Заказы" },
+  { value: "ctr", label: "CTR" },
+  { value: "cr", label: "CR" },
+  { value: "drr", label: "ДРР" },
+  { value: "categoryAvgCr", label: "Ср. CR категории" },
+  { value: "article", label: "Артикул" },
+  { value: "name", label: "Название" },
+];
+
+const CATALOG_SORT_DIRECTION_OPTIONS: Array<{ value: CatalogSortDirection; label: string }> = [
+  { value: "desc", label: "по убыванию" },
+  { value: "asc", label: "по возрастанию" },
+];
+
+const CATALOG_SORT_OPTIONS: Array<{ value: CatalogSortValue; label: string }> = CATALOG_SORT_FIELD_OPTIONS.flatMap((field) =>
+  CATALOG_SORT_DIRECTION_OPTIONS.map((direction) => ({
+    value: `${field.value}:${direction.value}` as CatalogSortValue,
+    label: `${field.label}: ${direction.label}`,
+  })),
+);
 
 interface CatalogIssueCacheEntry {
   product_ref: string;
@@ -250,28 +288,6 @@ interface CatalogIssueCachePayload {
   day: string;
   rowsByRef: Record<string, CatalogIssueCacheEntry>;
   updatedAt: string;
-}
-
-interface CatalogChartProgressState {
-  cacheKey: string;
-  selectionCount: number;
-  loadedProductsCount: number;
-  chunkCount: number;
-  loadedChunkCount: number;
-  errorCount: number;
-}
-
-interface CatalogChartCacheEntry {
-  response: CatalogChartResponse;
-  productRefsKey: string;
-  rangeStart: string;
-  rangeEnd: string;
-}
-
-interface CatalogArticleAnalyticsState {
-  loading: boolean;
-  error: string | null;
-  rows: CatalogChartResponse["rows"] | null;
 }
 
 function CatalogCampaignColumnsHeader() {
@@ -361,7 +377,7 @@ function buildCatalogCampaignLimitRow(
 
   const current = currents.reduce((sum, value) => sum + value, 0);
   const total = totals.length ? totals.reduce((sum, value) => sum + value, 0) : null;
-  const percent = total !== null && total > 0 ? Math.max(0, Math.min((current / total) * 100, 100)) : current > 0 ? 100 : null;
+  const percent = total !== null && total > 0 ? Math.max(0, Math.min((current / total) * 100, 100)) : null;
 
   return {
     key,
@@ -375,11 +391,11 @@ function buildCatalogCampaignLimitRow(
 
 function buildCatalogCampaignLimitRows(states: CatalogCampaignState[]): CatalogCampaignLimitRow[] {
   const budgetRow = buildCatalogCampaignLimitRow("budget", "Бюджет", states);
-  const spendRow = buildCatalogCampaignLimitRow("spend", "День", states);
+  const spendRow = buildCatalogCampaignLimitRow("spend", "Расход", states);
 
   return [
     budgetRow ?? { key: "budget", label: "Бюджет", current: 0, total: null, active: false, percent: null },
-    spendRow ?? { key: "spend", label: "День", current: 0, total: null, active: false, percent: null },
+    spendRow ?? { key: "spend", label: "Расход", current: 0, total: null, active: false, percent: null },
   ];
 }
 
@@ -407,7 +423,7 @@ function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] })
               <span />
             </span>
             <strong className="catalog-campaign-limit-value">
-              {hasData ? (row.total !== null ? `${Math.round(row.percent ?? 0)}%` : formatMoney(row.current, true)) : "н/д"}
+              {hasData ? (row.total !== null ? `${Math.round(row.percent ?? 0)}%` : "—") : "—"}
             </strong>
           </div>
         );
@@ -1533,294 +1549,6 @@ function catalogChartRate(numerator: number, denominator: number) {
   return denominator > 0 ? (numerator / denominator) * 100 : null;
 }
 
-function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
-  const views = toNumber(row.views) ?? 0;
-  const clicks = toNumber(row.clicks) ?? 0;
-  const atbs = toNumber(row.atbs) ?? 0;
-  const orders = toNumber(row.orders) ?? 0;
-  const expenseSum = toNumber(row.expense_sum) ?? 0;
-  const sumPrice = toNumber(row.sum_price) ?? 0;
-  const orderedSumTotal = toNumber(row.ordered_sum_total) ?? 0;
-  const spentSkuCount = toNumber(row.spent_sku_count) ?? 0;
-
-  return {
-    ...row,
-    views,
-    clicks,
-    atbs,
-    orders,
-    expense_sum: expenseSum,
-    sum_price: sumPrice,
-    ordered_sum_total: orderedSumTotal,
-    spent_sku_count: spentSkuCount,
-    ctr: catalogChartRate(clicks, views),
-    cr1: catalogChartRate(atbs, clicks),
-    cr2: catalogChartRate(orders, atbs),
-    crf: catalogChartRate(orders, clicks),
-    drr_total: catalogChartRate(expenseSum, orderedSumTotal),
-    drr_ads: catalogChartRate(expenseSum, sumPrice),
-  };
-}
-
-function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogChartResponse["totals"] {
-  const totals = rows.reduce(
-    (accumulator, row) => {
-      accumulator.views += toNumber(row.views) ?? 0;
-      accumulator.clicks += toNumber(row.clicks) ?? 0;
-      accumulator.atbs += toNumber(row.atbs) ?? 0;
-      accumulator.orders += toNumber(row.orders) ?? 0;
-      accumulator.expense_sum += toNumber(row.expense_sum) ?? 0;
-      accumulator.sum_price += toNumber(row.sum_price) ?? 0;
-      accumulator.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
-      return accumulator;
-    },
-    {
-      views: 0,
-      clicks: 0,
-      atbs: 0,
-      orders: 0,
-      expense_sum: 0,
-      sum_price: 0,
-      ordered_sum_total: 0,
-    },
-  );
-
-  return {
-    ...totals,
-    ctr: catalogChartRate(totals.clicks, totals.views),
-    cr1: catalogChartRate(totals.atbs, totals.clicks),
-    cr2: catalogChartRate(totals.orders, totals.atbs),
-    crf: catalogChartRate(totals.orders, totals.clicks),
-    drr_total: catalogChartRate(totals.expense_sum, totals.ordered_sum_total),
-    drr_ads: catalogChartRate(totals.expense_sum, totals.sum_price),
-  };
-}
-
-function mergeCatalogChartResponses(
-  current: CatalogChartResponse | null,
-  incoming: CatalogChartResponse,
-  selectionCount: number,
-): CatalogChartResponse {
-  const rowsByDay = new Map<string, CatalogChartResponse["rows"][number]>();
-  const seedRows = current?.rows.length ? current.rows : incoming.rows;
-
-  seedRows.forEach((row) => {
-    rowsByDay.set(row.day, {
-      ...row,
-      views: 0,
-      clicks: 0,
-      atbs: 0,
-      orders: 0,
-      expense_sum: 0,
-      sum_price: 0,
-      ordered_sum_total: 0,
-      spent_sku_count: 0,
-      ctr: null,
-      cr1: null,
-      cr2: null,
-      crf: null,
-      drr_total: null,
-      drr_ads: null,
-    });
-  });
-
-  [current?.rows ?? [], incoming.rows].forEach((sourceRows) => {
-    sourceRows.forEach((row) => {
-      const target = rowsByDay.get(row.day);
-      if (!target) {
-        rowsByDay.set(row.day, finalizeCatalogChartRow(row));
-        return;
-      }
-      target.views += toNumber(row.views) ?? 0;
-      target.clicks += toNumber(row.clicks) ?? 0;
-      target.atbs += toNumber(row.atbs) ?? 0;
-      target.orders += toNumber(row.orders) ?? 0;
-      target.expense_sum += toNumber(row.expense_sum) ?? 0;
-      target.sum_price += toNumber(row.sum_price) ?? 0;
-      target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
-      target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
-    });
-  });
-
-  const rows = [...rowsByDay.values()]
-    .map((row) => finalizeCatalogChartRow(row))
-    .sort((left, right) => left.day.localeCompare(right.day));
-
-  return {
-    ok: true,
-    generated_at: incoming.generated_at,
-    range: incoming.range,
-    selection_count: selectionCount,
-    loaded_products_count: (current?.loaded_products_count ?? 0) + (incoming.loaded_products_count ?? 0),
-    rows,
-    product_rows: [...(current?.product_rows ?? []), ...(incoming.product_rows ?? [])],
-    totals: buildCatalogChartTotals(rows),
-    errors: [...(current?.errors ?? []), ...(incoming.errors ?? [])],
-  };
-}
-
-function mergeCatalogChartRetryResponse(
-  current: CatalogChartResponse,
-  incoming: CatalogChartResponse,
-  selectionCount: number,
-  retriedRefs: string[],
-): CatalogChartResponse {
-  const retried = new Set(retriedRefs);
-  const merged = mergeCatalogChartResponses(current, incoming, selectionCount);
-  return {
-    ...merged,
-    errors: [
-      ...current.errors.filter((error) => !retried.has(error.product)),
-      ...incoming.errors,
-    ],
-  };
-}
-
-function aggregateCatalogChartResponse(
-  response: CatalogChartResponse,
-  productRefs: string[],
-  requestedStart: string,
-  requestedEnd: string,
-): CatalogChartResponse {
-  const requestedRefs = new Set(productRefs);
-  const sourceRows = response.rows.filter((row) => row.day >= requestedStart && row.day <= requestedEnd);
-
-  if (!response.product_rows?.length) {
-    const sliced = sliceCatalogChartResponse(response, requestedStart, requestedEnd);
-    return {
-      ...sliced,
-      selection_count: productRefs.length,
-      loaded_products_count: productRefs.length,
-    };
-  }
-
-  const rowsByDay = new Map(
-    sourceRows.map((row) => [
-      row.day,
-      {
-        ...row,
-        views: 0,
-        clicks: 0,
-        atbs: 0,
-        orders: 0,
-        expense_sum: 0,
-        sum_price: 0,
-        ordered_sum_total: 0,
-        spent_sku_count: 0,
-        ctr: null,
-        cr1: null,
-        cr2: null,
-        crf: null,
-        drr_total: null,
-        drr_ads: null,
-      },
-    ]),
-  );
-  let loadedProductsCount = 0;
-
-  response.product_rows.forEach((product) => {
-    if (!requestedRefs.has(product.product_ref)) {
-      return;
-    }
-    loadedProductsCount += 1;
-    product.rows.forEach((row) => {
-      if (row.day < requestedStart || row.day > requestedEnd) {
-        return;
-      }
-      const target = rowsByDay.get(row.day);
-      if (!target) {
-        return;
-      }
-      const expenseSum = toNumber(row.expense_sum) ?? 0;
-      target.views += toNumber(row.views) ?? 0;
-      target.clicks += toNumber(row.clicks) ?? 0;
-      target.atbs += toNumber(row.atbs) ?? 0;
-      target.orders += toNumber(row.orders) ?? 0;
-      target.expense_sum += expenseSum;
-      target.sum_price += toNumber(row.sum_price) ?? 0;
-      target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
-      if (expenseSum > 0) {
-        target.spent_sku_count += 1;
-      }
-    });
-  });
-
-  const rows = [...rowsByDay.values()]
-    .map((row) => finalizeCatalogChartRow(row))
-    .sort((left, right) => left.day.localeCompare(right.day));
-  const errors = response.errors.filter((error) => requestedRefs.has(error.product));
-
-  return {
-    ...response,
-    range: {
-      ...response.range,
-      current_start: requestedStart,
-      current_end: requestedEnd,
-      span_days: rows.length,
-    },
-    selection_count: productRefs.length,
-    loaded_products_count: loadedProductsCount,
-    rows,
-    totals: buildCatalogChartTotals(rows),
-    errors,
-  };
-}
-
-function sliceCatalogChartResponse(
-  response: CatalogChartResponse,
-  requestedStart: string,
-  requestedEnd: string,
-): CatalogChartResponse {
-  const rows = response.rows
-    .filter((row) => row.day >= requestedStart && row.day <= requestedEnd)
-    .map((row) => finalizeCatalogChartRow(row));
-
-  return {
-    ...response,
-    range: {
-      ...response.range,
-      current_start: requestedStart,
-      current_end: requestedEnd,
-      span_days: rows.length,
-    },
-    rows,
-    totals: buildCatalogChartTotals(rows),
-  };
-}
-
-function resolveCachedCatalogChartResponse(
-  cache: Map<string, CatalogChartCacheEntry>,
-  options: {
-    cacheKey: string;
-    productRefsKey: string;
-    rangeStart: string;
-    rangeEnd: string;
-  },
-) {
-  const exact = cache.get(options.cacheKey);
-  if (exact) {
-    return exact.response;
-  }
-
-  let coveringEntry: CatalogChartCacheEntry | null = null;
-  for (const entry of cache.values()) {
-    if (entry.productRefsKey !== options.productRefsKey || entry.rangeEnd !== options.rangeEnd) {
-      continue;
-    }
-    if (entry.rangeStart > options.rangeStart) {
-      continue;
-    }
-    if (!coveringEntry || entry.rangeStart > coveringEntry.rangeStart) {
-      coveringEntry = entry;
-    }
-  }
-
-  if (!coveringEntry) {
-    return null;
-  }
-  return sliceCatalogChartResponse(coveringEntry.response, options.rangeStart, options.rangeEnd);
-}
-
 function matchesNumericRange(value: number | null | undefined, from: string, to: string) {
   if (value === null || value === undefined) {
     return !from && !to;
@@ -2602,89 +2330,6 @@ async function readApiErrorMessage(error: unknown) {
     return normalizeMessage(error.message);
   }
   return "Не удалось собрать ошибки по артикулам.";
-}
-
-const CATALOG_ARTICLE_ANALYTICS_METRICS: Array<{
-  key: string;
-  label: string;
-  format: (row: CatalogChartResponse["rows"][number]) => string;
-}> = [
-  { key: "expense_sum", label: "Расход", format: (row) => formatMoney(row.expense_sum, true) },
-  { key: "views", label: "Показы", format: (row) => formatNumber(row.views) },
-  { key: "clicks", label: "Клики", format: (row) => formatNumber(row.clicks) },
-  { key: "atbs", label: "Корзины", format: (row) => formatNumber(row.atbs) },
-  { key: "orders", label: "Заказы", format: (row) => formatNumber(row.orders) },
-  { key: "sum_price", label: "Заказано с РК", format: (row) => formatMoney(row.sum_price, true) },
-  { key: "ctr", label: "CTR", format: (row) => formatPercent(row.ctr) },
-  { key: "cr1", label: "Клик -> корзина", format: (row) => formatPercent(row.cr1) },
-  { key: "cr2", label: "Корзина -> заказ", format: (row) => formatPercent(row.cr2) },
-  { key: "drr_ads", label: "ДРР РК", format: (row) => formatPercent(row.drr_ads) },
-];
-
-function CatalogArticleAnalyticsPanel({
-  article,
-  state,
-}: {
-  article: CatalogArticle;
-  state: CatalogArticleAnalyticsState | undefined;
-}) {
-  if (!state || state.loading) {
-    return (
-      <div className="catalog-article-analytics-panel">
-        <div className="catalog-article-analytics-state">Загружаем динамику по дням...</div>
-      </div>
-    );
-  }
-
-  if (state.error) {
-    return (
-      <div className="catalog-article-analytics-panel">
-        <div className="catalog-article-analytics-state is-error">{state.error}</div>
-      </div>
-    );
-  }
-
-  const rows = [...(state.rows || [])].reverse();
-  if (!rows.length) {
-    return (
-      <div className="catalog-article-analytics-panel">
-        <div className="catalog-article-analytics-state">По товару нет дневной статистики за выбранный период.</div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="catalog-article-analytics-panel">
-      <div className="catalog-article-analytics-head">
-        <span>Динамика по дням</span>
-        <small>
-          {article.name} · арт.: {article.article}
-        </small>
-      </div>
-      <div className="catalog-article-analytics-scroll">
-        <table className="catalog-article-analytics-table">
-          <thead>
-            <tr>
-              <th>Метрика</th>
-              {rows.map((row) => (
-                <th key={row.day}>{row.day_label || formatDate(row.day)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {CATALOG_ARTICLE_ANALYTICS_METRICS.map((metric) => (
-              <tr key={metric.key}>
-                <th>{metric.label}</th>
-                {rows.map((row) => (
-                  <td key={`${metric.key}-${row.day}`}>{metric.format(row)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
 }
 
 function waitForCatalogIssuesRetry(ms: number, signal: AbortSignal) {
@@ -3515,7 +3160,7 @@ export function CatalogPage() {
     const items = chartSparklineRows
       .map((row) => ({
         value: toNumber(getValue(row)),
-        label: formatDate(row.day),
+        label: formatCatalogShortDate(row.day),
       }))
       .filter((item): item is { value: number; label: string } => item.value !== null);
     return items.length >= 2
@@ -4031,36 +3676,16 @@ export function CatalogPage() {
                 onFromChange={setTurnoverFrom}
                 onToChange={setTurnoverTo}
               />
-              <SearchableSelect<CatalogSortField>
+              <SearchableSelect<CatalogSortValue>
                 label="Сортировать по"
-                value={sortField}
-                onChange={setSortField}
+                value={`${sortField}:${sortDirection}` as CatalogSortValue}
+                onChange={(value) => {
+                  const [field, direction] = value.split(":");
+                  setSortField(field as CatalogSortField);
+                  setSortDirection(direction as CatalogSortDirection);
+                }}
                 className="catalog-filter-select"
-                options={[
-                  { value: "stock", label: "Остаток" },
-                  { value: "turnover", label: "Оборачиваемость" },
-                  { value: "campaigns", label: "Кол-во РК" },
-                  { value: "spend", label: "Расход" },
-                  { value: "views", label: "Показы" },
-                  { value: "clicks", label: "Клики" },
-                  { value: "orders", label: "Заказы" },
-                  { value: "ctr", label: "CTR" },
-                  { value: "cr", label: "CR" },
-                  { value: "drr", label: "ДРР" },
-                  { value: "categoryAvgCr", label: "Ср. CR категории" },
-                  { value: "article", label: "Артикул" },
-                  { value: "name", label: "Название" },
-                ]}
-              />
-              <SearchableSelect<CatalogSortDirection>
-                label="Направление"
-                value={sortDirection}
-                onChange={setSortDirection}
-                className="catalog-filter-select"
-                options={[
-                  { value: "desc", label: "По убыванию" },
-                  { value: "asc", label: "По возрастанию" },
-                ]}
+                options={CATALOG_SORT_OPTIONS}
               />
             </div>
           </div>
@@ -4331,7 +3956,34 @@ export function CatalogPage() {
           const compareShopTotals = compareShop ? summarizeCatalogArticles(compareShop.articles) : null;
           const shopCr = totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null;
           const compareShopCr = compareShopTotals && compareShopTotals.clicks > 0 ? (compareShopTotals.orders / compareShopTotals.clicks) * 100 : null;
-          const shopMetrics: Array<{ label: string; value: string; deltaText?: ReactNode; deltaClassName: string }> = [
+          const shopProductRefs = shop.articles.map((article) => `${shop.id}:${article.product_id}`);
+          const shopChartData = chartData?.product_rows?.length
+            ? aggregateCatalogChartResponse(chartData, shopProductRefs, chartRangeStart, chartRangeEnd)
+            : null;
+          const shopSparklineRows = (shopChartData?.rows ?? []).slice(-7);
+          const buildShopSparkline = (
+            key: CatalogSummaryMetricKey,
+            getValue: (row: CatalogChartResponse["rows"][number]) => number | null | undefined,
+          ): CatalogSummarySparkline | undefined => {
+            if (shopSparklineRows.length < 2) {
+              return undefined;
+            }
+            const items = shopSparklineRows
+              .map((row) => ({
+                value: toNumber(getValue(row)),
+                label: formatCatalogShortDate(row.day_label || row.day),
+              }))
+              .filter((item): item is { value: number; label: string } => item.value !== null);
+            return items.length >= 2
+              ? {
+                  points: items.map((item) => item.value),
+                  labels: items.map((item) => item.label),
+                  color: CATALOG_SUMMARY_SPARKLINE_COLORS[key],
+                  valueFormatter: (value) => formatSummarySparklineValue(key, value),
+                }
+              : undefined;
+          };
+          const shopMetrics: Array<{ label: string; value: string; deltaText?: ReactNode; deltaClassName: string; sparkline?: CatalogSummarySparkline }> = [
             {
               label: "Артикулы",
               value: formatNumber(shop.articles.length),
@@ -4343,30 +3995,35 @@ export function CatalogPage() {
               value: formatCompactNumber(totals.views),
               deltaText: renderDeltaText(formatSignedNumber(diffValue(totals.views, compareShopTotals?.views))),
               deltaClassName: deltaClassName(diffValue(totals.views, compareShopTotals?.views), true),
+              sparkline: buildShopSparkline("views", (row) => row.views),
             },
             {
               label: "Клики",
               value: formatCompactNumber(totals.clicks),
               deltaText: renderDeltaText(formatSignedNumber(diffValue(totals.clicks, compareShopTotals?.clicks))),
               deltaClassName: deltaClassName(diffValue(totals.clicks, compareShopTotals?.clicks), true),
+              sparkline: buildShopSparkline("clicks", (row) => row.clicks),
             },
             {
               label: "Заказы",
               value: formatNumber(totals.orders),
               deltaText: renderDeltaText(formatSignedNumber(diffValue(totals.orders, compareShopTotals?.orders))),
               deltaClassName: deltaClassName(diffValue(totals.orders, compareShopTotals?.orders), true),
+              sparkline: buildShopSparkline("orders", (row) => row.orders),
             },
             {
               label: "Расход",
               value: formatMoney(totals.expense_sum),
               deltaText: renderDeltaText(formatSignedMoney(diffValue(totals.expense_sum, compareShopTotals?.expense_sum))),
               deltaClassName: deltaClassName(diffValue(totals.expense_sum, compareShopTotals?.expense_sum), false),
+              sparkline: buildShopSparkline("spend", (row) => row.expense_sum),
             },
             {
               label: "CR",
               value: formatPercent(shopCr),
               deltaText: renderDeltaText(formatSignedPercent(diffValue(shopCr, compareShopCr))),
               deltaClassName: deltaClassName(diffValue(shopCr, compareShopCr), true),
+              sparkline: buildShopSparkline("cr", (row) => row.crf),
             },
             {
               label: "Баланс",
@@ -4426,6 +4083,7 @@ export function CatalogPage() {
                       value={metric.value}
                       deltaText={metric.deltaText}
                       deltaClassName={metric.deltaClassName}
+                      sparkline={metric.sparkline}
                       density="compact"
                     />
                   ))}
@@ -4466,7 +4124,7 @@ export function CatalogPage() {
                                 <span />
                                 <span />
                               </button>
-                            <div className="h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-lg bg-[var(--color-surface-strong)]">
+                            <div className="h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-[4px] bg-[var(--color-surface-strong)]">
                               {article.image_url ? <img src={article.image_url} alt={article.name} className="h-full w-full object-cover" /> : null}
                             </div>
                             <div className="min-w-0 flex-1">
