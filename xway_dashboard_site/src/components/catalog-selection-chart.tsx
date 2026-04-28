@@ -633,7 +633,7 @@ export function CatalogSelectionChart({
   const emptyStateClassName = chartMode === "combined" ? "h-full" : "min-h-[260px]";
 
   return (
-    <div className="chart-card border-[rgba(75,123,255,0.14)] bg-[linear-gradient(180deg,rgba(240,245,255,0.96),rgba(255,249,240,0.94))]">
+    <div className="chart-card catalog-selection-chart-card border-[rgba(75,123,255,0.14)]">
       <div className="chart-card-head">
         <div>
           <h4 className="font-display font-semibold text-[var(--color-ink)]">Динамика по выборке</h4>

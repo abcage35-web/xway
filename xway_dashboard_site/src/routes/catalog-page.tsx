@@ -20,7 +20,6 @@ interface CatalogLoaderData {
 
 type CatalogChartWindow = 7 | 14 | 30 | 60;
 const DEFAULT_CATALOG_CHART_WINDOW: CatalogChartWindow = 30;
-const CATALOG_CHART_PREFETCH_WINDOW: CatalogChartWindow = 60;
 type CatalogCampaignSlotKind = "unified" | "manual" | "cpc";
 type CatalogCampaignDisplayStatus = "active" | "paused" | "freeze" | "muted";
 
@@ -2798,7 +2797,8 @@ export function CatalogPage() {
   const chartSourceProductRefs = chartSourceArticles.map((item) => `${item.shopId}:${item.productId}`);
   const chartSourceProductRefsKey = chartSourceProductRefs.join(",");
   const chartRangeEnd = payload.range.current_end;
-  const chartSourceRangeStart = shiftIsoDate(chartRangeEnd, -(CATALOG_CHART_PREFETCH_WINDOW - 1));
+  const chartSourceWindow = chartWindow === 60 ? 60 : DEFAULT_CATALOG_CHART_WINDOW;
+  const chartSourceRangeStart = shiftIsoDate(chartRangeEnd, -(chartSourceWindow - 1));
   const chartRangeStart = shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
   const chartSourceCacheKey = `${chartSourceRangeStart}|${chartRangeEnd}|${chartSourceProductRefsKey}`;
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);

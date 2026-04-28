@@ -465,6 +465,25 @@
     border-color: var(--color-line) !important;
   }
 
+  html[data-theme="dark"] select,
+  html[data-theme="dark"] option {
+    background-color: var(--color-surface-soft);
+    color: var(--color-ink);
+  }
+
+  html[data-theme="dark"] .bg-rose-50 {
+    background-color: rgb(76 29 44 / 0.9) !important;
+  }
+
+  html[data-theme="dark"] .hover\:bg-rose-100:hover {
+    background-color: rgb(101 37 56 / 0.96) !important;
+  }
+
+  html[data-theme="dark"] .text-rose-600,
+  html[data-theme="dark"] .text-rose-700 {
+    color: #ff9aaa !important;
+  }
+
   @media (max-width: 1320px) {
     .product-toolbar {
       grid-template-columns: 1fr;

@@ -15,7 +15,7 @@ import requests
 
 
 DEFAULT_STORAGE_STATE = Path(__file__).with_name("xway_storage_state.json")
-PRODUCT_DAILY_STATS_CHUNK_DAYS = 14
+PRODUCT_DAILY_STATS_CHUNK_DAYS = 30
 WEEKDAYS: Tuple[Tuple[str, str], ...] = (
     ("Monday", "Пн"),
     ("Tuesday", "Вт"),
