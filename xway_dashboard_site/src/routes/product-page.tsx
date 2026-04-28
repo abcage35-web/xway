@@ -6809,7 +6809,7 @@ function CampaignClustersContent({
               <button
                 type="button"
                 onClick={() => openClusterDialog(campaign.id, campaign.name, row)}
-                className="rounded-2xl bg-[var(--color-ink)] px-2.5 py-1.5 text-[11px] font-medium leading-none text-white transition hover:bg-[#342f49]"
+                className="rounded-2xl bg-[var(--color-active-bg)] px-2.5 py-1.5 text-[11px] font-medium leading-none text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)]"
               >
                 Детали
               </button>

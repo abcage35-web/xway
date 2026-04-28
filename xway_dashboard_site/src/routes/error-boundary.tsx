@@ -34,7 +34,7 @@ export function RouteErrorBoundary() {
               <button
                 type="button"
                 onClick={() => window.location.reload()}
-                className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-ink)] px-4 py-3 text-sm font-medium text-white transition hover:bg-[#342f49]"
+                className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-active-bg)] px-4 py-3 text-sm font-medium text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)]"
               >
                 <AlertTriangle className="size-4" />
                 Перезагрузить

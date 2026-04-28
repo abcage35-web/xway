@@ -342,6 +342,8 @@ function createEmptyCatalogChartRow(day) {
     atbs: 0,
     orders: 0,
     expense_sum: 0,
+    sum_price: 0,
+    ordered_sum_total: 0,
     spent_sku_count: 0,
   };
 }
@@ -352,6 +354,8 @@ function finalizeCatalogChartRow(row) {
   const atbs = asFloat(row.atbs);
   const orders = asFloat(row.orders);
   const expenseSum = asFloat(row.expense_sum);
+  const sumPrice = asFloat(row.sum_price);
+  const orderedSumTotal = asFloat(row.ordered_sum_total);
   const spentSkuCount = Number.parseInt(String(row.spent_sku_count || 0), 10) || 0;
   return {
     ...row,
@@ -360,11 +364,15 @@ function finalizeCatalogChartRow(row) {
     atbs,
     orders,
     expense_sum: expenseSum,
+    sum_price: sumPrice,
+    ordered_sum_total: orderedSumTotal,
     spent_sku_count: spentSkuCount,
     ctr: catalogChartRate(clicks, views),
     cr1: catalogChartRate(atbs, clicks),
     cr2: catalogChartRate(orders, atbs),
     crf: catalogChartRate(orders, clicks),
+    drr_total: catalogChartRate(expenseSum, orderedSumTotal),
+    drr_ads: catalogChartRate(expenseSum, sumPrice),
   };
 }
 
@@ -375,6 +383,8 @@ function buildCatalogChartTotals(rows) {
     atbs: 0,
     orders: 0,
     expense_sum: 0,
+    sum_price: 0,
+    ordered_sum_total: 0,
   };
   for (const row of rows) {
     totals.views += asFloat(row.views);
@@ -382,6 +392,8 @@ function buildCatalogChartTotals(rows) {
     totals.atbs += asFloat(row.atbs);
     totals.orders += asFloat(row.orders);
     totals.expense_sum += asFloat(row.expense_sum);
+    totals.sum_price += asFloat(row.sum_price);
+    totals.ordered_sum_total += asFloat(row.ordered_sum_total);
   }
   return {
     ...totals,
@@ -389,6 +401,8 @@ function buildCatalogChartTotals(rows) {
     cr1: catalogChartRate(totals.atbs, totals.clicks),
     cr2: catalogChartRate(totals.orders, totals.atbs),
     crf: catalogChartRate(totals.orders, totals.clicks),
+    drr_total: catalogChartRate(totals.expense_sum, totals.ordered_sum_total),
+    drr_ads: catalogChartRate(totals.expense_sum, totals.sum_price),
   };
 }
 
@@ -413,16 +427,22 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
           continue;
         }
         const expenseSum = asFloat(row.expense_sum);
+        const sumPrice = asFloat(row.sum_price);
+        const orderedSumTotal = asFloat(row.ordered_sum_total);
         target.views += asFloat(row.views);
         target.clicks += asFloat(row.clicks);
         target.atbs += asFloat(row.atbs);
         target.orders += asFloat(row.orders);
         target.expense_sum += expenseSum;
+        target.sum_price += sumPrice;
+        target.ordered_sum_total += orderedSumTotal;
         productTarget.views += asFloat(row.views);
         productTarget.clicks += asFloat(row.clicks);
         productTarget.atbs += asFloat(row.atbs);
         productTarget.orders += asFloat(row.orders);
         productTarget.expense_sum += expenseSum;
+        productTarget.sum_price += sumPrice;
+        productTarget.ordered_sum_total += orderedSumTotal;
         if (expenseSum > 0) {
           target.spent_sku_count += 1;
           productTarget.spent_sku_count = 1;

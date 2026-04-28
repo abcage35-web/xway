@@ -2796,6 +2796,8 @@ def _create_catalog_chart_row(day: str) -> Dict[str, Any]:
         "atbs": 0.0,
         "orders": 0.0,
         "expense_sum": 0.0,
+        "sum_price": 0.0,
+        "ordered_sum_total": 0.0,
         "spent_sku_count": 0,
     }
 
@@ -2806,6 +2808,8 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
     atbs = _catalog_chart_number(row.get("atbs"))
     orders = _catalog_chart_number(row.get("orders"))
     expense_sum = _catalog_chart_number(row.get("expense_sum"))
+    sum_price = _catalog_chart_number(row.get("sum_price"))
+    ordered_sum_total = _catalog_chart_number(row.get("ordered_sum_total"))
     spent_sku_count = int(row.get("spent_sku_count") or 0)
     return {
         **row,
@@ -2814,11 +2818,15 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "atbs": atbs,
         "orders": orders,
         "expense_sum": expense_sum,
+        "sum_price": sum_price,
+        "ordered_sum_total": ordered_sum_total,
         "spent_sku_count": spent_sku_count,
         "ctr": _catalog_chart_rate(clicks, views),
         "cr1": _catalog_chart_rate(atbs, clicks),
         "cr2": _catalog_chart_rate(orders, atbs),
         "crf": _catalog_chart_rate(orders, clicks),
+        "drr_total": _catalog_chart_rate(expense_sum, ordered_sum_total),
+        "drr_ads": _catalog_chart_rate(expense_sum, sum_price),
     }
 
 
@@ -2829,6 +2837,8 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "atbs": 0.0,
         "orders": 0.0,
         "expense_sum": 0.0,
+        "sum_price": 0.0,
+        "ordered_sum_total": 0.0,
     }
     for row in rows:
         totals["views"] += _catalog_chart_number(row.get("views"))
@@ -2836,12 +2846,16 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         totals["atbs"] += _catalog_chart_number(row.get("atbs"))
         totals["orders"] += _catalog_chart_number(row.get("orders"))
         totals["expense_sum"] += _catalog_chart_number(row.get("expense_sum"))
+        totals["sum_price"] += _catalog_chart_number(row.get("sum_price"))
+        totals["ordered_sum_total"] += _catalog_chart_number(row.get("ordered_sum_total"))
     return {
         **totals,
         "ctr": _catalog_chart_rate(totals["clicks"], totals["views"]),
         "cr1": _catalog_chart_rate(totals["atbs"], totals["clicks"]),
         "cr2": _catalog_chart_rate(totals["orders"], totals["atbs"]),
         "crf": _catalog_chart_rate(totals["orders"], totals["clicks"]),
+        "drr_total": _catalog_chart_rate(totals["expense_sum"], totals["ordered_sum_total"]),
+        "drr_ads": _catalog_chart_rate(totals["expense_sum"], totals["sum_price"]),
     }
 
 
@@ -3408,16 +3422,22 @@ def collect_catalog_chart(
                 if target is None or product_target is None:
                     continue
                 expense_sum = _catalog_chart_number(product_row.get("expense_sum"))
+                sum_price = _catalog_chart_number(product_row.get("sum_price"))
+                ordered_sum_total = _catalog_chart_number(product_row.get("ordered_sum_total"))
                 target["views"] += _catalog_chart_number(product_row.get("views"))
                 target["clicks"] += _catalog_chart_number(product_row.get("clicks"))
                 target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
                 target["orders"] += _catalog_chart_number(product_row.get("orders"))
                 target["expense_sum"] += expense_sum
+                target["sum_price"] += sum_price
+                target["ordered_sum_total"] += ordered_sum_total
                 product_target["views"] += _catalog_chart_number(product_row.get("views"))
                 product_target["clicks"] += _catalog_chart_number(product_row.get("clicks"))
                 product_target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
                 product_target["orders"] += _catalog_chart_number(product_row.get("orders"))
                 product_target["expense_sum"] += expense_sum
+                product_target["sum_price"] += sum_price
+                product_target["ordered_sum_total"] += ordered_sum_total
                 if expense_sum > 0:
                     target["spent_sku_count"] += 1
                     product_target["spent_sku_count"] = 1

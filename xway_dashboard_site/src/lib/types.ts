@@ -543,11 +543,15 @@ export interface CatalogChartRow {
   atbs: number;
   orders: number;
   expense_sum: number;
+  sum_price: number;
+  ordered_sum_total: number;
   spent_sku_count: number;
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
   crf: number | null;
+  drr_total: number | null;
+  drr_ads: number | null;
 }
 
 export interface CatalogChartTotals {
@@ -556,10 +560,14 @@ export interface CatalogChartTotals {
   atbs: number;
   orders: number;
   expense_sum: number;
+  sum_price: number;
+  ordered_sum_total: number;
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
   crf: number | null;
+  drr_total: number | null;
+  drr_ads: number | null;
 }
 
 export interface CatalogChartProductRows {

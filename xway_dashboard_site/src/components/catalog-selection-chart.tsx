@@ -5,6 +5,8 @@ import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent } fro
 import type { CatalogChartRow, CatalogChartTotals } from "../lib/types";
 
 type CatalogSeriesKey = "views" | "clicks" | "atbs" | "orders" | "expense_sum" | "ctr" | "cr1" | "cr2" | "crf";
+type CatalogDrrSeriesKey = "drr_total" | "drr_ads";
+type CatalogTooltipSeriesKey = CatalogSeriesKey | CatalogDrrSeriesKey;
 type ChartMode = "combined" | "split";
 type SplitPanelKey = "views" | "clicks" | "atbs" | "orders" | "crf";
 type CrfRenderMode = "line" | "bar";
@@ -17,7 +19,7 @@ type LegendItem = {
   onToggle: () => void;
 };
 type SeriesToggleItem = {
-  key: CatalogSeriesKey;
+  key: CatalogTooltipSeriesKey;
   label: string;
   color: string;
   active: boolean;
@@ -68,6 +70,16 @@ const CATALOG_SERIES: Array<{
   { key: "cr2", label: "CR2", color: "#a855f7", kind: "rate" },
   { key: "crf", label: "CRF", color: "#f04c7c", kind: "rate" },
 ];
+const CATALOG_DRR_SERIES: Array<{
+  key: CatalogDrrSeriesKey;
+  label: string;
+  color: string;
+  kind: "rate";
+}> = [
+  { key: "drr_total", label: "ДРР общ.", color: "#ff6b8a", kind: "rate" },
+  { key: "drr_ads", label: "ДРР РК", color: "#f17828", kind: "rate" },
+];
+const CATALOG_TOOLTIP_SERIES = [...CATALOG_SERIES, ...CATALOG_DRR_SERIES];
 const SPLIT_CHARTS: SplitChartConfig[] = [
   { panel: "views", title: "Просмотры / расход", primaryKey: "views" },
   { panel: "clicks", title: "Клики / расход / CTR", primaryKey: "clicks", rateKey: "ctr" },
@@ -79,7 +91,7 @@ function getSeriesMeta(key: CatalogSeriesKey) {
   return CATALOG_SERIES.find((series) => series.key === key);
 }
 
-function toggleLegendKey(current: CatalogSeriesKey[], key: CatalogSeriesKey) {
+function toggleLegendKey<T extends string>(current: T[], key: T) {
   return current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
 }
 
@@ -114,12 +126,12 @@ function formatLegendValue(key: CatalogSeriesKey, totals: CatalogChartTotals | n
   return formatPercent(totals[key]);
 }
 
-function formatTooltipValue(key: CatalogSeriesKey, value: unknown) {
+function formatTooltipValue(key: CatalogTooltipSeriesKey, value: unknown) {
   const normalizedValue = Array.isArray(value) ? value[0] : value;
   if (key === "expense_sum") {
     return formatMoney(normalizedValue, true);
   }
-  if (key === "ctr" || key === "cr1" || key === "cr2" || key === "crf") {
+  if (key === "ctr" || key === "cr1" || key === "cr2" || key === "crf" || key === "drr_total" || key === "drr_ads") {
     return formatPercent(normalizedValue);
   }
   if (key === "views") {
@@ -193,7 +205,9 @@ function ChartModeToggle({
             onClick={() => onChange(mode)}
             className={cn(
               "rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition",
-              active ? "bg-[var(--color-ink)] text-white shadow-[0_10px_20px_rgba(38,33,58,0.18)]" : "text-[var(--color-muted)]",
+              active
+                ? "bg-[var(--color-active-bg)] text-[var(--color-active-ink)] shadow-[0_10px_20px_rgba(38,33,58,0.18)] hover:bg-[var(--color-active-bg-hover)]"
+                : "text-[var(--color-muted)]",
             )}
             aria-pressed={active}
           >
@@ -230,7 +244,7 @@ function CatalogChartTooltip({
       payloadByKey.set(key, entry);
     }
   });
-  const visibleItems = CATALOG_SERIES.filter((series) => payloadByKey.has(series.key));
+  const visibleItems = CATALOG_TOOLTIP_SERIES.filter((series) => payloadByKey.has(series.key));
   if (!visibleItems.length && spentSkuCount === null) {
     return null;
   }
@@ -457,6 +471,91 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
   );
 }
 
+function CatalogDrrChart({
+  rows,
+  hiddenKeys,
+  onToggleKey,
+  compact = false,
+}: {
+  rows: Array<CatalogChartRow & { label: string }>;
+  hiddenKeys: CatalogDrrSeriesKey[];
+  onToggleKey: (key: CatalogDrrSeriesKey) => void;
+  compact?: boolean;
+}) {
+  const visibleSeries = CATALOG_DRR_SERIES.filter((series) => !hiddenKeys.includes(series.key));
+  const hasVisibleSeries = visibleSeries.length > 0;
+  const shellClassName = compact
+    ? "rounded-[22px] border border-white/60 bg-white/45 px-3 py-3"
+    : "rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]";
+
+  return (
+    <div className={shellClassName}>
+      <div className={cn("flex items-start justify-between gap-3", compact ? "mb-2" : "mb-3")}>
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--color-muted)]">
+            ДРР по дням
+          </div>
+          <div className="mt-1 text-xs text-[var(--color-muted)]">
+            Общие заказы и РК-заказы
+          </div>
+        </div>
+      </div>
+      <div className={compact ? "h-[88px]" : "h-[160px]"}>
+        {!hasVisibleSeries ? (
+          <div className="flex h-full items-center justify-center rounded-[18px] border border-dashed border-[rgba(128,122,147,0.2)] bg-[rgba(255,255,255,0.4)] px-4 text-sm text-[var(--color-muted)]">
+            Включи хотя бы одну ДРР-линию ниже.
+          </div>
+        ) : (
+          <ResponsiveContainer>
+            <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: compact ? 0 : 8 }}>
+              <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={compact ? false : DATE_TICK_PROPS}
+                axisLine={false}
+                tickLine={false}
+                interval="preserveStartEnd"
+                minTickGap={18}
+                angle={-35}
+                height={compact ? 0 : 58}
+                textAnchor="end"
+              />
+              <YAxis yAxisId="drr" hide orientation="right" allowDecimals domain={["auto", "auto"]} />
+              <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
+              {visibleSeries.map((series) => (
+                <Line
+                  key={series.key}
+                  yAxisId="drr"
+                  dataKey={series.key}
+                  name={series.label}
+                  type="monotone"
+                  stroke={series.color}
+                  strokeWidth={compact ? 2.2 : 2.5}
+                  strokeDasharray={series.key === "drr_ads" ? "6 4" : undefined}
+                  dot={false}
+                  activeDot={{ r: 4.5 }}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ))}
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      <SeriesToggleRow
+        items={CATALOG_DRR_SERIES.map((series) => ({
+          key: series.key,
+          label: series.label,
+          color: series.color,
+          active: !hiddenKeys.includes(series.key),
+          onToggle: () => onToggleKey(series.key),
+        }))}
+      />
+    </div>
+  );
+}
+
 function SplitCrfChart({
   rows,
   hiddenKeys,
@@ -493,7 +592,9 @@ function SplitCrfChart({
                 onClick={() => onChangeRenderMode(mode)}
                 className={cn(
                   "rounded-full px-3 py-1 text-[11px] font-semibold transition",
-                  active ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)]",
+                  active
+                    ? "bg-[var(--color-active-bg)] text-[var(--color-active-ink)] hover:bg-[var(--color-active-bg-hover)]"
+                    : "text-[var(--color-muted)]",
                 )}
                 aria-pressed={active}
               >
@@ -606,6 +707,7 @@ export function CatalogSelectionChart({
   const [splitHiddenSeries, setSplitHiddenSeries] = useState<Record<SplitPanelKey, CatalogSeriesKey[]>>(
     DEFAULT_SPLIT_HIDDEN_SERIES,
   );
+  const [hiddenDrrSeries, setHiddenDrrSeries] = useState<CatalogDrrSeriesKey[]>([]);
   const [crfRenderMode, setCrfRenderMode] = useState<CrfRenderMode>("line");
   const loadingTargetCount = loadTargetCount ?? selectionCount;
 
@@ -628,6 +730,9 @@ export function CatalogSelectionChart({
       ...current,
       [panel]: toggleLegendKey(current[panel] || [], key),
     }));
+  };
+  const toggleDrrKey = (key: CatalogDrrSeriesKey) => {
+    setHiddenDrrSeries((current) => toggleLegendKey(current, key));
   };
 
   const emptyStateClassName = chartMode === "combined" ? "h-full" : "min-h-[260px]";
@@ -772,11 +877,14 @@ export function CatalogSelectionChart({
                   </ResponsiveContainer>
                 </div>
               </div>
+
+              <CatalogDrrChart rows={chartRows} hiddenKeys={hiddenDrrSeries} onToggleKey={toggleDrrKey} compact />
             </div>
           )
         ) : (
           <div className="space-y-4">
             <SplitSkuChart rows={chartRows} />
+            <CatalogDrrChart rows={chartRows} hiddenKeys={hiddenDrrSeries} onToggleKey={toggleDrrKey} />
 
             <div className="grid gap-4 xl:grid-cols-2">
               {SPLIT_CHARTS.map((config) => (

@@ -95,7 +95,7 @@ export function SectionCard({
   children,
   className,
 }: {
-  title: string;
+  title: ReactNode;
   caption?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
@@ -405,14 +405,14 @@ export function RangeToolbar({
           </select>
         </div>
 
-        <div className="metric-chip grid min-w-0 flex-1 overflow-hidden rounded-2xl text-sm sm:grid-cols-2 xl:max-w-[640px]">
+        <div className="metric-chip grid w-full min-w-0 overflow-hidden rounded-2xl text-sm sm:grid-cols-2 xl:w-[420px] xl:flex-none">
           <label className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
             <span className="shrink-0 text-[var(--color-muted)]">Начало</span>
             <input
               type="date"
               value={start || ""}
               onChange={(event) => onRangeChange({ start: event.target.value, end: end || event.target.value })}
-              className="min-w-[8.6rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
+              className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
             />
           </label>
           <label className="flex min-w-0 items-center gap-2 border-t border-[var(--color-line)] px-3.5 py-2.5 sm:border-l sm:border-t-0">
@@ -421,7 +421,7 @@ export function RangeToolbar({
               type="date"
               value={end || ""}
               onChange={(event) => onRangeChange({ start: start || event.target.value, end: event.target.value })}
-              className="min-w-[8.6rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
+              className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
             />
           </label>
         </div>
@@ -572,13 +572,13 @@ export function PageHero({
 }) {
   if (compact) {
     return (
-      <div className="px-2 py-2 sm:px-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="page-hero-compact px-2 py-2 sm:px-3">
+        <div className="page-hero-compact-row flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-[var(--color-ink)] sm:text-3xl">{title}</h1>
+            <h1 className="page-hero-compact-title font-display font-semibold tracking-tight text-[var(--color-ink)]">{title}</h1>
             {subtitle ? <div className="mt-1 text-sm leading-5 text-[var(--color-muted)]">{subtitle}</div> : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:pr-32">
+          <div className="page-hero-compact-actions flex flex-wrap items-center gap-2 lg:justify-end lg:pr-28">
             {metrics}
             {actions}
           </div>
@@ -1137,9 +1137,12 @@ export function InlineMetricSet({
   values: Array<{ label: string; value: ReactNode }>;
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))" }}>
       {values.map((item) => (
-        <MiniStat key={item.label} label={item.label} value={item.value} />
+        <div key={item.label} className="metric-chip min-h-[82px] rounded-[22px] px-4 py-3.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--color-muted)]">{item.label}</p>
+          <div className="mt-2 font-display text-xl font-semibold leading-none text-[var(--color-ink)]">{item.value}</div>
+        </div>
       ))}
     </div>
   );

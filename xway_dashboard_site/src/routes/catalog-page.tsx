@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUpDown, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -933,7 +933,7 @@ function CatalogSummaryMetricsSettingsDialog({
                   onAddMetric(selectedMetricValue);
                 }
               }}
-              className="rounded-2xl bg-[var(--color-ink)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-500)] disabled:cursor-not-allowed disabled:bg-[var(--color-line-strong)]"
+              className="rounded-2xl bg-[var(--color-active-bg)] px-4 py-2 text-sm font-semibold text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-line-strong)] disabled:text-[var(--color-muted)]"
             >
               Добавить
             </button>
@@ -1408,6 +1408,8 @@ function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
   const atbs = toNumber(row.atbs) ?? 0;
   const orders = toNumber(row.orders) ?? 0;
   const expenseSum = toNumber(row.expense_sum) ?? 0;
+  const sumPrice = toNumber(row.sum_price) ?? 0;
+  const orderedSumTotal = toNumber(row.ordered_sum_total) ?? 0;
   const spentSkuCount = toNumber(row.spent_sku_count) ?? 0;
 
   return {
@@ -1417,11 +1419,15 @@ function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
     atbs,
     orders,
     expense_sum: expenseSum,
+    sum_price: sumPrice,
+    ordered_sum_total: orderedSumTotal,
     spent_sku_count: spentSkuCount,
     ctr: catalogChartRate(clicks, views),
     cr1: catalogChartRate(atbs, clicks),
     cr2: catalogChartRate(orders, atbs),
     crf: catalogChartRate(orders, clicks),
+    drr_total: catalogChartRate(expenseSum, orderedSumTotal),
+    drr_ads: catalogChartRate(expenseSum, sumPrice),
   };
 }
 
@@ -1433,6 +1439,8 @@ function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogCha
       accumulator.atbs += toNumber(row.atbs) ?? 0;
       accumulator.orders += toNumber(row.orders) ?? 0;
       accumulator.expense_sum += toNumber(row.expense_sum) ?? 0;
+      accumulator.sum_price += toNumber(row.sum_price) ?? 0;
+      accumulator.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
       return accumulator;
     },
     {
@@ -1441,6 +1449,8 @@ function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogCha
       atbs: 0,
       orders: 0,
       expense_sum: 0,
+      sum_price: 0,
+      ordered_sum_total: 0,
     },
   );
 
@@ -1450,6 +1460,8 @@ function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogCha
     cr1: catalogChartRate(totals.atbs, totals.clicks),
     cr2: catalogChartRate(totals.orders, totals.atbs),
     crf: catalogChartRate(totals.orders, totals.clicks),
+    drr_total: catalogChartRate(totals.expense_sum, totals.ordered_sum_total),
+    drr_ads: catalogChartRate(totals.expense_sum, totals.sum_price),
   };
 }
 
@@ -1469,11 +1481,15 @@ function mergeCatalogChartResponses(
       atbs: 0,
       orders: 0,
       expense_sum: 0,
+      sum_price: 0,
+      ordered_sum_total: 0,
       spent_sku_count: 0,
       ctr: null,
       cr1: null,
       cr2: null,
       crf: null,
+      drr_total: null,
+      drr_ads: null,
     });
   });
 
@@ -1489,6 +1505,8 @@ function mergeCatalogChartResponses(
       target.atbs += toNumber(row.atbs) ?? 0;
       target.orders += toNumber(row.orders) ?? 0;
       target.expense_sum += toNumber(row.expense_sum) ?? 0;
+      target.sum_price += toNumber(row.sum_price) ?? 0;
+      target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
       target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
     });
   });
@@ -1555,11 +1573,15 @@ function aggregateCatalogChartResponse(
         atbs: 0,
         orders: 0,
         expense_sum: 0,
+        sum_price: 0,
+        ordered_sum_total: 0,
         spent_sku_count: 0,
         ctr: null,
         cr1: null,
         cr2: null,
         crf: null,
+        drr_total: null,
+        drr_ads: null,
       },
     ]),
   );
@@ -1584,6 +1606,8 @@ function aggregateCatalogChartResponse(
       target.atbs += toNumber(row.atbs) ?? 0;
       target.orders += toNumber(row.orders) ?? 0;
       target.expense_sum += expenseSum;
+      target.sum_price += toNumber(row.sum_price) ?? 0;
+      target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
       if (expenseSum > 0) {
         target.spent_sku_count += 1;
       }
@@ -2585,6 +2609,7 @@ export function CatalogPage() {
   const [summaryMetricSettings, setSummaryMetricSettings] = useState<CatalogSummaryMetricSettings>(() => readCatalogSummaryMetricSettings());
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
   const [toolbarHeight, setToolbarHeight] = useState(0);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
@@ -2604,6 +2629,18 @@ export function CatalogPage() {
     }
     window.localStorage.setItem(CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY, JSON.stringify(quickViewSettings));
   }, [quickViewSettings]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const updateScrollTopVisibility = () => {
+      setShowScrollTop(window.scrollY > 260);
+    };
+    updateScrollTopVisibility();
+    window.addEventListener("scroll", updateScrollTopVisibility, { passive: true });
+    return () => window.removeEventListener("scroll", updateScrollTopVisibility);
+  }, []);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -3588,14 +3625,6 @@ export function CatalogPage() {
                 <>
                   <button
                     type="button"
-                    onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-                  >
-                    <ArrowUpDown className="size-4 rotate-90" />
-                    Наверх
-                  </button>
-                  <button
-                    type="button"
                     onClick={collapseAll}
                     className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
                   >
@@ -3608,7 +3637,7 @@ export function CatalogPage() {
                       onClick={clearLocalFilters}
                       className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
                     >
-                      Сбросить выборку
+                      Сбросить
                     </button>
                   ) : null}
                   <button
@@ -3632,18 +3661,11 @@ export function CatalogPage() {
         )}
         filters={
           <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="mb-3">
               <div className="space-y-1">
                 <h3 className="font-display text-base font-semibold text-[var(--color-ink)]">Фильтры списка артикулов</h3>
                 <p className="text-sm text-[var(--color-muted)]">Поиск, кабинеты, остаток, оборачиваемость и сортировка таблиц по кабинетам.</p>
               </div>
-              <button
-                type="button"
-                onClick={clearLocalFilters}
-                className="metric-chip rounded-2xl px-3.5 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-              >
-                Сбросить фильтры
-              </button>
             </div>
 
             <div className="grid gap-2.5 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
@@ -3741,7 +3763,7 @@ export function CatalogPage() {
                 className={cn(
                   "inline-flex h-8 shrink-0 items-center gap-2 rounded-2xl border px-3 text-xs transition",
                   isActive
-                    ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-white shadow-[0_10px_22px_rgba(44,35,66,0.14)]"
+                    ? "border-transparent bg-[var(--color-active-bg)] text-[var(--color-active-ink)] shadow-[0_10px_22px_rgba(44,35,66,0.14)] hover:bg-[var(--color-active-bg-hover)]"
                     : "border-[var(--color-line)] bg-white/78 text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
                 )}
               >
@@ -3749,7 +3771,7 @@ export function CatalogPage() {
                 <span
                   className={cn(
                     "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                    isActive ? "bg-white/16 text-white" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
+                    isActive ? "bg-[var(--color-active-muted-bg)] text-[var(--color-active-muted-ink)]" : "bg-[var(--color-surface-strong)] text-[var(--color-muted)]",
                   )}
                 >
                   {formatNumber(quickViewMetrics[option.value])}
@@ -3993,11 +4015,30 @@ export function CatalogPage() {
             <SectionCard
               key={shop.id}
               className="catalog-shop-section overflow-visible"
-              title={shop.name}
-              caption={
+              title={
                 <div className="flex flex-wrap items-center gap-2">
-                  <span>{shop.marketplace} · {shop.tariff_code}</span>
-                  {shop.expire_in ? <span className="text-[var(--color-muted)]">{shop.expire_in}</span> : null}
+                  <span>{shop.name}</span>
+                  <span className="metric-chip inline-flex min-h-7 items-center rounded-2xl px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">
+                    {shop.marketplace}
+                  </span>
+                  <span className="metric-chip inline-flex min-h-7 items-center rounded-2xl px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">
+                    {shop.tariff_code}
+                  </span>
+                  {shop.expire_in ? (
+                    <span className="metric-chip inline-flex min-h-7 items-center rounded-2xl px-2.5 text-[11px] font-medium tracking-normal text-[var(--color-muted)]">
+                      {shop.expire_in}
+                    </span>
+                  ) : null}
+                  <a
+                    href={shop.shop_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Открыть кабинет в XWAY"
+                    aria-label="Открыть кабинет в XWAY"
+                    className="metric-chip inline-flex h-8 w-8 items-center justify-center rounded-full text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)]"
+                  >
+                    <ExternalLink className="size-4" />
+                  </a>
                 </div>
               }
               actions={
@@ -4020,20 +4061,6 @@ export function CatalogPage() {
                     { label: "Расход", value: formatMoney(totals.expense_sum) },
                     { label: "CR", value: formatPercent(totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null) },
                     { label: "Баланс", value: formatMoney(shop.balance) },
-                    {
-                      label: "Магазин",
-                      value: (
-                        <a
-                          href={shop.shop_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 whitespace-nowrap text-brand-200 hover:text-brand-100"
-                        >
-                          Открыть в XWAY
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                      ),
-                    },
                   ]}
                 />
 
@@ -4160,7 +4187,7 @@ export function CatalogPage() {
                         render: (article) => (
                           <Link
                             to={`/product${buildProductSearch(article.article, start, end)}`}
-                            className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-ink)] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#342f49]"
+                            className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-active-bg)] px-3 py-2 text-xs font-medium text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)]"
                           >
                             Детали
                           </Link>
@@ -4191,6 +4218,18 @@ export function CatalogPage() {
             </Link>
           </div>
         </SectionCard>
+      ) : null}
+
+      {showScrollTop ? (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          title="Наверх"
+          aria-label="Наверх"
+          className="fixed bottom-6 right-6 z-[4300] inline-flex h-12 w-12 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-active-bg)] text-[var(--color-active-ink)] shadow-[0_18px_42px_rgba(31,23,53,0.22)] transition hover:-translate-y-0.5 hover:bg-[var(--color-active-bg-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-300)]"
+        >
+          <ArrowUp className="size-5" />
+        </button>
       ) : null}
 
       {selectedArticleIssueRow ? (
