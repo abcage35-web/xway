@@ -1,5 +1,4 @@
 :root {
-  --ui-scale: 0.85;
   --bg: #eeedf1;
   --surface: #ffffff;
   --surface-soft: #f7f6fa;
@@ -74,6 +73,7 @@ html[data-theme="dark"] {
 }
 
 html {
+  font-size: 15px;
   scroll-behavior: smooth;
   overflow-x: hidden;
 }
@@ -85,19 +85,12 @@ body {
   color: var(--ink);
   background: linear-gradient(180deg, #f4f3f7 0%, var(--bg) 100%);
   font-family: "IBM Plex Sans", sans-serif;
+  line-height: 1.42;
 }
 
 html[data-theme="dark"],
 html[data-theme="dark"] body {
   background: linear-gradient(180deg, #11131b 0%, var(--bg) 100%);
-}
-
-@supports (zoom: 1) {
-  body {
-    zoom: var(--ui-scale);
-    width: 100%;
-    min-height: 100vh;
-  }
 }
 
 body.modal-open {
@@ -135,9 +128,9 @@ button {
 
 .article-sidebar {
   position: fixed;
-  top: 12px;
-  left: 18px;
-  right: 18px;
+  top: 10px;
+  left: 14px;
+  right: 14px;
   bottom: auto;
   width: auto;
   margin: 0;
@@ -148,9 +141,9 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);
   grid-template-areas: "form selector";
-  gap: 10px;
+  gap: 8px;
   height: auto;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.94);
@@ -617,7 +610,7 @@ body.page-view-articles .sidebar-shell {
 
 body.page-view-articles .page-viewport {
   display: block;
-  padding: 18px 18px 52px;
+  padding: 16px 16px 44px;
 }
 
 body.page-view-articles .sidebar-section {
@@ -873,7 +866,7 @@ html[data-theme="dark"] .metric-card-sparkline-tooltip {
 
 .page-viewport {
   overflow: visible;
-  padding: calc(var(--top-nav-height, 176px) + var(--top-nav-gap, 8px)) 18px 52px;
+  padding: calc(var(--top-nav-height, 176px) + var(--top-nav-gap, 8px)) 16px 44px;
 }
 
 .page-shell {
@@ -889,8 +882,8 @@ html[data-theme="dark"] .metric-card-sparkline-tooltip {
 
 .articles-page-shell {
   display: grid;
-  gap: 18px;
-  padding: 20px 22px 22px;
+  gap: 16px;
+  padding: 16px 18px 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.94);
