@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, RefreshCw } from "lucide-react";
 import { Bar, CartesianGrid, ComposedChart, LabelList, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent } from "../lib/format";
 import type { CatalogChartRow, CatalogChartTotals } from "../lib/types";
@@ -44,13 +44,13 @@ const DATE_TICK_PROPS = {
   fontSize: 10,
   fontWeight: 700,
 } as const;
-const DEFAULT_HIDDEN_SERIES: CatalogSeriesKey[] = ["expense_sum", "ctr", "cr1", "cr2", "crf"];
+const DEFAULT_HIDDEN_SERIES: CatalogSeriesKey[] = ["expense_sum", "ctr"];
 const DEFAULT_SPLIT_HIDDEN_SERIES: Record<SplitPanelKey, CatalogSeriesKey[]> = {
   views: [],
   clicks: ["ctr"],
-  atbs: ["cr1"],
-  orders: ["cr2"],
-  crf: ["crf"],
+  atbs: [],
+  orders: [],
+  crf: [],
 };
 const CATALOG_SERIES: Array<{
   key: CatalogSeriesKey;
@@ -347,7 +347,7 @@ function SplitMetricChart({
               <YAxis yAxisId={primaryKey} hide allowDecimals={primaryMeta.kind !== "count"} domain={["auto", "auto"]} />
               <YAxis yAxisId="expense_sum" hide orientation="right" allowDecimals domain={["auto", "auto"]} />
               {rateKey ? <YAxis yAxisId={rateKey} hide orientation="right" allowDecimals domain={["auto", "auto"]} /> : null}
-              <Tooltip content={(props) => <CatalogChartTooltip {...props} />} />
+              <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
               {primaryVisible ? (
                 <Bar
                   yAxisId={primaryKey}
@@ -439,7 +439,7 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
           <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
             <XAxis dataKey="label" hide />
             <YAxis hide allowDecimals={false} domain={[0, "auto"]} />
-            <Tooltip content={(props) => <CatalogChartTooltip {...props} />} />
+            <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
             <Bar
               dataKey="spent_sku_count"
               name="SKU с тратами"
@@ -478,7 +478,7 @@ function SplitCrfChart({
       <div className="flex items-start justify-between gap-4">
         <div>
           <h5 className="font-display text-[1.02rem] font-semibold text-[var(--color-ink)]">CRF</h5>
-          <p className="mt-1 text-xs text-[var(--color-muted)]">По умолчанию скрыт. Можно показать пунктирной линией или барами.</p>
+          <p className="mt-1 text-xs text-[var(--color-muted)]">Можно показать пунктирной линией или барами.</p>
         </div>
         <div className="inline-flex items-center rounded-full border border-[rgba(75,123,255,0.14)] bg-white/84 p-1">
           {([
@@ -525,7 +525,7 @@ function SplitCrfChart({
                 textAnchor="end"
               />
               <YAxis yAxisId="crf" hide orientation="right" allowDecimals domain={["auto", "auto"]} />
-              <Tooltip content={(props) => <CatalogChartTooltip {...props} />} />
+              <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
               {renderMode === "bar" ? (
                 <Bar
                   yAxisId="crf"
@@ -585,6 +585,7 @@ export function CatalogSelectionChart({
   error,
   rangeLabel,
   windowDays,
+  onRetryErrors,
 }: {
   rows: CatalogChartRow[];
   totals: CatalogChartTotals | null;
@@ -598,6 +599,7 @@ export function CatalogSelectionChart({
   error?: string | null;
   rangeLabel: string;
   windowDays: number;
+  onRetryErrors?: () => void;
 }) {
   const [chartMode, setChartMode] = useState<ChartMode>("combined");
   const [hiddenSeries, setHiddenSeries] = useState<CatalogSeriesKey[]>(DEFAULT_HIDDEN_SERIES);
@@ -658,8 +660,20 @@ export function CatalogSelectionChart({
             </span>
           ) : null}
           {errorCount ? (
-            <span className="inline-flex items-center gap-2 rounded-full bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
-              Ошибок: {formatNumber(errorCount)}
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
+              <span className="px-1">Ошибок: {formatNumber(errorCount)}</span>
+              {onRetryErrors ? (
+                <button
+                  type="button"
+                  onClick={onRetryErrors}
+                  disabled={isLoading}
+                  title="Обновить товары с ошибками"
+                  aria-label="Обновить товары с ошибками"
+                  className="inline-flex size-7 items-center justify-center rounded-full bg-white text-rose-700 shadow-[0_6px_14px_rgba(190,18,60,0.12)] transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-55"
+                >
+                  <RefreshCw className={cn("size-3.5", isLoading && "animate-spin")} />
+                </button>
+              ) : null}
             </span>
           ) : null}
         </div>
@@ -714,7 +728,7 @@ export function CatalogSelectionChart({
                         domain={["auto", "auto"]}
                       />
                     ))}
-                    <Tooltip content={(props) => <CatalogChartTooltip {...props} />} />
+                    <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
                     {activeSeries.map((series) => (
                       <Line
                         key={series.key}
@@ -745,7 +759,7 @@ export function CatalogSelectionChart({
                     <ComposedChart data={chartRows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
                       <XAxis dataKey="label" hide />
                       <YAxis hide allowDecimals={false} domain={[0, "auto"]} />
-                      <Tooltip content={(props) => <CatalogChartTooltip {...props} />} />
+                      <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
                       <Bar
                         dataKey="spent_sku_count"
                         name="SKU с тратами"

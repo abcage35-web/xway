@@ -1511,6 +1511,23 @@ function mergeCatalogChartResponses(
   };
 }
 
+function mergeCatalogChartRetryResponse(
+  current: CatalogChartResponse,
+  incoming: CatalogChartResponse,
+  selectionCount: number,
+  retriedRefs: string[],
+): CatalogChartResponse {
+  const retried = new Set(retriedRefs);
+  const merged = mergeCatalogChartResponses(current, incoming, selectionCount);
+  return {
+    ...merged,
+    errors: [
+      ...current.errors.filter((error) => !retried.has(error.product)),
+      ...incoming.errors,
+    ],
+  };
+}
+
 function aggregateCatalogChartResponse(
   response: CatalogChartResponse,
   productRefs: string[],
@@ -3030,6 +3047,74 @@ export function CatalogPage() {
     };
   }, [chartCollapsed, chartRangeEnd, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceSelectionCount]);
 
+  const retryChartErrors = async () => {
+    if (!chartSourceData?.errors.length || chartLoading) {
+      return;
+    }
+
+    const availableRefs = new Set(chartSourceProductRefs);
+    const failedRefs = [...new Set(chartSourceData.errors.map((error) => error.product).filter((ref) => availableRefs.has(ref)))];
+    if (!failedRefs.length) {
+      return;
+    }
+
+    chartFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    chartFetchAbortRef.current = controller;
+    const productChunks = chunkItems(failedRefs, 24);
+    setChartLoading(true);
+    setChartError(null);
+    setChartProgress({
+      cacheKey: chartSourceCacheKey,
+      selectionCount: chartSourceSelectionCount,
+      loadedProductsCount: chartSourceData.loaded_products_count,
+      chunkCount: productChunks.length,
+      loadedChunkCount: 0,
+      errorCount: chartSourceData.errors.length,
+    });
+
+    try {
+      let nextResponse = chartSourceData;
+      for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
+        const chunkRefs = productChunks[chunkIndex]!;
+        const chunkResponse = await fetchCatalogChart({
+          productRefs: chunkRefs,
+          start: chartSourceRangeStart,
+          end: chartRangeEnd,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) {
+          return;
+        }
+        nextResponse = mergeCatalogChartRetryResponse(nextResponse, chunkResponse, chartSourceSelectionCount, chunkRefs);
+        setChartSourceData(nextResponse);
+        setChartProgress({
+          cacheKey: chartSourceCacheKey,
+          selectionCount: chartSourceSelectionCount,
+          loadedProductsCount: nextResponse.loaded_products_count,
+          chunkCount: productChunks.length,
+          loadedChunkCount: chunkIndex + 1,
+          errorCount: nextResponse.errors.length,
+        });
+      }
+
+      chartCacheRef.current.set(chartSourceCacheKey, {
+        response: nextResponse,
+        productRefsKey: chartSourceProductRefsKey,
+        rangeStart: chartSourceRangeStart,
+        rangeEnd: chartRangeEnd,
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setChartError(error instanceof Error ? error.message : "Не удалось обновить товары с ошибками.");
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setChartLoading(false);
+      }
+    }
+  };
+
   const ctr = visibleTotals.views > 0 ? (visibleTotals.clicks / visibleTotals.views) * 100 : 0;
   const cr = visibleTotals.clicks > 0 ? (visibleTotals.orders / visibleTotals.clicks) * 100 : 0;
   const compareCtr = compareVisibleTotals && compareVisibleTotals.views > 0 ? (compareVisibleTotals.clicks / compareVisibleTotals.views) * 100 : null;
@@ -3753,6 +3838,7 @@ export function CatalogPage() {
               error={chartError}
               rangeLabel={chartRangeLabel}
               windowDays={chartWindow}
+              onRetryErrors={chartSourceData?.errors.length ? retryChartErrors : undefined}
             />
           ) : (
             <div className="text-sm text-[var(--color-muted)]">
