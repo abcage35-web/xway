@@ -2065,7 +2065,51 @@ def _catalog_values_as_list(value: Any) -> List[Any]:
     return []
 
 
-def _catalog_campaign_rows_for_key(payload: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+def _catalog_campaign_slot_for_row(row: Dict[str, Any]) -> str:
+    text = " ".join(
+        str(row.get(field) or "").lower()
+        for field in ("payment_type", "paymentType", "name", "auction_mode", "auto_type", "type", "kind", "zone", "placement")
+    )
+    is_cpc = bool(re.search(r"cpc|click|клик", text))
+    is_unified = bool(row.get("unified")) or bool(re.search(r"unified|auto|единая", text))
+    is_recom = bool(row.get("recom") or row.get("is_recom") or row.get("recommendation")) or bool(re.search(r"recom|recommend|реком", text))
+    if is_cpc:
+        return "cpc"
+    if is_unified:
+        return "unified"
+    return "manual_recom" if is_recom else "manual_search"
+
+
+def _collect_catalog_campaign_rows_from_source(source: Any) -> List[Dict[str, Any]]:
+    if not isinstance(source, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for direct_key in ("campaigns", "campaign_wb", "campaigns_wb", "campaign_items", "items"):
+        rows.extend([item for item in _catalog_values_as_list(source.get(direct_key)) if isinstance(item, dict)])
+    by_type = source.get("campaigns_by_type")
+    nested_campaigns_data = source.get("campaigns_data") if isinstance(source.get("campaigns_data"), dict) else {}
+    if not isinstance(by_type, dict):
+        by_type = nested_campaigns_data.get("campaigns_by_type")
+    if isinstance(by_type, dict):
+        for value in by_type.values():
+            rows.extend([item for item in _catalog_values_as_list(value) if isinstance(item, dict)])
+    return rows
+
+
+def _unique_catalog_campaign_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for index, row in enumerate(rows):
+        key_value = row.get("id") or row.get("campaign_id") or row.get("external_id") or row.get("wb_id") or f"idx-{index}"
+        key = str(key_value)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def _catalog_campaign_rows_for_key(payload: Dict[str, Any], key: str, extra_sources: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
     by_type = payload.get("campaigns_by_type") or {}
     candidates_by_key = {
         "unified": ["unified", "auto", "automatic"],
@@ -2078,7 +2122,13 @@ def _catalog_campaign_rows_for_key(payload: Dict[str, Any], key: str) -> List[Di
         for item in _catalog_values_as_list(by_type.get(candidate_key)):
             if isinstance(item, dict):
                 rows.append(item)
-    return rows
+    inferred_rows = [
+        row
+        for source in [payload, *(extra_sources or [])]
+        for row in _collect_catalog_campaign_rows_from_source(source)
+        if _catalog_campaign_slot_for_row(row) == key
+    ]
+    return _unique_catalog_campaign_rows([*rows, *inferred_rows])
 
 
 def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2101,6 +2151,15 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
                         "limit": _catalog_number_or_none(item.get("limit")),
                     }
                 )
+    direct_limit = _catalog_number_or_none(source.get("spend_limit") or source.get("day_limit") or source.get("daily_limit") or source.get("limit"))
+    if direct_limit is not None or source.get("spend_limit_active"):
+        items.append(
+            {
+                "period": source.get("spend_limit_period") or source.get("limit_period") or "day",
+                "active": bool(source.get("spend_limit_active") if "spend_limit_active" in source else source.get("active")),
+                "limit": direct_limit,
+            }
+        )
     meaningful = [item for item in items if item.get("limit") is not None or item.get("active")]
     return (
         next((item for item in meaningful if item.get("active") and _normalize_catalog_spend_limit_period(item.get("period")) == "day"), None)
@@ -2119,7 +2178,19 @@ def _read_catalog_campaign_spend_today(source: Dict[str, Any]) -> Optional[float
         value = _catalog_number_or_none(spend.get("day"))
         if value is not None:
             return value
-    for key in ("spend_day", "day_spend", "expense_day", "spent_today"):
+    for key in ("spend_today", "spent_day", "spend_day", "day_spend", "today_spend", "today_expense", "expense_day", "expense_today", "spent_today"):
+        value = _catalog_number_or_none(source.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _read_catalog_budget_spent_today(source: Dict[str, Any], budget_rule: Dict[str, Any]) -> Optional[float]:
+    for key in ("spent", "spent_today", "current", "used"):
+        value = _catalog_number_or_none(budget_rule.get(key))
+        if value is not None:
+            return value
+    for key in ("budget_spent_today", "budget_spent"):
         value = _catalog_number_or_none(source.get(key))
         if value is not None:
             return value
@@ -2144,10 +2215,12 @@ def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Di
         budget_limit = _catalog_number_or_none(budget_rule.get("limit") or source.get("budget_limit") or source.get("budget_rule_limit"))
         spend_limit = _resolve_catalog_spend_limit_config(source)
         spend_today = _read_catalog_campaign_spend_today(source)
+        budget_spent_today = _read_catalog_budget_spent_today(source, budget_rule)
         if budget_limit is not None and budget_limit > 0:
             budget_limits.append(budget_limit)
+        if budget_spent_today is not None and budget_spent_today >= 0:
+            budget_spent_values.append(budget_spent_today)
         if spend_today is not None and spend_today >= 0:
-            budget_spent_values.append(spend_today)
             spend_spent_values.append(spend_today)
         if spend_limit and spend_limit.get("limit") is not None and spend_limit["limit"] > 0:
             spend_limits.append(spend_limit["limit"])
@@ -2163,7 +2236,7 @@ def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Di
     }
 
 
-def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]], extra_sources: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
     payload = raw or {}
     rows: List[Dict[str, Any]] = []
     for key in CATALOG_CAMPAIGN_FIELD_ORDER:
@@ -2171,7 +2244,7 @@ def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]]) -> List[Di
         if not normalized_code:
             continue
         meta = CATALOG_CAMPAIGN_FIELD_META.get(key) or {}
-        campaigns = _catalog_campaign_rows_for_key(payload, key)
+        campaigns = _catalog_campaign_rows_for_key(payload, key, extra_sources)
         rows.append(
             {
                 "key": key,
@@ -2367,7 +2440,7 @@ def _product_summary(
         "heatmap": heatmap,
         "orders_heatmap": orders_heatmap,
         "article_sheet": article_sheet,
-        "catalog_campaign_states": _normalize_catalog_campaign_states(product.get("campaigns_data")),
+            "catalog_campaign_states": _normalize_catalog_campaign_states(product.get("campaigns_data"), [product, stat_item]),
         "schedule_aggregate": _aggregate_schedule(campaigns),
         "campaigns": campaigns,
         "bid_log": sorted(
@@ -2784,7 +2857,7 @@ def _collect_shop_catalog(
             "is_active": product.get("is_active"),
             "stock": stat_item.get("stock"),
             "campaigns_count": stat_item.get("campaigns_count"),
-            "campaign_states": _normalize_catalog_campaign_states(campaign_data),
+            "campaign_states": _normalize_catalog_campaign_states(campaign_data, [product, stat_item]),
             "manual_campaigns_count": campaign_data.get("manual_count"),
             "expense_sum": stat.get("sum"),
             "views": stat.get("views"),

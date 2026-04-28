@@ -344,8 +344,8 @@ function createDrrLineLabel({
           dominantBaseline="middle"
           fill="var(--color-surface)"
           stroke="var(--color-surface)"
-          strokeWidth={compact ? 3 : 4}
-          fontSize={compact ? 8.5 : 9.5}
+          strokeWidth={compact ? 4 : 5}
+          fontSize={compact ? 11 : 13}
           fontWeight={800}
         >
           {label}
@@ -356,7 +356,7 @@ function createDrrLineLabel({
           textAnchor="middle"
           dominantBaseline="middle"
           fill={color}
-          fontSize={compact ? 8.5 : 9.5}
+          fontSize={compact ? 11 : 13}
           fontWeight={800}
         >
           {label}

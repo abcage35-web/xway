@@ -149,7 +149,65 @@ function asArray(value) {
   return [];
 }
 
-function catalogCampaignRowsForKey(payload, key) {
+function catalogCampaignSlotForRow(row) {
+  const text = [
+    row?.payment_type,
+    row?.paymentType,
+    row?.name,
+    row?.auction_mode,
+    row?.auto_type,
+    row?.type,
+    row?.kind,
+    row?.zone,
+    row?.placement,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  const isCpc = /cpc|click|клик/.test(text);
+  const isUnified = Boolean(row?.unified) || /unified|auto|единая/.test(text);
+  const isRecom = Boolean(row?.recom || row?.is_recom || row?.recommendation) || /recom|recommend|реком/.test(text);
+
+  if (isCpc) {
+    return "cpc";
+  }
+  if (isUnified) {
+    return "unified";
+  }
+  return isRecom ? "manual_recom" : "manual_search";
+}
+
+function collectCampaignRowsFromSource(source) {
+  if (!source || typeof source !== "object") {
+    return [];
+  }
+  const rows = [];
+  const directKeys = ["campaigns", "campaign_wb", "campaigns_wb", "campaign_items", "items"];
+  for (const key of directKeys) {
+    rows.push(...asArray(source[key]).filter((item) => item && typeof item === "object"));
+  }
+  const byType = source.campaigns_by_type || source.campaignsData?.campaigns_by_type || source.campaigns_data?.campaigns_by_type;
+  if (byType && typeof byType === "object") {
+    for (const value of Object.values(byType)) {
+      rows.push(...asArray(value).filter((item) => item && typeof item === "object"));
+    }
+  }
+  return rows;
+}
+
+function uniqueCampaignRows(rows) {
+  const seen = new Set();
+  return rows.filter((row, index) => {
+    const key = row?.id ?? row?.campaign_id ?? row?.external_id ?? row?.wb_id ?? `idx-${index}`;
+    const normalized = String(key);
+    if (seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function catalogCampaignRowsForKey(payload, key, extraSources = []) {
   const byType = payload?.campaigns_by_type || {};
   const candidatesByKey = {
     unified: ["unified", "auto", "automatic"],
@@ -157,7 +215,11 @@ function catalogCampaignRowsForKey(payload, key) {
     manual_recom: ["manual_recom", "recom", "recommendation", "recommendations"],
     cpc: ["cpc", "clicks"],
   };
-  return (candidatesByKey[key] || [key]).flatMap((candidateKey) => asArray(byType[candidateKey]));
+  const typedRows = (candidatesByKey[key] || [key]).flatMap((candidateKey) => asArray(byType[candidateKey]));
+  const inferredRows = [payload, ...extraSources]
+    .flatMap((source) => collectCampaignRowsFromSource(source))
+    .filter((row) => catalogCampaignSlotForRow(row) === key);
+  return uniqueCampaignRows([...typedRows, ...inferredRows]);
 }
 
 function resolveSpendLimitConfig(source) {
@@ -177,7 +239,16 @@ function resolveSpendLimitConfig(source) {
     active: Boolean(item?.active),
     limit: numberOrNull(item?.limit),
   }));
-  const items = [...periodItems, ...spendLimitItems].filter((item) => item.limit !== null || item.active);
+  const directLimit = numberOrNull(source?.spend_limit ?? source?.day_limit ?? source?.daily_limit ?? source?.limit);
+  const directLimitItem =
+    directLimit !== null || source?.spend_limit_active
+      ? {
+          period: source?.spend_limit_period ?? source?.limit_period ?? "day",
+          active: Boolean(source?.spend_limit_active ?? source?.active),
+          limit: directLimit,
+        }
+      : null;
+  const items = [...periodItems, ...spendLimitItems, directLimitItem].filter((item) => item && (item.limit !== null || item.active));
   return (
     items.find((item) => item.active && normalizeSpendLimitPeriod(item.period) === "day") ||
     items.find((item) => item.active) ||
@@ -191,10 +262,27 @@ function readCampaignSpendToday(source) {
   return (
     numberOrNull(source?.spend?.DAY) ??
     numberOrNull(source?.spend?.day) ??
+    numberOrNull(source?.spend_today) ??
+    numberOrNull(source?.spent_day) ??
     numberOrNull(source?.spend_day) ??
     numberOrNull(source?.day_spend) ??
+    numberOrNull(source?.today_spend) ??
+    numberOrNull(source?.today_expense) ??
     numberOrNull(source?.expense_day) ??
+    numberOrNull(source?.expense_today) ??
     numberOrNull(source?.spent_today)
+  );
+}
+
+function readBudgetSpentToday(source, budgetRule) {
+  return (
+    numberOrNull(budgetRule?.spent) ??
+    numberOrNull(budgetRule?.spent_today) ??
+    numberOrNull(budgetRule?.current) ??
+    numberOrNull(budgetRule?.used) ??
+    numberOrNull(source?.budget_spent_today) ??
+    numberOrNull(source?.budget_spent) ??
+    null
   );
 }
 
@@ -215,12 +303,15 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
     const budgetLimit = numberOrNull(budgetRule.limit ?? source.budget_limit ?? source.budget_rule_limit);
     const spendLimit = resolveSpendLimitConfig(source);
     const spendToday = readCampaignSpendToday(source);
+    const budgetSpentToday = readBudgetSpentToday(source, budgetRule);
 
     if (budgetLimit !== null && budgetLimit > 0) {
       budgetLimits.push(budgetLimit);
     }
+    if (budgetSpentToday !== null && budgetSpentToday >= 0) {
+      budgetSpentValues.push(budgetSpentToday);
+    }
     if (spendToday !== null && spendToday >= 0) {
-      budgetSpentValues.push(spendToday);
       spendSpentValues.push(spendToday);
     }
     if (spendLimit?.limit !== null && spendLimit?.limit !== undefined && spendLimit.limit > 0) {
@@ -240,7 +331,7 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
   };
 }
 
-function normalizeCatalogCampaignStates(raw) {
+function normalizeCatalogCampaignStates(raw, extraSources = []) {
   const payload = raw || {};
   const rows = [];
   for (const key of CATALOG_CAMPAIGN_FIELD_ORDER) {
@@ -249,7 +340,7 @@ function normalizeCatalogCampaignStates(raw) {
       continue;
     }
     const meta = CATALOG_CAMPAIGN_FIELD_META[key] || {};
-    const campaigns = catalogCampaignRowsForKey(payload, key);
+    const campaigns = catalogCampaignRowsForKey(payload, key, extraSources);
     rows.push({
       key,
       label: meta.label || key,
@@ -312,7 +403,7 @@ async function collectShopCatalog(shop, client, includeExtended) {
       is_active: product.is_active,
       stock: statItem.stock,
       campaigns_count: statItem.campaigns_count,
-      campaign_states: normalizeCatalogCampaignStates(campaignData),
+      campaign_states: normalizeCatalogCampaignStates(campaignData, [product, statItem]),
       manual_campaigns_count: campaignData.manual_count,
       expense_sum: stat.sum,
       views: stat.views,
