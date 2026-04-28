@@ -38,6 +38,12 @@ type SkuBarLabelProps = {
   height?: number;
   value?: number | string;
 };
+type DrrLineLabelProps = {
+  x?: number | string;
+  y?: number | string;
+  value?: unknown;
+  viewBox?: unknown;
+};
 
 const CHART_GRID = "#e7e3ee";
 const CHART_SYNC_ID = "catalog-selection-chart";
@@ -304,6 +310,62 @@ function SkuBarLabel({ x = 0, y = 0, width = 0, height = 0, value }: SkuBarLabel
   );
 }
 
+function createDrrLineLabel({
+  color,
+  compact,
+  offset,
+}: {
+  color: string;
+  compact: boolean;
+  offset: number;
+}) {
+  return function DrrLineLabel({ x = 0, y = 0, value, viewBox }: DrrLineLabelProps) {
+    const numericValue = Number(value);
+    const pointX = Number(x);
+    const pointY = Number(y);
+    if (!Number.isFinite(numericValue) || !Number.isFinite(pointX) || !Number.isFinite(pointY)) {
+      return null;
+    }
+
+    const viewBoxRecord = viewBox && typeof viewBox === "object" ? (viewBox as Record<string, unknown>) : {};
+    const viewBoxY = Number(viewBoxRecord.y ?? 0);
+    const viewBoxHeight = Number(viewBoxRecord.height ?? 160);
+    const top = viewBoxY + 10;
+    const bottom = viewBoxY + viewBoxHeight - 8;
+    const labelY = Math.max(top, Math.min(bottom, pointY + offset));
+    const label = formatPercent(numericValue);
+
+    return (
+      <g pointerEvents="none">
+        <text
+          x={pointX}
+          y={labelY}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill="var(--color-surface)"
+          stroke="var(--color-surface)"
+          strokeWidth={compact ? 3 : 4}
+          fontSize={compact ? 8.5 : 9.5}
+          fontWeight={800}
+        >
+          {label}
+        </text>
+        <text
+          x={pointX}
+          y={labelY}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={color}
+          fontSize={compact ? 8.5 : 9.5}
+          fontWeight={800}
+        >
+          {label}
+        </text>
+      </g>
+    );
+  };
+}
+
 function SplitMetricChart({
   title,
   rows,
@@ -507,7 +569,7 @@ function CatalogDrrChart({
           </div>
         ) : (
           <ResponsiveContainer>
-            <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: compact ? 0 : 8 }}>
+            <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: compact ? 14 : 22, right: 8, left: 8, bottom: compact ? 4 : 8 }}>
               <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />
               <XAxis
                 dataKey="label"
@@ -536,7 +598,16 @@ function CatalogDrrChart({
                   activeDot={{ r: 4.5 }}
                   connectNulls
                   isAnimationActive={false}
-                />
+                >
+                  <LabelList
+                    dataKey={series.key}
+                    content={createDrrLineLabel({
+                      color: series.color,
+                      compact,
+                      offset: series.key === "drr_ads" ? -12 : 14,
+                    })}
+                  />
+                </Line>
               ))}
             </ComposedChart>
           </ResponsiveContainer>

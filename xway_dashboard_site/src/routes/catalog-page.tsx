@@ -342,10 +342,13 @@ function buildCatalogCampaignLimitRow(
 }
 
 function buildCatalogCampaignLimitRows(states: CatalogCampaignState[]): CatalogCampaignLimitRow[] {
+  const budgetRow = buildCatalogCampaignLimitRow("budget", "Бюджет", states);
+  const spendRow = buildCatalogCampaignLimitRow("spend", "День", states);
+
   return [
-    buildCatalogCampaignLimitRow("budget", "Бюджет", states),
-    buildCatalogCampaignLimitRow("spend", "День", states),
-  ].filter((row): row is CatalogCampaignLimitRow => Boolean(row));
+    budgetRow ?? { key: "budget", label: "Бюджет", current: 0, total: null, active: false, percent: null },
+    spendRow ?? { key: "spend", label: "День", current: 0, total: null, active: false, percent: null },
+  ];
 }
 
 function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] }) {
@@ -355,19 +358,28 @@ function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] })
 
   return (
     <div className="catalog-campaign-limit-bars">
-      {rows.map((row) => (
-        <div
-          key={row.key}
-          className={cn("catalog-campaign-limit-row", `is-${row.key}`, !row.active && "is-muted")}
-          title={`${row.label}: ${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`}
-        >
-          <span className="catalog-campaign-limit-label">{row.label}</span>
-          <span className="catalog-campaign-limit-track" style={{ ["--campaign-limit-progress" as string]: `${row.percent ?? 0}%` }}>
-            <span />
-          </span>
-          <strong className="catalog-campaign-limit-value">{row.total !== null ? `${Math.round(row.percent ?? 0)}%` : formatMoney(row.current, true)}</strong>
-        </div>
-      ))}
+      {rows.map((row) => {
+        const hasData = row.total !== null || row.current > 0 || row.active;
+        return (
+          <div
+            key={row.key}
+            className={cn("catalog-campaign-limit-row", `is-${row.key}`, !hasData && "is-empty", !row.active && "is-muted")}
+            title={`${row.label}: ${
+              hasData
+                ? `${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`
+                : "данных нет"
+            }`}
+          >
+            <span className="catalog-campaign-limit-label">{row.label}</span>
+            <span className="catalog-campaign-limit-track" style={{ ["--campaign-limit-progress" as string]: `${row.percent ?? 0}%` }}>
+              <span />
+            </span>
+            <strong className="catalog-campaign-limit-value">
+              {hasData ? (row.total !== null ? `${Math.round(row.percent ?? 0)}%` : formatMoney(row.current, true)) : "н/д"}
+            </strong>
+          </div>
+        );
+      })}
     </div>
   );
 }

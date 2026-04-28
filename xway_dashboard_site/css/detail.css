@@ -954,29 +954,64 @@
 
 .catalog-toolbar-filter-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px;
   align-items: stretch;
   min-width: 0;
+  width: 100%;
 }
 
 .catalog-toolbar-search {
-  flex: 1 1 280px;
-  max-width: 520px;
-  min-height: 46px;
+  flex: 1 1 320px;
+  max-width: none;
+  min-width: 260px;
+  min-height: 50px;
   padding-top: 0;
   padding-bottom: 0;
 }
 
 .catalog-toolbar-select {
-  flex: 0 1 190px;
-  min-width: 170px;
-  max-width: 220px;
+  flex: 0 0 160px;
+  min-width: 150px;
+  max-width: 170px;
 }
 
 .catalog-toolbar-select > button {
-  min-height: 46px;
+  min-height: 50px;
+  height: 50px;
   padding: 8px 12px;
+}
+
+.range-toolbar-main {
+  min-width: 0;
+}
+
+.range-toolbar-period-group {
+  flex: 0 0 auto;
+}
+
+.range-toolbar-period > button,
+.range-toolbar-date,
+.catalog-toolbar-search {
+  min-height: 50px;
+  height: 50px;
+}
+
+.range-toolbar-date label {
+  min-height: 50px;
+}
+
+.range-toolbar-date input {
+  min-width: 6.6rem;
+}
+
+.range-toolbar-filters {
+  display: flex;
+  align-items: stretch;
+}
+
+.range-toolbar-extra {
+  min-height: 50px;
 }
 
 .catalog-filter-select {
@@ -1566,9 +1601,9 @@
   position: relative;
   display: grid;
   align-content: center;
-  gap: 7px;
-  min-height: 48px;
-  padding: 8px 10px;
+  gap: 8px;
+  min-height: 70px;
+  padding: 8px 10px 9px;
   border-radius: 14px;
   border: 1px solid rgba(128, 122, 147, 0.16);
   background: var(--surface-muted);
@@ -1585,13 +1620,13 @@
 
 .catalog-campaign-limit-bars {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .catalog-campaign-limit-row {
   display: grid;
-  grid-template-columns: auto minmax(30px, 1fr) auto;
+  grid-template-columns: 38px minmax(36px, 1fr) 30px;
   gap: 6px;
   align-items: center;
   min-width: 0;
@@ -1613,6 +1648,10 @@
   --campaign-limit-fill: var(--muted);
 }
 
+.catalog-campaign-limit-row.is-empty {
+  opacity: 0.52;
+}
+
 .catalog-campaign-limit-label,
 .catalog-campaign-limit-value {
   overflow: hidden;
@@ -1625,12 +1664,13 @@
 }
 
 .catalog-campaign-limit-label {
-  max-width: 44px;
+  max-width: 38px;
   color: var(--muted);
 }
 
 .catalog-campaign-limit-value {
-  max-width: 48px;
+  max-width: 30px;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1648,6 +1688,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--campaign-limit-progress, 0%);
+  min-width: var(--campaign-limit-min-width, 0);
   border-radius: inherit;
   background: linear-gradient(90deg, var(--campaign-limit-fill), color-mix(in srgb, var(--campaign-limit-fill) 72%, white));
 }
@@ -2287,8 +2328,20 @@ body.sidebar-collapsed #status-pill {
     grid-template-columns: 1fr;
   }
 
+  .range-toolbar-period-group,
+  .range-toolbar-filters,
+  .range-toolbar-extra {
+    width: 100%;
+  }
+
+  .range-toolbar-period,
+  .range-toolbar-date {
+    width: 100%;
+  }
+
   .catalog-toolbar-search,
   .catalog-toolbar-select {
+    min-width: 0;
     max-width: none;
     width: 100%;
   }

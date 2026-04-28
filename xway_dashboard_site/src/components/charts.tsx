@@ -16,12 +16,13 @@ import { buildDailyBidRows, formatBidMoney, resolveBidKind, resolveBidLabel } fr
 import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent, toNumber } from "../lib/format";
 import type { CampaignSummary, ClusterDailyRow, DailyStat, HeatmapPayload, OrdersHeatmapPayload, ProductSummary } from "../lib/types";
 
-const CHART_GRID = "#e7e3ee";
-const CHART_TICK = "#807a93";
+const CHART_GRID = "var(--color-line)";
+const CHART_TICK = "var(--color-muted)";
 const CHART_TOOLTIP = {
   borderRadius: 16,
-  border: "1px solid #e3e1ea",
-  background: "rgba(255,255,255,0.96)",
+  border: "1px solid var(--color-line)",
+  background: "var(--color-surface)",
+  color: "var(--color-ink)",
   boxShadow: "0 18px 40px rgba(44,35,66,0.12)",
 };
 const OVERVIEW_WINDOWS = [7, 14, 30, 60] as const;

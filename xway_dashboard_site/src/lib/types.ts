@@ -132,6 +132,17 @@ export interface BidLogEntry {
   recom?: boolean | null;
 }
 
+export interface ClusterActionLogEntry {
+  ts: string;
+  ts_sort?: string | null;
+  action: string;
+  author: string;
+  campaign_id?: number | null;
+  campaign_name?: string | null;
+  normquery_id?: number | null;
+  cluster_name?: string | null;
+}
+
 export interface HeatmapHour {
   hour: number;
   views: number;
@@ -457,6 +468,7 @@ export interface ProductSummary {
   schedule_aggregate: ScheduleAggregate;
   campaigns: CampaignSummary[];
   bid_log: BidLogEntry[];
+  cluster_action_log?: ClusterActionLogEntry[];
   operations?: ProductOperationsSummary | null;
 }
 

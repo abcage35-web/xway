@@ -75,10 +75,10 @@ interface ProductLoaderData {
   payloadIsCached?: boolean;
 }
 
-const PANEL_CLASS = "rounded-[30px] border border-[var(--color-line)] bg-white shadow-[0_24px_60px_rgba(44,35,66,0.08)]";
-const SOFT_PANEL_CLASS = "rounded-[24px] border border-[var(--color-line)] bg-white shadow-[0_18px_46px_rgba(44,35,66,0.06)]";
+const PANEL_CLASS = "rounded-[30px] border border-[var(--color-line)] bg-[var(--color-surface)] shadow-[0_24px_60px_rgba(44,35,66,0.08)]";
+const SOFT_PANEL_CLASS = "rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface)] shadow-[0_18px_46px_rgba(44,35,66,0.06)]";
 const EXTERNAL_PILL_LINK_CLASS =
-  "inline-flex items-center gap-1.5 rounded-full border border-[rgba(61,130,216,0.18)] bg-[rgba(237,243,255,0.72)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#3d82d8] transition hover:border-[rgba(61,130,216,0.34)] hover:bg-[rgba(237,243,255,0.96)]";
+  "inline-flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-surface-soft)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-blue)] transition hover:border-[var(--color-line-strong)] hover:bg-[var(--color-surface-strong)]";
 const CHART_PRELOAD_DAYS = 60;
 const CLUSTER_POSITION_TIMELINE_DAYS = 7;
 const COMPARE_ENABLED_STORAGE_KEY = "xway-product-compare-enabled";
@@ -3536,7 +3536,7 @@ function resolveClusterStrategyTone(isActive: boolean) {
         icon: "border-emerald-200 bg-emerald-100 text-emerald-700",
       }
     : {
-        icon: "border-slate-200 bg-white text-slate-500",
+        icon: "border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)]",
       };
 }
 
@@ -3774,13 +3774,13 @@ function BidAccentCard({
       background: "bg-gradient-to-br from-[rgba(237,243,255,0.92)] to-[rgba(226,237,255,0.72)]",
       border: "border-[rgba(75,123,255,0.18)]",
       chart: "#3d82d8",
-      affordance: "bg-white/78 text-[#3d82d8] shadow-[0_10px_24px_rgba(61,130,216,0.12)]",
+      affordance: "bg-[var(--color-surface-soft)] text-[#3d82d8] shadow-[0_10px_24px_rgba(61,130,216,0.12)]",
     },
     clicks: {
       background: "bg-gradient-to-br from-[rgba(245,240,255,0.92)] to-[rgba(237,230,255,0.74)]",
       border: "border-[rgba(132,99,255,0.2)]",
       chart: "#7b61ff",
-      affordance: "bg-white/78 text-[#7b61ff] shadow-[0_10px_24px_rgba(123,97,255,0.12)]",
+      affordance: "bg-[var(--color-surface-soft)] text-[#7b61ff] shadow-[0_10px_24px_rgba(123,97,255,0.12)]",
     },
   } as const;
   const style = palette[tone];
@@ -4236,7 +4236,7 @@ function CampaignPerformanceBoard({
   const rowKeys = ["volume", "cost", "rate"] as const;
 
   return (
-    <div className="relative overflow-visible rounded-[20px] border border-[var(--color-line)] bg-white">
+    <div className="relative overflow-visible rounded-[20px] border border-[var(--color-line)] bg-[var(--color-surface)]">
       <div className="grid overflow-hidden rounded-t-[20px] border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ gridTemplateColumns: "repeat(4, minmax(0,1fr))" }}>
         {columns.map((column, index) => (
           <div key={column.stage} className={cn("px-3 py-2", index > 0 && "border-l border-[var(--color-line)]")}>
@@ -4632,7 +4632,7 @@ function PerformanceOverviewBoard({
 
   return (
     <div className="overflow-x-auto">
-      <div className="relative min-w-[1320px] overflow-visible rounded-[20px] border border-[var(--color-line)] bg-white">
+      <div className="relative min-w-[1320px] overflow-visible rounded-[20px] border border-[var(--color-line)] bg-[var(--color-surface)]">
       <div className="hidden sm:block">
           <div className="grid overflow-hidden rounded-t-[20px] border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ gridTemplateColumns: boardGridTemplate }}>
             {columns.map((column, index) => (
@@ -4640,7 +4640,7 @@ function PerformanceOverviewBoard({
                 <div className="flex h-full items-center justify-between gap-3">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-muted)]">{column.stage}</span>
                   {column.headerMetric ? (
-                    <div className="rounded-[12px] bg-white/80 px-3 py-1.5 text-right shadow-[0_8px_18px_rgba(44,35,66,0.05)]">
+                    <div className="rounded-[12px] bg-[var(--color-surface-soft)] px-3 py-1.5 text-right shadow-[0_8px_18px_rgba(44,35,66,0.05)]">
                       <div className="flex flex-nowrap items-baseline justify-end gap-1 whitespace-nowrap">
                         <strong className="font-display text-[1rem] leading-none text-[var(--color-ink)]">{column.headerMetric.value}</strong>
                         {column.headerMetric.delta ? (
@@ -4933,7 +4933,7 @@ function FunnelTile({ product }: { product: ProductSummary }) {
       </div>
       <div className="grid gap-3 sm:grid-cols-4">
         {steps.map((step, index) => (
-          <div key={step.label} className="relative rounded-[18px] border border-[var(--color-line)] bg-white px-4 py-3">
+          <div key={step.label} className="relative rounded-[18px] border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">{step.label}</p>
             <p className="mt-2 text-xl font-semibold text-[var(--color-ink)]">{formatCompactNumber(step.value)}</p>
             <p className="mt-1 text-xs text-[var(--color-muted)]">{step.hint}</p>
@@ -5862,7 +5862,7 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
                 rows={analyticsRows}
                 emptyText="Дневная аналитика отсутствует."
                 variant="flat"
-                className="overflow-visible rounded-[24px] border border-[var(--color-line)] bg-white"
+                className="overflow-visible rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface)]"
                 columns={[
                   {
                     key: "metric",
@@ -6043,7 +6043,7 @@ function CampaignStatusCard({
   const bidModeLabel = resolveCampaignBidModeLabel(campaign);
 
   return (
-    <article className={cn("rounded-[24px] border border-[var(--color-line)] bg-white p-4 shadow-[0_14px_32px_rgba(44,35,66,0.06)]", resolveCampaignStatusOutline(displayStatus.label))}>
+    <article className={cn("rounded-[24px] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 shadow-[0_14px_32px_rgba(44,35,66,0.06)]", resolveCampaignStatusOutline(displayStatus.label))}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="mb-2 flex flex-wrap gap-2">
@@ -6478,7 +6478,7 @@ function CampaignClustersContent({
                 }
                 className={cn(
                   "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-                  isActive ? button.tone : "border-[var(--color-line)] bg-white text-[var(--color-muted)] hover:bg-[var(--color-surface-soft)]",
+                  isActive ? button.tone : "border-[var(--color-line)] bg-[var(--color-surface)] text-[var(--color-muted)] hover:bg-[var(--color-surface-soft)]",
                 )}
               >
                 <Icon className="size-3.5" />
@@ -6877,7 +6877,7 @@ function ProductClustersPanel({
                   "min-w-[156px] rounded-[16px] border px-4 py-3 text-left transition",
                   isActive
                     ? "border-[rgba(126,94,246,0.24)] bg-[rgba(126,94,246,0.08)] shadow-[0_12px_24px_rgba(44,35,66,0.08)]"
-                    : "border-[var(--color-line)] bg-white hover:bg-[var(--color-surface-soft)]",
+                    : "border-[var(--color-line)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-soft)]",
                 )}
               >
                 <div className="text-sm font-semibold text-[var(--color-ink)]">{`${bidTypeLabel} · ${bidModeLabel}`}</div>
@@ -6976,19 +6976,52 @@ function renderCampaignHeatmap(product: ProductSummary) {
   );
 }
 
+function buildProductChangeLogRows(product: ProductSummary) {
+  const bidRows = product.bid_log.map((row) => ({
+    id: `bid-${row.campaign_id ?? row.campaign_name}-${row.datetime}-${row.zone}-${row.cpm}`,
+    kind: "Ставка",
+    datetime: row.datetime,
+    datetimeSort: row.datetime_sort || row.datetime,
+    target: row.campaign_name || "—",
+    detail: row.cpm !== null && row.cpm !== undefined ? formatMoney(row.cpm) : "—",
+    zone: row.zone || "—",
+    position: row.new_position || "—",
+    source: row.origin || "—",
+  }));
+  const clusterRows = (product.cluster_action_log || []).map((row) => ({
+    id: `cluster-${row.campaign_id ?? "campaign"}-${row.normquery_id ?? "cluster"}-${row.ts}-${row.action}`,
+    kind: "Кластер",
+    datetime: row.ts,
+    datetimeSort: row.ts_sort || row.ts,
+    target: [row.campaign_name, row.cluster_name].filter(Boolean).join(" / ") || "—",
+    detail: row.action || "—",
+    zone: "—",
+    position: "—",
+    source: row.author || "—",
+  }));
+
+  return [...bidRows, ...clusterRows].sort((left, right) => String(right.datetimeSort || "").localeCompare(String(left.datetimeSort || "")));
+}
+
 function renderBids(product: ProductSummary) {
+  const changeLogRows = buildProductChangeLogRows(product);
+  const clusterActionLogCount = product.cluster_action_log?.length || 0;
   return (
-    <LegacySection title="Логи изменения ставки" note={`${formatNumber(product.bid_log.length)} записей по изменениям ставок`}>
+    <LegacySection
+      title="Логи изменений"
+      note={`${formatNumber(changeLogRows.length)} записей: ставки ${formatNumber(product.bid_log.length)}, кластеры ${formatNumber(clusterActionLogCount)}`}
+    >
       <MetricTable
-        rows={product.bid_log}
-        emptyText="Лог изменений ставок по товару пока пуст."
+        rows={changeLogRows}
+        emptyText="Лог изменений по товару пока пуст."
         columns={[
           { key: "datetime", header: "Время", render: (row) => row.datetime },
-          { key: "campaign_name", header: "Кампания", render: (row) => row.campaign_name },
+          { key: "kind", header: "Тип", render: (row) => row.kind },
+          { key: "target", header: "Кампания / кластер", render: (row) => row.target },
+          { key: "detail", header: "Действие / ставка", render: (row) => row.detail },
           { key: "zone", header: "Зона", render: (row) => row.zone },
-          { key: "cpm", header: "Ставка CPM", align: "right", render: (row) => formatMoney(row.cpm) },
-          { key: "new_position", header: "Новая позиция", align: "right", render: (row) => row.new_position || "—" },
-          { key: "origin", header: "Источник", render: (row) => row.origin || "—" },
+          { key: "position", header: "Новая позиция", align: "right", render: (row) => row.position },
+          { key: "source", header: "Источник / инициатор", render: (row) => row.source },
         ]}
       />
     </LegacySection>
@@ -7085,7 +7118,7 @@ function CampaignChartsOverlayDialog({
                   <article
                     key={`overlay-campaign-chart-${campaign.id}`}
                     className={cn(
-                      "campaign-overlay-card min-w-0 self-start rounded-[28px] border border-[var(--color-line)] bg-white p-4 shadow-[0_14px_32px_rgba(44,35,66,0.06)]",
+                      "campaign-overlay-card min-w-0 self-start rounded-[28px] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 shadow-[0_14px_32px_rgba(44,35,66,0.06)]",
                       resolveCampaignStatusOutline(displayStatus.key),
                     )}
                     >
@@ -7322,8 +7355,8 @@ function LegacyTabBar({
             className={cn(
               "rounded-[11px] px-3.5 py-2 text-[13px] font-medium leading-none transition",
               activeTab === tab.value
-                ? "bg-white text-[var(--color-ink)] shadow-[0_8px_20px_rgba(44,35,66,0.07)]"
-                : "text-[var(--color-muted)] hover:bg-white/70 hover:text-[var(--color-ink)]",
+                ? "bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_8px_20px_rgba(44,35,66,0.07)]"
+                : "text-[var(--color-muted)] hover:bg-[var(--color-surface-soft)] hover:text-[var(--color-ink)]",
             )}
           >
             {tab.label}

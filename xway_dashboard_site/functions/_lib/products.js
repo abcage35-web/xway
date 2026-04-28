@@ -632,6 +632,25 @@ function normalizeClusterRows(statsPayload, positionsPayload, additionalPayload,
   };
 }
 
+function normalizeClusterActionHistory(campaign, cluster, rows) {
+  return [...(rows || [])]
+    .map((row) => {
+      const ts = row?.ts || row?.datetime || row?.created || row?.created_at || row?.date || "";
+      return {
+        ts,
+        ts_sort: row?.ts_sort || row?.datetime_sort || row?.created_at || row?.created || ts || null,
+        action: row?.action || row?.message || row?.status || row?.type || "Действие",
+        author: row?.author || row?.user || row?.username || row?.initiator || "—",
+        campaign_id: campaign?.id ?? null,
+        campaign_name: campaign?.name ?? null,
+        normquery_id: cluster?.normquery_id ?? null,
+        cluster_name: cluster?.name ?? null,
+      };
+    })
+    .filter((row) => row.ts || row.action)
+    .sort((left, right) => String(right.ts_sort || right.ts || "").localeCompare(String(left.ts_sort || left.ts || "")));
+}
+
 function additionalStatsStart(period) {
   const start = parseIsoDate(period?.current_start);
   const end = parseIsoDate(period?.current_end);
@@ -881,6 +900,9 @@ function productSummary(article, match, shopInfo, info, stocksRulePayload, statI
     bid_log: campaigns
       .flatMap((campaign) => campaign?.bid_history || [])
       .sort((left, right) => String(right.datetime_sort || "").localeCompare(String(left.datetime_sort || ""))),
+    cluster_action_log: campaigns
+      .flatMap((campaign) => campaign?.cluster_action_history || [])
+      .sort((left, right) => String(right.ts_sort || right.ts || "").localeCompare(String(left.ts_sort || left.ts || ""))),
     errors,
     raw: {
       product_list_item: cloneValue(product),
@@ -938,10 +960,12 @@ async function collectCampaignHeavyPayload(client, shopId, productId, campaignId
   let secondaryValues = {
     cluster_positions: {},
     cluster_additional: {},
+    cluster_history: {},
   };
   let secondaryErrors = {
     cluster_positions: null,
     cluster_additional: null,
+    cluster_history: null,
   };
 
   if (clusterIds.length) {
@@ -949,8 +973,18 @@ async function collectCampaignHeavyPayload(client, shopId, productId, campaignId
       {
         cluster_positions: [() => client.productNormqueriesPositions(shopId, productId, clusterIds), {}],
         cluster_additional: [() => client.campaignAdditionalStatsForNormqueries(shopId, productId, campaignId, clusterIds, additionalStatsStart(client.range), client.range.current_end), {}],
+        cluster_history: [
+          async () => {
+            const entries = await mapWithConcurrency(clusterIds, 4, async (normqueryId) => {
+              const [history] = await safeCall(() => client.campaignNormqueryHistory(shopId, productId, campaignId, normqueryId), []);
+              return [String(normqueryId), history || []];
+            });
+            return Object.fromEntries(entries);
+          },
+          {},
+        ],
       },
-      2,
+      3,
     );
   }
 
@@ -963,6 +997,7 @@ async function collectCampaignHeavyPayload(client, shopId, productId, campaignId
     cluster_stats_payload: clusterStatsPayload,
     cluster_positions_payload: secondaryValues.cluster_positions || {},
     cluster_additional_payload: secondaryValues.cluster_additional || {},
+    cluster_history_payload: secondaryValues.cluster_history || {},
     errors: {
       schedule: primaryErrors.schedule,
       bid_history: primaryErrors.bid_history,
@@ -972,6 +1007,7 @@ async function collectCampaignHeavyPayload(client, shopId, productId, campaignId
       cluster_stats: primaryErrors.cluster_stats,
       cluster_positions: secondaryErrors.cluster_positions,
       cluster_additional: secondaryErrors.cluster_additional,
+      cluster_history: secondaryErrors.cluster_history,
     },
   };
 }
@@ -1077,11 +1113,15 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
         client.range.current_start,
         client.range.current_end,
       );
+      summary.cluster_action_history = summary.clusters.items.flatMap((cluster) =>
+        normalizeClusterActionHistory(campaign, cluster, heavyPayload.cluster_history_payload?.[String(cluster.normquery_id)] || []),
+      );
       summary.cluster_errors = Object.fromEntries(
         Object.entries({
           stats: heavyErrors.cluster_stats || heavyErrors.fatal || null,
           positions: heavyErrors.cluster_positions || heavyErrors.fatal || null,
           additional: heavyErrors.cluster_additional || heavyErrors.fatal || null,
+          history: heavyErrors.cluster_history || heavyErrors.fatal || null,
         }).filter(([, value]) => Boolean(value)),
       );
     } else {
@@ -1115,6 +1155,7 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
         unified: campaign?.unified ?? false,
       };
       summary.cluster_errors = {};
+      summary.cluster_action_history = [];
     }
 
     return summary;

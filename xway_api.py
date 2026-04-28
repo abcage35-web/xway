@@ -1194,10 +1194,12 @@ def _collect_campaign_heavy_payload(
     secondary_values = {
         "cluster_positions": {},
         "cluster_additional": {},
+        "cluster_history": {},
     }
     secondary_errors: Dict[str, Optional[str]] = {
         "cluster_positions": None,
         "cluster_additional": None,
+        "cluster_history": None,
     }
     if cluster_ids:
         secondary_values, secondary_errors = _run_parallel_safe_calls(
@@ -1217,8 +1219,24 @@ def _collect_campaign_heavy_payload(
                     ),
                     {},
                 ),
+                "cluster_history": (
+                    lambda: {
+                        str(normquery_id): _safe_call(
+                            lambda normquery_id=normquery_id: api.campaign_normquery_history(
+                                shop_id,
+                                product_id,
+                                campaign_id,
+                                normquery_id,
+                            ),
+                            [],
+                        )[0]
+                        or []
+                        for normquery_id in cluster_ids
+                    },
+                    {},
+                ),
             },
-            max_workers=2,
+            max_workers=3,
         )
 
     return {
@@ -1230,6 +1248,7 @@ def _collect_campaign_heavy_payload(
         "cluster_stats_payload": cluster_stats_payload,
         "cluster_positions_payload": secondary_values.get("cluster_positions") or {},
         "cluster_additional_payload": secondary_values.get("cluster_additional") or {},
+        "cluster_history_payload": secondary_values.get("cluster_history") or {},
         "errors": {
             "schedule": primary_errors.get("schedule"),
             "bid_history": primary_errors.get("bid_history"),
@@ -1239,6 +1258,7 @@ def _collect_campaign_heavy_payload(
             "cluster_stats": primary_errors.get("cluster_stats"),
             "cluster_positions": secondary_errors.get("cluster_positions"),
             "cluster_additional": secondary_errors.get("cluster_additional"),
+            "cluster_history": secondary_errors.get("cluster_history"),
         },
     }
 
@@ -1971,6 +1991,31 @@ def _additional_stats_start(period: Dict[str, Any]) -> str:
     return (end - timedelta(days=30)).isoformat()
 
 
+def _normalize_cluster_action_history(
+    campaign: Dict[str, Any],
+    cluster: Dict[str, Any],
+    rows: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    history = []
+    for row in rows or []:
+        ts = row.get("ts") or row.get("datetime") or row.get("created") or row.get("created_at") or row.get("date") or ""
+        history.append(
+            {
+                "ts": ts,
+                "ts_sort": row.get("ts_sort") or row.get("datetime_sort") or row.get("created_at") or row.get("created") or ts or None,
+                "action": row.get("action") or row.get("message") or row.get("status") or row.get("type") or "Действие",
+                "author": row.get("author") or row.get("user") or row.get("username") or row.get("initiator") or "—",
+                "campaign_id": campaign.get("id"),
+                "campaign_name": campaign.get("name"),
+                "normquery_id": cluster.get("normquery_id"),
+                "cluster_name": cluster.get("name"),
+            }
+        )
+    history = [row for row in history if row.get("ts") or row.get("action")]
+    history.sort(key=lambda row: row.get("ts_sort") or row.get("ts") or "", reverse=True)
+    return history
+
+
 def _catalog_campaign_status_label(status_code: Optional[str]) -> Optional[str]:
     normalized = str(status_code or "").strip().upper()
     if not normalized:
@@ -2330,6 +2375,11 @@ def _product_summary(
             key=lambda row: row.get("datetime_sort") or "",
             reverse=True,
         ),
+        "cluster_action_log": sorted(
+            [entry for campaign in campaigns for entry in campaign.get("cluster_action_history", [])],
+            key=lambda row: row.get("ts_sort") or row.get("ts") or "",
+            reverse=True,
+        ),
         "errors": errors,
         "raw": {
             "product_list_item": product,
@@ -2482,6 +2532,7 @@ def _collect_single_article(
             cluster_stats_payload = heavy_payload.get("cluster_stats_payload") or {}
             cluster_positions_payload = heavy_payload.get("cluster_positions_payload") or {}
             cluster_additional_payload = heavy_payload.get("cluster_additional_payload") or {}
+            cluster_history_payload = heavy_payload.get("cluster_history_payload") or {}
             summary["schedule_config"] = _normalize_schedule(schedule_payload)
             summary["schedule_error"] = heavy_errors.get("schedule") or heavy_errors.get("fatal")
             summary["bid_history"] = _normalize_bid_history(campaign, bid_history_payload)
@@ -2503,12 +2554,22 @@ def _collect_single_article(
                 start=api.range["current_start"],
                 end=api.range["current_end"],
             )
+            summary["cluster_action_history"] = [
+                entry
+                for cluster in summary["clusters"].get("items", [])
+                for entry in _normalize_cluster_action_history(
+                    campaign,
+                    cluster,
+                    cluster_history_payload.get(str(cluster.get("normquery_id"))) or [],
+                )
+            ]
             summary["cluster_errors"] = {
                 key: value
                 for key, value in {
                     "stats": heavy_errors.get("cluster_stats") or heavy_errors.get("fatal"),
                     "positions": heavy_errors.get("cluster_positions") or heavy_errors.get("fatal"),
                     "additional": heavy_errors.get("cluster_additional") or heavy_errors.get("fatal"),
+                    "history": heavy_errors.get("cluster_history") or heavy_errors.get("fatal"),
                 }.items()
                 if value
             }
@@ -2543,6 +2604,7 @@ def _collect_single_article(
                 "unified": campaign.get("unified"),
             }
             summary["cluster_errors"] = {}
+            summary["cluster_action_history"] = []
         campaigns.append(summary)
 
     errors = {

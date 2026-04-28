@@ -377,15 +377,15 @@ export function RangeToolbar({
   extra?: ReactNode;
 }) {
   return (
-    <div className="glass-panel grid gap-3 rounded-[28px] p-3 sm:p-3.5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
+    <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
+      <div className="range-toolbar-main flex flex-wrap items-stretch gap-2.5">
+        <div className="range-toolbar-period-group flex min-w-0 flex-wrap items-stretch gap-2.5">
           <SearchableSelect
             label="Период"
             value={preset}
             onChange={onPresetChange}
             icon={<CalendarDays className="size-4" />}
-            className="w-full xl:w-[210px]"
+            className="range-toolbar-period w-full sm:w-[180px]"
             options={[
               { value: "custom", label: "Свой диапазон" },
               { value: "today", label: "Сегодня" },
@@ -397,7 +397,7 @@ export function RangeToolbar({
             ]}
           />
 
-          <div className="metric-chip grid w-full min-w-0 overflow-hidden rounded-2xl text-sm sm:grid-cols-2 xl:w-[420px] xl:flex-none">
+          <div className="range-toolbar-date metric-chip grid w-full min-w-0 overflow-hidden rounded-2xl text-sm sm:w-[356px] sm:flex-none sm:grid-cols-2">
             <label className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
               <span className="shrink-0 text-[var(--color-muted)]">Начало</span>
               <input
@@ -419,10 +419,9 @@ export function RangeToolbar({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">{extra}</div>
+        {filters ? <div className="range-toolbar-filters min-w-0 flex-1">{filters}</div> : null}
+        {extra ? <div className="range-toolbar-extra flex flex-wrap items-center gap-2.5">{extra}</div> : null}
       </div>
-
-      {filters ? <div>{filters}</div> : null}
     </div>
   );
 }
