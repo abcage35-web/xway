@@ -354,6 +354,41 @@ function normalizeCatalogCampaignStates(raw, extraSources = []) {
   return rows;
 }
 
+function productHasCampaignSlots(product, statItem) {
+  const campaignData = product?.campaigns_data || {};
+  return (
+    Boolean(campaignData.unified || campaignData.manual_search || campaignData.manual_recom || campaignData.cpc) ||
+    Number(statItem?.campaigns_count || 0) > 0 ||
+    Number(campaignData.manual_count || 0) > 0
+  );
+}
+
+async function collectCatalogCampaignDetailSources(shopId, products, statMap, client) {
+  const targets = products
+    .map((product) => {
+      const productId = product?.id;
+      const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
+      return productId !== null && productId !== undefined && productHasCampaignSlots(product, statItem) ? product : null;
+    })
+    .filter(Boolean);
+  const detailByProductId = new Map();
+  let errorCount = 0;
+
+  await mapWithConcurrency(targets, 4, async (product) => {
+    try {
+      const productId = product.id;
+      const stata = await client.productStata(shopId, productId);
+      detailByProductId.set(String(productId), {
+        campaign_wb: cloneValue(stata?.campaign_wb || []),
+      });
+    } catch {
+      errorCount += 1;
+    }
+  });
+
+  return { detailByProductId, loadedCount: detailByProductId.size, errorCount };
+}
+
 async function collectShopCatalog(shop, client, includeExtended) {
   const shopId = Number(shop.id);
   const [listingResult, shopDetailResult] = await Promise.allSettled([
@@ -379,6 +414,7 @@ async function collectShopCatalog(shop, client, includeExtended) {
   };
   const products = listWo.products_wb || [];
   const statMap = listStat.products_wb || {};
+  const campaignDetailSources = await collectCatalogCampaignDetailSources(shopId, products, statMap, client);
 
   const shopArticles = [];
   for (const product of products) {
@@ -389,6 +425,7 @@ async function collectShopCatalog(shop, client, includeExtended) {
     const productId = product.id;
     const campaignData = product.campaigns_data || {};
     const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
+    const campaignDetailSource = productId !== null && productId !== undefined ? campaignDetailSources.detailByProductId.get(String(productId)) : null;
     const stat = statItem.stat || {};
     const spend = statItem.spend || {};
     const articlePayload = {
@@ -403,7 +440,7 @@ async function collectShopCatalog(shop, client, includeExtended) {
       is_active: product.is_active,
       stock: statItem.stock,
       campaigns_count: statItem.campaigns_count,
-      campaign_states: normalizeCatalogCampaignStates(campaignData, [product, statItem]),
+      campaign_states: normalizeCatalogCampaignStates(campaignData, [product, statItem, campaignDetailSource]),
       manual_campaigns_count: campaignData.manual_count,
       expense_sum: stat.sum,
       views: stat.views,
@@ -483,6 +520,8 @@ async function collectShopCatalog(shop, client, includeExtended) {
     requests_num: shopDetail.requests_num,
     top_up_balance_type_code: shopDetail.top_up_balance_type_code,
     listing_meta: shopListingMeta,
+    campaign_limit_details_loaded: campaignDetailSources.loadedCount,
+    campaign_limit_details_errors: campaignDetailSources.errorCount,
     shop_detail_error: shopDetailError,
     products_count: shopArticles.length,
     listing_error: listingError,

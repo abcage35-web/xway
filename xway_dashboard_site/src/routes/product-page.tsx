@@ -3720,7 +3720,7 @@ function DrrCard({
   }, []);
 
   return (
-    <div className={cn("relative z-0 flex h-full min-h-[78px] flex-col justify-between gap-2 rounded-[14px] border px-3 py-2.5 transition-[z-index] hover:z-40 focus-within:z-40", tone.background, tone.border)}>
+    <div className={cn("product-drr-card relative z-0 flex h-full min-h-[78px] flex-col justify-between gap-2 rounded-[14px] border px-3 py-2.5 transition-[z-index] hover:z-40 focus-within:z-40", tone.background, tone.border)}>
       <span className="block min-h-[1.35rem] text-[9px] font-bold uppercase tracking-[0.1em] leading-[0.95] text-[var(--color-muted)]">
         {drr.label}
       </span>
@@ -3810,7 +3810,7 @@ function BidAccentCard({
   return (
     <div
       className={cn(
-        "relative z-0 flex min-h-[60px] w-full flex-col gap-2 rounded-[14px] border p-3 text-left transition-[z-index] hover:z-40 focus-within:z-40",
+        "product-accent-card relative z-0 flex min-h-[60px] w-full flex-col gap-2 rounded-[14px] border p-3 text-left transition-[z-index] hover:z-40 focus-within:z-40",
         style.background,
         style.border,
       )}
@@ -4006,7 +4006,7 @@ function SpendAccentCard({
   return (
     <div
       className={cn(
-        "relative z-0 flex min-h-[60px] w-full flex-col gap-2 rounded-[14px] border p-3 text-left transition-[z-index] hover:z-40 focus-within:z-40",
+        "product-accent-card is-spend relative z-0 flex min-h-[60px] w-full flex-col gap-2 rounded-[14px] border p-3 text-left transition-[z-index] hover:z-40 focus-within:z-40",
         "border-[rgba(241,120,40,0.22)] bg-gradient-to-br from-[rgba(255,248,240,0.92)] to-[rgba(255,242,226,0.74)]",
       )}
     >
@@ -4088,7 +4088,7 @@ function CampaignKeyTile({
   tone: string;
 }) {
   return (
-    <div className={cn("rounded-[20px] border px-4 py-4", tone)} style={{ borderColor: "var(--tone-border)", background: "var(--tone-bg)" }}>
+    <div className={cn("product-key-tile rounded-[20px] border px-4 py-4", tone)} style={{ borderColor: "var(--tone-border)", background: "var(--tone-bg)" }}>
       <div className="metric-level-list">
         <div className="metric-level">
           <p className="metric-level-label text-[0.78rem] font-medium leading-none text-[var(--color-muted)]">{label}</p>
@@ -6477,7 +6477,7 @@ function CampaignClustersContent({
                   )
                 }
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                  "cluster-filter-chip inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition",
                   isActive ? button.tone : "border-[var(--color-line)] bg-[var(--color-surface)] text-[var(--color-muted)] hover:bg-[var(--color-surface-soft)]",
                 )}
               >
@@ -6490,7 +6490,7 @@ function CampaignClustersContent({
         </div>
 
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-[18px] border border-slate-200 bg-slate-50/70 px-4 py-3 text-[var(--color-ink)]">
+          <div className="cluster-analytics-card is-excluded rounded-[18px] border border-slate-200 bg-slate-50/70 px-4 py-3 text-[var(--color-ink)]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Исключённые</div>
@@ -6533,7 +6533,7 @@ function CampaignClustersContent({
 
           {analyticsCards.length ? (
             analyticsCards.map((card) => (
-              <div key={card.key} className={cn("rounded-[18px] border px-4 py-3", card.tone)}>
+              <div key={card.key} className={cn("cluster-analytics-card rounded-[18px] border px-4 py-3", card.tone)}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.16em]">{card.label}</span>

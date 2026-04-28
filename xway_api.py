@@ -2259,6 +2259,52 @@ def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]], extra_sour
     return rows
 
 
+def _catalog_product_has_campaign_slots(product: Dict[str, Any], stat_item: Dict[str, Any]) -> bool:
+    campaign_data = product.get("campaigns_data") or {}
+    return bool(
+        campaign_data.get("unified")
+        or campaign_data.get("manual_search")
+        or campaign_data.get("manual_recom")
+        or campaign_data.get("cpc")
+        or (stat_item.get("campaigns_count") or 0) > 0
+        or (campaign_data.get("manual_count") or 0) > 0
+    )
+
+
+def _collect_catalog_campaign_detail_sources(
+    api: XwayApi,
+    shop_id: int,
+    products: List[Dict[str, Any]],
+    stat_map: Dict[str, Any],
+) -> Tuple[Dict[str, Dict[str, Any]], int]:
+    targets: List[Dict[str, Any]] = []
+    for product in products:
+        product_id = product.get("id")
+        stat_item = stat_map.get(str(product_id), {}) if product_id is not None else {}
+        if product_id is not None and _catalog_product_has_campaign_slots(product, stat_item):
+            targets.append(product)
+
+    detail_by_product_id: Dict[str, Dict[str, Any]] = {}
+    error_count = 0
+    if not targets:
+        return detail_by_product_id, error_count
+
+    with ThreadPoolExecutor(max_workers=min(6, len(targets))) as executor:
+        future_by_product_id = {
+            executor.submit(api.product_stata, shop_id, int(product["id"])): str(product["id"])
+            for product in targets
+            if product.get("id") is not None
+        }
+        for future in as_completed(future_by_product_id):
+            product_id = future_by_product_id[future]
+            try:
+                stata = future.result() or {}
+                detail_by_product_id[product_id] = {"campaign_wb": copy.deepcopy(stata.get("campaign_wb") or [])}
+            except Exception:
+                error_count += 1
+    return detail_by_product_id, error_count
+
+
 def _campaign_summary(campaign: Dict[str, Any]) -> Dict[str, Any]:
     stat = campaign.get("stat", {})
     payment_type_raw = str(campaign.get("payment_type") or "").strip().lower()
@@ -2835,6 +2881,7 @@ def _collect_shop_catalog(
     shop_detail_snapshot = _snapshot_fields(shop_detail, SHOP_DETAIL_SAFE_FIELDS) if include_extended else {}
     products = (listing.get("list_wo") or {}).get("products_wb") or []
     stat_map = (listing.get("list_stat") or {}).get("products_wb") or {}
+    campaign_detail_sources, campaign_detail_error_count = _collect_catalog_campaign_detail_sources(api, shop_id, products, stat_map)
     shop_articles: List[Dict[str, Any]] = []
     for product in products:
         article = str(product.get("external_id") or "").strip()
@@ -2843,6 +2890,7 @@ def _collect_shop_catalog(
         product_id = product.get("id")
         campaign_data = product.get("campaigns_data") or {}
         stat_item = stat_map.get(str(product_id), {}) if product_id is not None else {}
+        campaign_detail_source = campaign_detail_sources.get(str(product_id)) if product_id is not None else None
         stat = stat_item.get("stat") or {}
         spend = stat_item.get("spend") or {}
         article_payload = {
@@ -2857,7 +2905,7 @@ def _collect_shop_catalog(
             "is_active": product.get("is_active"),
             "stock": stat_item.get("stock"),
             "campaigns_count": stat_item.get("campaigns_count"),
-            "campaign_states": _normalize_catalog_campaign_states(campaign_data, [product, stat_item]),
+            "campaign_states": _normalize_catalog_campaign_states(campaign_data, [product, stat_item, campaign_detail_source]),
             "manual_campaigns_count": campaign_data.get("manual_count"),
             "expense_sum": stat.get("sum"),
             "views": stat.get("views"),
@@ -2935,6 +2983,8 @@ def _collect_shop_catalog(
         "requests_num": shop_detail.get("requests_num"),
         "top_up_balance_type_code": shop_detail.get("top_up_balance_type_code"),
         "listing_meta": shop_listing_meta,
+        "campaign_limit_details_loaded": len(campaign_detail_sources),
+        "campaign_limit_details_errors": campaign_detail_error_count,
         "shop_detail_error": shop_detail_error,
         "products_count": len(shop_articles),
         "listing_error": listing_error,

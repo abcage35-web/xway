@@ -87,6 +87,7 @@ const CATALOG_SUMMARY_METRIC_KEYS = [
 type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
 type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "turnover">, boolean>;
 type CatalogSummaryMetricKey = (typeof CATALOG_SUMMARY_METRIC_KEYS)[number];
+type CatalogSummarySparkline = { points: number[]; color: string };
 type CatalogQuickView = "all" | "attention" | "withSpend" | "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
 type CatalogAttentionRuleKey = "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
 
@@ -112,6 +113,26 @@ const DEFAULT_CATALOG_ATTENTION_RULES: Record<CatalogAttentionRuleKey, boolean> 
   lowCr: true,
   slowTurnover: true,
   withoutCampaigns: true,
+};
+
+const CATALOG_SUMMARY_SPARKLINE_COLORS: Record<CatalogSummaryMetricKey, string> = {
+  spend: "#f17828",
+  views: "#4b7bff",
+  clicks: "#8b64f6",
+  atbs: "#14a6a1",
+  orders: "#4ba66f",
+  ctr: "#3158c9",
+  cr: "#f04c7c",
+  cpm: "#f17828",
+  cpc: "#8b64f6",
+  atbCost: "#14a6a1",
+  cpo: "#4ba66f",
+  cr1: "#2998df",
+  cr2: "#a855f7",
+  revenue: "#1c9ed8",
+  drr: "#ff6b8a",
+  shops: "#807a93",
+  articles: "#807a93",
 };
 
 interface CatalogQuickViewSettingsState {
@@ -3332,12 +3353,26 @@ export function CatalogPage() {
     }
     return summaryMetricSettings[key].compact ? `${formatCompactNumber(numeric)} ₽` : formatMoney(numeric);
   };
+  const chartSparklineRows = (chartData?.rows ?? []).slice(-7);
+  const buildSummarySparkline = (
+    key: CatalogSummaryMetricKey,
+    getValue: (row: CatalogChartResponse["rows"][number]) => number | null | undefined,
+  ): CatalogSummarySparkline | undefined => {
+    if (!comparePayload || chartSparklineRows.length < 2) {
+      return undefined;
+    }
+    const points = chartSparklineRows
+      .map((row) => toNumber(getValue(row)))
+      .filter((value): value is number => value !== null);
+    return points.length >= 2 ? { points, color: CATALOG_SUMMARY_SPARKLINE_COLORS[key] } : undefined;
+  };
   const summaryMetrics: Array<{
     key: CatalogSummaryMetricKey;
     label: string;
     value: string;
     deltaText?: ReactNode;
     deltaClassName: string;
+    sparkline?: CatalogSummarySparkline;
   }> = [
     {
       key: "spend",
@@ -3345,6 +3380,7 @@ export function CatalogPage() {
       value: formatSummaryMoney("spend", visibleTotals.expense_sum),
       deltaText: renderDeltaText(formatSignedMoney(diffValue(visibleTotals.expense_sum, compareVisibleTotals?.expense_sum))),
       deltaClassName: deltaClassName(diffValue(visibleTotals.expense_sum, compareVisibleTotals?.expense_sum), false),
+      sparkline: buildSummarySparkline("spend", (row) => row.expense_sum),
     },
     {
       key: "views",
@@ -3352,6 +3388,7 @@ export function CatalogPage() {
       value: formatSummaryNumber("views", visibleTotals.views),
       deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.views, compareVisibleTotals?.views))),
       deltaClassName: deltaClassName(diffValue(visibleTotals.views, compareVisibleTotals?.views), true),
+      sparkline: buildSummarySparkline("views", (row) => row.views),
     },
     {
       key: "clicks",
@@ -3359,6 +3396,7 @@ export function CatalogPage() {
       value: formatSummaryNumber("clicks", visibleTotals.clicks),
       deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.clicks, compareVisibleTotals?.clicks))),
       deltaClassName: deltaClassName(diffValue(visibleTotals.clicks, compareVisibleTotals?.clicks), true),
+      sparkline: buildSummarySparkline("clicks", (row) => row.clicks),
     },
     {
       key: "atbs",
@@ -3366,6 +3404,7 @@ export function CatalogPage() {
       value: formatSummaryNumber("atbs", visibleTotals.atbs),
       deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.atbs, compareVisibleTotals?.atbs))),
       deltaClassName: deltaClassName(diffValue(visibleTotals.atbs, compareVisibleTotals?.atbs), true),
+      sparkline: buildSummarySparkline("atbs", (row) => row.atbs),
     },
     {
       key: "orders",
@@ -3373,6 +3412,7 @@ export function CatalogPage() {
       value: formatSummaryNumber("orders", visibleTotals.orders),
       deltaText: renderDeltaText(formatSignedNumber(diffValue(visibleTotals.orders, compareVisibleTotals?.orders))),
       deltaClassName: deltaClassName(diffValue(visibleTotals.orders, compareVisibleTotals?.orders), true),
+      sparkline: buildSummarySparkline("orders", (row) => row.orders),
     },
     {
       key: "ctr",
@@ -3380,6 +3420,7 @@ export function CatalogPage() {
       value: formatPercent(ctr),
       deltaText: renderDeltaText(formatSignedPercent(diffValue(ctr, compareCtr))),
       deltaClassName: deltaClassName(diffValue(ctr, compareCtr), true),
+      sparkline: buildSummarySparkline("ctr", (row) => row.ctr),
     },
     {
       key: "cr",
@@ -3387,6 +3428,7 @@ export function CatalogPage() {
       value: formatPercent(cr),
       deltaText: renderDeltaText(formatSignedPercent(diffValue(cr, compareCr))),
       deltaClassName: deltaClassName(diffValue(cr, compareCr), true),
+      sparkline: buildSummarySparkline("cr", (row) => row.crf),
     },
     {
       key: "cpm",
@@ -3394,6 +3436,7 @@ export function CatalogPage() {
       value: formatSummaryMoney("cpm", cpm),
       deltaText: renderDeltaText(formatSignedMoney(diffValue(cpm, compareCpm))),
       deltaClassName: deltaClassName(diffValue(cpm, compareCpm), false),
+      sparkline: buildSummarySparkline("cpm", (row) => summaryCost(row.expense_sum, row.views, 1000)),
     },
     {
       key: "cpc",
@@ -3401,6 +3444,7 @@ export function CatalogPage() {
       value: formatSummaryMoney("cpc", cpc),
       deltaText: renderDeltaText(formatSignedMoney(diffValue(cpc, compareCpc))),
       deltaClassName: deltaClassName(diffValue(cpc, compareCpc), false),
+      sparkline: buildSummarySparkline("cpc", (row) => summaryCost(row.expense_sum, row.clicks)),
     },
     {
       key: "atbCost",
@@ -3408,6 +3452,7 @@ export function CatalogPage() {
       value: formatSummaryMoney("atbCost", atbCost),
       deltaText: renderDeltaText(formatSignedMoney(diffValue(atbCost, compareAtbCost))),
       deltaClassName: deltaClassName(diffValue(atbCost, compareAtbCost), false),
+      sparkline: buildSummarySparkline("atbCost", (row) => summaryCost(row.expense_sum, row.atbs)),
     },
     {
       key: "cpo",
@@ -3415,6 +3460,7 @@ export function CatalogPage() {
       value: formatSummaryMoney("cpo", cpo),
       deltaText: renderDeltaText(formatSignedMoney(diffValue(cpo, compareCpo))),
       deltaClassName: deltaClassName(diffValue(cpo, compareCpo), false),
+      sparkline: buildSummarySparkline("cpo", (row) => summaryCost(row.expense_sum, row.orders)),
     },
     {
       key: "cr1",
@@ -3422,6 +3468,7 @@ export function CatalogPage() {
       value: formatPercent(cr1),
       deltaText: renderDeltaText(formatSignedPercent(diffValue(cr1, compareCr1))),
       deltaClassName: deltaClassName(diffValue(cr1, compareCr1), true),
+      sparkline: buildSummarySparkline("cr1", (row) => row.cr1),
     },
     {
       key: "cr2",
@@ -3429,6 +3476,7 @@ export function CatalogPage() {
       value: formatPercent(cr2),
       deltaText: renderDeltaText(formatSignedPercent(diffValue(cr2, compareCr2))),
       deltaClassName: deltaClassName(diffValue(cr2, compareCr2), true),
+      sparkline: buildSummarySparkline("cr2", (row) => row.cr2),
     },
     {
       key: "revenue",
@@ -3436,6 +3484,7 @@ export function CatalogPage() {
       value: formatSummaryMoney("revenue", revenue),
       deltaText: renderDeltaText(formatSignedMoney(diffValue(revenue, compareRevenue))),
       deltaClassName: deltaClassName(diffValue(revenue, compareRevenue), true),
+      sparkline: buildSummarySparkline("revenue", (row) => row.sum_price),
     },
     {
       key: "drr",
@@ -3443,6 +3492,7 @@ export function CatalogPage() {
       value: formatPercent(drr),
       deltaText: renderDeltaText(formatSignedPercent(diffValue(drr, compareDrr))),
       deltaClassName: deltaClassName(diffValue(drr, compareDrr), false),
+      sparkline: buildSummarySparkline("drr", (row) => row.drr_ads),
     },
     {
       key: "shops",
@@ -3942,6 +3992,7 @@ export function CatalogPage() {
                   value={metric.value}
                   deltaText={metric.deltaText}
                   deltaClassName={metric.deltaClassName}
+                  sparkline={metric.sparkline}
                   density="compact"
                 />
               ))}

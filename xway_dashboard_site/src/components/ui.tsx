@@ -7,6 +7,11 @@ import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, for
 import type { ScheduleAggregate } from "../lib/types";
 import { SearchableSelect } from "./searchable-multi-select";
 
+type MetricSparklineConfig = {
+  points: Array<number | null | undefined>;
+  color?: string;
+};
+
 export interface TableColumn<T> {
   key: string;
   header: ReactNode;
@@ -56,6 +61,7 @@ export function MetricCard({
   deltaText,
   deltaClassName,
   icon,
+  sparkline,
   density = "default",
   className,
 }: {
@@ -66,25 +72,68 @@ export function MetricCard({
   deltaText?: ReactNode;
   deltaClassName?: string;
   icon?: ReactNode;
+  sparkline?: MetricSparklineConfig | null;
   density?: "default" | "compact";
   className?: string;
 }) {
   const isCompact = density === "compact";
+  const sparklinePoints = (sparkline?.points || [])
+    .map((point) => (typeof point === "number" && Number.isFinite(point) ? point : null))
+    .filter((point): point is number => point !== null);
+  const showSparkline = sparklinePoints.length >= 2;
   return (
-    <div className={cn("glass-panel", isCompact ? "rounded-[22px] p-3 sm:p-3.5" : "rounded-3xl p-4 sm:p-5", className)}>
+    <div className={cn("glass-panel", showSparkline && "metric-card-with-sparkline", isCompact ? "rounded-[22px] p-3 sm:p-3.5" : "rounded-3xl p-4 sm:p-5", className)}>
       <div className={cn("flex items-start justify-between", isCompact ? "gap-2.5" : "gap-4")}>
-        <div className={cn(isCompact ? "space-y-1.5" : "space-y-2")}>
+        <div className={cn("min-w-0", isCompact ? "space-y-1.5" : "space-y-2")}>
           <p className={cn("uppercase text-[var(--color-muted)]", isCompact ? "text-[10px] tracking-[0.22em]" : "text-xs tracking-[0.24em]")}>{label}</p>
           <div className={cn("font-display font-semibold text-[var(--color-ink)]", isCompact ? "text-xl leading-none sm:text-2xl" : "text-2xl sm:text-3xl")}>{value}</div>
           {hint ? <p className={cn("text-[var(--color-muted)]", isCompact ? "text-xs" : "text-sm")}>{hint}</p> : null}
         </div>
         {icon ? <div className={cn("metric-chip text-brand-200", isCompact ? "rounded-[18px] p-2" : "rounded-2xl p-3")}>{icon}</div> : null}
+        {showSparkline ? <MetricCardSparkline points={sparklinePoints} color={sparkline?.color} compact={isCompact} /> : null}
       </div>
       {deltaText !== undefined || delta !== undefined ? (
         <p className={cn(isCompact ? "mt-2 text-xs font-semibold" : "mt-4 text-sm font-medium", deltaText !== undefined ? deltaClassName : relativeDeltaClass(delta))}>
           {deltaText !== undefined ? deltaText : delta === null ? "Без сравнения" : `( ${formatDelta(delta)} )`}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function MetricCardSparkline({
+  points,
+  color = "#f17828",
+  compact,
+}: {
+  points: number[];
+  color?: string;
+  compact: boolean;
+}) {
+  const width = compact ? 112 : 144;
+  const height = compact ? 42 : 50;
+  const paddingX = 3;
+  const paddingY = 5;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min;
+  const step = points.length > 1 ? (width - paddingX * 2) / (points.length - 1) : 0;
+  const coords = points.map((point, index) => {
+    const x = paddingX + index * step;
+    const y = range === 0 ? height / 2 : paddingY + (1 - (point - min) / range) * (height - paddingY * 2);
+    return { x, y };
+  });
+  const linePath = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+  const firstPoint = coords[0]!;
+  const lastPoint = coords[coords.length - 1]!;
+  const areaPath = `${linePath} L ${lastPoint.x.toFixed(2)} ${height - paddingY} L ${firstPoint.x.toFixed(2)} ${height - paddingY} Z`;
+
+  return (
+    <div className="metric-card-sparkline" aria-hidden="true" style={{ ["--sparkline-color" as string]: color }}>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+        <path className="metric-card-sparkline-area" d={areaPath} />
+        <path className="metric-card-sparkline-line" d={linePath} />
+      </svg>
     </div>
   );
 }

@@ -44,6 +44,13 @@ type DrrLineLabelProps = {
   value?: unknown;
   viewBox?: unknown;
 };
+type CatalogChartValueTableMetric = {
+  key: string;
+  label: string;
+  color: string;
+  active?: boolean;
+  getValue: (row: CatalogChartRow & { label: string }) => string;
+};
 
 const CHART_GRID = "#e7e3ee";
 const CHART_SYNC_ID = "catalog-selection-chart";
@@ -310,6 +317,51 @@ function SkuBarLabel({ x = 0, y = 0, width = 0, height = 0, value }: SkuBarLabel
   );
 }
 
+function CatalogChartValueTable({
+  rows,
+  metrics,
+  compact = false,
+}: {
+  rows: Array<CatalogChartRow & { label: string }>;
+  metrics: CatalogChartValueTableMetric[];
+  compact?: boolean;
+}) {
+  if (!rows.length || !metrics.length) {
+    return null;
+  }
+
+  return (
+    <div className={cn("catalog-chart-value-table", compact && "is-compact")}>
+      <div className="catalog-chart-value-table-scroll">
+        <div
+          className="catalog-chart-value-table-grid"
+          style={{ gridTemplateColumns: `minmax(${compact ? 70 : 86}px, auto) repeat(${rows.length}, minmax(${compact ? 42 : 54}px, 1fr))` }}
+        >
+          <div className="catalog-chart-value-table-head is-label">Дата</div>
+          {rows.map((row) => (
+            <div key={`date-${row.day}`} className="catalog-chart-value-table-head">
+              {row.day_label}
+            </div>
+          ))}
+          {metrics.map((metric) => (
+            <div className={cn("contents", metric.active === false && "is-muted")} key={metric.key}>
+              <div className="catalog-chart-value-table-metric" style={{ ["--swatch" as string]: metric.color }}>
+                <i />
+                <span>{metric.label}</span>
+              </div>
+              {rows.map((row) => (
+                <div key={`${metric.key}-${row.day}`} className="catalog-chart-value-table-value">
+                  {metric.getValue(row)}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function createDrrLineLabel({
   color,
   compact,
@@ -504,6 +556,15 @@ function SplitMetricChart({
 }
 
 function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string }> }) {
+  const skuMetrics: CatalogChartValueTableMetric[] = [
+    {
+      key: "spent_sku_count",
+      label: "SKU",
+      color: "#f17828",
+      getValue: (row) => formatNumber(row.spent_sku_count),
+    },
+  ];
+
   return (
     <div className="rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]">
       <div className="mb-3 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--color-muted)]">
@@ -529,6 +590,7 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+      <CatalogChartValueTable rows={rows} metrics={skuMetrics} compact />
     </div>
   );
 }
@@ -546,6 +608,13 @@ function CatalogDrrChart({
 }) {
   const visibleSeries = CATALOG_DRR_SERIES.filter((series) => !hiddenKeys.includes(series.key));
   const hasVisibleSeries = visibleSeries.length > 0;
+  const valueTableMetrics: CatalogChartValueTableMetric[] = CATALOG_DRR_SERIES.map((series) => ({
+    key: series.key,
+    label: series.label,
+    color: series.color,
+    active: !hiddenKeys.includes(series.key),
+    getValue: (row) => formatPercent(row[series.key]),
+  }));
   const shellClassName = compact
     ? "rounded-[22px] border border-white/60 bg-white/45 px-3 py-3"
     : "rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]";
@@ -613,6 +682,8 @@ function CatalogDrrChart({
           </ResponsiveContainer>
         )}
       </div>
+
+      <CatalogChartValueTable rows={rows} metrics={valueTableMetrics} compact={compact} />
 
       <SeriesToggleRow
         items={CATALOG_DRR_SERIES.map((series) => ({
@@ -787,6 +858,14 @@ export function CatalogSelectionChart({
     ...row,
     label: row.day_label,
   }));
+  const skuValueMetrics: CatalogChartValueTableMetric[] = [
+    {
+      key: "spent_sku_count",
+      label: "SKU",
+      color: "#f17828",
+      getValue: (row) => formatNumber(row.spent_sku_count),
+    },
+  ];
   const legendItems: LegendItem[] = CATALOG_SERIES.map((series) => ({
     key: series.key,
     label: series.label,
@@ -947,6 +1026,7 @@ export function CatalogSelectionChart({
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
+                <CatalogChartValueTable rows={chartRows} metrics={skuValueMetrics} compact />
               </div>
 
               <CatalogDrrChart rows={chartRows} hiddenKeys={hiddenDrrSeries} onToggleKey={toggleDrrKey} compact />
