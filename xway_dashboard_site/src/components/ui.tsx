@@ -198,9 +198,11 @@ export function MetricTable<T>({
     };
 
     const syncHeaderMetrics = () => {
+      const firstBodyCells = [...tableNode.querySelectorAll<HTMLTableCellElement>("tbody tr:first-child > td")].slice(0, columns.length);
       const headerCells = [...tableNode.querySelectorAll<HTMLTableCellElement>("thead tr:first-child > th")].slice(0, columns.length);
-      const nextColumnWidths = headerCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
-      const nextTableWidth = Math.round(tableNode.getBoundingClientRect().width);
+      const measuredCells = firstBodyCells.length === columns.length ? firstBodyCells : headerCells;
+      const nextColumnWidths = measuredCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
+      const nextTableWidth = Math.round(Math.max(tableNode.getBoundingClientRect().width, tableNode.scrollWidth));
       syncScrollLeft();
       setHeaderCloneState((current) => {
         const sameWidths =
@@ -307,7 +309,6 @@ export function MetricTable<T>({
       {showStickyHeaderClone ? (
         <div className="sticky z-20 overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ top: headerStickyTop }}>
           <table
-            aria-hidden="true"
             className="data-table text-sm"
             style={{
               width: `${headerCloneState.tableWidth}px`,
@@ -327,7 +328,7 @@ export function MetricTable<T>({
           style={showStickyHeaderClone && headerCloneState.tableWidth ? { width: `${headerCloneState.tableWidth}px` } : undefined}
         >
           {colgroup}
-          {renderHeader({ hidden: showStickyHeaderClone })}
+          {!showStickyHeaderClone ? renderHeader() : null}
           <tbody className="divide-y divide-[var(--color-line)] bg-white">
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex} className="transition hover:bg-[var(--color-surface-soft)]">

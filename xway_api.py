@@ -15,6 +15,7 @@ import requests
 
 
 DEFAULT_STORAGE_STATE = Path(__file__).with_name("xway_storage_state.json")
+PRODUCT_DAILY_STATS_CHUNK_DAYS = 14
 WEEKDAYS: Tuple[Tuple[str, str], ...] = (
     ("Monday", "Пн"),
     ("Tuesday", "Вт"),
@@ -222,6 +223,31 @@ def _iter_iso_days(start: Optional[str], end: Optional[str]) -> List[str]:
         days.append(current.isoformat())
         current += timedelta(days=1)
     return days
+
+
+def _split_iso_date_range(start: Optional[str], end: Optional[str], chunk_days: int = PRODUCT_DAILY_STATS_CHUNK_DAYS) -> List[Tuple[str, str]]:
+    start_date = _parse_iso_date(start)
+    end_date = _parse_iso_date(end)
+    if not start_date or not end_date or start_date > end_date:
+        return []
+    ranges: List[Tuple[str, str]] = []
+    current = start_date
+    while current <= end_date:
+        chunk_end = min(current + timedelta(days=max(1, chunk_days) - 1), end_date)
+        ranges.append((current.isoformat(), chunk_end.isoformat()))
+        current = chunk_end + timedelta(days=1)
+    return ranges
+
+
+def _build_stat_dyn_referer(base_referer: str, start: str, end: str) -> str:
+    start_date = _parse_iso_date(start)
+    end_date = _parse_iso_date(end)
+    if not start_date or not end_date or start_date > end_date:
+        return base_referer
+    span_days = (end_date - start_date).days + 1
+    dyn_end = start_date - timedelta(days=1)
+    dyn_start = dyn_end - timedelta(days=span_days - 1)
+    return f"{base_referer}?stat={start}..{end}&dyn={dyn_start.isoformat()}..{dyn_end.isoformat()}"
 
 
 def _parse_flexible_datetime(value: Any) -> Optional[datetime]:
@@ -542,6 +568,7 @@ class XwayApi:
         self._shop_listing_cache: Dict[int, Dict[str, Any]] = {}
         self._shop_details_cache: Dict[int, Dict[str, Any]] = {}
         self._product_stata_cache: Dict[Tuple[int, int, str, str], Dict[str, Any]] = {}
+        self._product_daily_stats_cache: Dict[Tuple[int, int, str, str], List[Dict[str, Any]]] = {}
         self.range = resolve_range(start=start, end=end)
 
     @property
@@ -775,14 +802,45 @@ class XwayApi:
                 )
         return result
 
-    def product_stats_by_day(self, shop_id: int, product_id: int) -> List[Dict[str, Any]]:
-        r = self.range
-        return self._get_json(
+    def product_stats_by_day(
+        self,
+        shop_id: int,
+        product_id: int,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        range_start = start or self.range["current_start"]
+        range_end = end or self.range["current_end"]
+        cache_key = (int(shop_id), int(product_id), str(range_start), str(range_end))
+        cached = self._product_daily_stats_cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+
+        ranges = _split_iso_date_range(range_start, range_end)
+        if len(ranges) > 1:
+            rows_by_day: Dict[str, Dict[str, Any]] = {}
+            for chunk_start, chunk_end in ranges:
+                for row in self.product_stats_by_day(shop_id, product_id, chunk_start, chunk_end):
+                    day = str(row.get("day") or "").strip()
+                    if day:
+                        rows_by_day[day] = row
+            payload = [copy.deepcopy(rows_by_day[day]) for day in sorted(rows_by_day)]
+            self._product_daily_stats_cache[cache_key] = payload
+            return copy.deepcopy(payload)
+
+        chunk_start, chunk_end = ranges[0] if ranges else (range_start, range_end)
+        payload = self._get_json(
             "https://am.xway.ru/api/adv/shop/"
             f"{shop_id}/product/{product_id}/stats-by-day"
-            f"?start={r['current_start']}&end={r['current_end']}",
-            referer=f"https://am.xway.ru/wb/shop/{shop_id}/product/{product_id}",
+            f"?start={chunk_start}&end={chunk_end}",
+            referer=_build_stat_dyn_referer(
+                f"https://am.xway.ru/wb/shop/{shop_id}/product/{product_id}",
+                chunk_start,
+                chunk_end,
+            ),
         )
+        self._product_daily_stats_cache[cache_key] = payload
+        return copy.deepcopy(payload)
 
     def product_heat_map(
         self,
@@ -3324,6 +3382,7 @@ def collect_catalog_chart(
     parsed_refs = _parse_catalog_product_refs(product_refs)
     days = _iter_iso_days(range_payload["current_start"], range_payload["current_end"])
     rows_by_day = {day: _create_catalog_chart_row(day) for day in days}
+    chart_product_rows: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
 
     def collect_ref(shop_id: int, product_id: int, ref: str) -> Tuple[str, Optional[List[Dict[str, Any]]], Optional[str]]:
@@ -3337,15 +3396,16 @@ def collect_catalog_chart(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(collect_ref, shop_id, product_id, ref) for shop_id, product_id, ref in parsed_refs]
         for future in as_completed(futures):
-            ref, product_rows, error = future.result()
+            ref, product_daily_rows, error = future.result()
             if error:
                 errors.append({"product": ref, "error": error})
                 continue
-            spent_days: Set[str] = set()
-            for product_row in product_rows or []:
+            product_rows_by_day = {day: _create_catalog_chart_row(day) for day in days}
+            for product_row in product_daily_rows or []:
                 day = product_row.get("day")
                 target = rows_by_day.get(day)
-                if target is None:
+                product_target = product_rows_by_day.get(day)
+                if target is None or product_target is None:
                     continue
                 expense_sum = _catalog_chart_number(product_row.get("expense_sum"))
                 target["views"] += _catalog_chart_number(product_row.get("views"))
@@ -3353,12 +3413,23 @@ def collect_catalog_chart(
                 target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
                 target["orders"] += _catalog_chart_number(product_row.get("orders"))
                 target["expense_sum"] += expense_sum
+                product_target["views"] += _catalog_chart_number(product_row.get("views"))
+                product_target["clicks"] += _catalog_chart_number(product_row.get("clicks"))
+                product_target["atbs"] += _catalog_chart_number(product_row.get("atbs"))
+                product_target["orders"] += _catalog_chart_number(product_row.get("orders"))
+                product_target["expense_sum"] += expense_sum
                 if expense_sum > 0:
-                    spent_days.add(day)
-            for day in spent_days:
-                rows_by_day[day]["spent_sku_count"] += 1
+                    target["spent_sku_count"] += 1
+                    product_target["spent_sku_count"] = 1
+            chart_product_rows.append(
+                {
+                    "product_ref": ref,
+                    "rows": [_finalize_catalog_chart_row(product_rows_by_day[day]) for day in days],
+                }
+            )
 
     rows = [_finalize_catalog_chart_row(rows_by_day[day]) for day in days]
+    chart_product_rows.sort(key=lambda row: row.get("product_ref") or "")
     return {
         "ok": True,
         "generated_at": date.today().isoformat(),
@@ -3366,6 +3437,7 @@ def collect_catalog_chart(
         "selection_count": len(parsed_refs),
         "loaded_products_count": max(len(parsed_refs) - len(errors), 0),
         "rows": rows,
+        "product_rows": chart_product_rows,
         "totals": _catalog_chart_totals(rows),
         "errors": errors,
     }

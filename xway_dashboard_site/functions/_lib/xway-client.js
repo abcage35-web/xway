@@ -8,6 +8,7 @@ const PRODUCT_STATA_CACHE_TTL_MS = 180000;
 const PRODUCT_INFO_CACHE_TTL_MS = 180000;
 const PRODUCT_DYNAMICS_CACHE_TTL_MS = 180000;
 const PRODUCT_STOCKS_RULE_CACHE_TTL_MS = 180000;
+const PRODUCT_DAILY_STATS_CHUNK_DAYS = 14;
 
 const cacheStore = {
   shopList: new Map(),
@@ -187,6 +188,49 @@ function parseFlexibleDateTime(value) {
 
 function isoDateFromDate(date) {
   return date.toISOString().slice(0, 10);
+}
+
+function shiftIsoDate(day, deltaDays) {
+  const parsed = parseIsoDate(day);
+  if (!parsed) {
+    return String(day || "");
+  }
+  parsed.setUTCDate(parsed.getUTCDate() + deltaDays);
+  return isoDateFromDate(parsed);
+}
+
+function splitIsoDateRange(start, end, chunkDays = PRODUCT_DAILY_STATS_CHUNK_DAYS) {
+  const startDate = parseIsoDate(start);
+  const endDate = parseIsoDate(end);
+  if (!startDate || !endDate || startDate > endDate) {
+    return [];
+  }
+  const ranges = [];
+  for (let cursor = new Date(startDate); cursor <= endDate; cursor.setUTCDate(cursor.getUTCDate() + chunkDays)) {
+    const chunkStart = new Date(cursor);
+    const chunkEnd = new Date(cursor);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + chunkDays - 1);
+    if (chunkEnd > endDate) {
+      chunkEnd.setTime(endDate.getTime());
+    }
+    ranges.push({
+      start: isoDateFromDate(chunkStart),
+      end: isoDateFromDate(chunkEnd),
+    });
+  }
+  return ranges;
+}
+
+function buildStatDynReferer(baseReferer, start, end) {
+  const startDate = parseIsoDate(start);
+  const endDate = parseIsoDate(end);
+  if (!startDate || !endDate || startDate > endDate) {
+    return baseReferer;
+  }
+  const spanDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+  const dynEnd = shiftIsoDate(start, -1);
+  const dynStart = shiftIsoDate(dynEnd, -(spanDays - 1));
+  return `${baseReferer}?stat=${start}..${end}&dyn=${dynStart}..${dynEnd}`;
 }
 
 function statusMpHistoryReachedStart(rows, start) {
@@ -463,9 +507,26 @@ export class XwayApiClient {
     if (cached) {
       return cached;
     }
+    const ranges = splitIsoDateRange(start, end);
+    if (ranges.length > 1) {
+      const rowsByDay = new Map();
+      for (const range of ranges) {
+        const rows = await this.productStatsByDay(shopId, productId, range.start, range.end);
+        for (const row of rows || []) {
+          const day = String(row?.day || "").trim();
+          if (day) {
+            rowsByDay.set(day, row);
+          }
+        }
+      }
+      const payload = [...rowsByDay.values()].sort((left, right) => String(left.day || "").localeCompare(String(right.day || "")));
+      setCached(cacheStore.productDailyStats, cacheKey, payload);
+      return payload;
+    }
+    const range = ranges[0] || { start, end };
     const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/stats-by-day`, {
-      referer: this.buildProductReferer(shopId, productId),
-      params: { start, end },
+      referer: buildStatDynReferer(this.buildProductReferer(shopId, productId), range.start, range.end),
+      params: { start: range.start, end: range.end },
     });
     setCached(cacheStore.productDailyStats, cacheKey, payload);
     return payload;

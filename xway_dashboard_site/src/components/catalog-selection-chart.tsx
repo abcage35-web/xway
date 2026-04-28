@@ -577,6 +577,7 @@ export function CatalogSelectionChart({
   totals,
   selectionCount,
   loadedProductsCount,
+  loadTargetCount,
   chunkCount,
   loadedChunkCount,
   errorCount,
@@ -589,6 +590,7 @@ export function CatalogSelectionChart({
   totals: CatalogChartTotals | null;
   selectionCount: number;
   loadedProductsCount?: number | null;
+  loadTargetCount?: number | null;
   chunkCount?: number | null;
   loadedChunkCount?: number | null;
   errorCount?: number | null;
@@ -603,6 +605,7 @@ export function CatalogSelectionChart({
     DEFAULT_SPLIT_HIDDEN_SERIES,
   );
   const [crfRenderMode, setCrfRenderMode] = useState<CrfRenderMode>("line");
+  const loadingTargetCount = loadTargetCount ?? selectionCount;
 
   const activeSeries = CATALOG_SERIES.filter((series) => !hiddenSeries.includes(series.key));
   const chartRows = rows.map((row) => ({
@@ -645,7 +648,7 @@ export function CatalogSelectionChart({
             <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5">
               <LoaderCircle className="size-4 animate-spin text-brand-200" />
               {loadedProductsCount !== undefined && loadedProductsCount !== null
-                ? `Загружено ${formatNumber(loadedProductsCount)} / ${formatNumber(selectionCount)}`
+                ? `Загружено ${formatNumber(loadedProductsCount)} / ${formatNumber(loadingTargetCount)}`
                 : "Обновляем график"}
             </span>
           ) : null}

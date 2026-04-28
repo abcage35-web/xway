@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState, startTransition, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
 import { ArrowUpDown, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
@@ -19,6 +19,8 @@ interface CatalogLoaderData {
 }
 
 type CatalogChartWindow = 7 | 14 | 30 | 60;
+const DEFAULT_CATALOG_CHART_WINDOW: CatalogChartWindow = 30;
+const CATALOG_CHART_PREFETCH_WINDOW: CatalogChartWindow = 60;
 type CatalogCampaignSlotKind = "unified" | "manual" | "cpc";
 type CatalogCampaignDisplayStatus = "active" | "paused" | "freeze" | "muted";
 
@@ -1503,8 +1505,93 @@ function mergeCatalogChartResponses(
     selection_count: selectionCount,
     loaded_products_count: (current?.loaded_products_count ?? 0) + (incoming.loaded_products_count ?? 0),
     rows,
+    product_rows: [...(current?.product_rows ?? []), ...(incoming.product_rows ?? [])],
     totals: buildCatalogChartTotals(rows),
     errors: [...(current?.errors ?? []), ...(incoming.errors ?? [])],
+  };
+}
+
+function aggregateCatalogChartResponse(
+  response: CatalogChartResponse,
+  productRefs: string[],
+  requestedStart: string,
+  requestedEnd: string,
+): CatalogChartResponse {
+  const requestedRefs = new Set(productRefs);
+  const sourceRows = response.rows.filter((row) => row.day >= requestedStart && row.day <= requestedEnd);
+
+  if (!response.product_rows?.length) {
+    const sliced = sliceCatalogChartResponse(response, requestedStart, requestedEnd);
+    return {
+      ...sliced,
+      selection_count: productRefs.length,
+      loaded_products_count: productRefs.length,
+    };
+  }
+
+  const rowsByDay = new Map(
+    sourceRows.map((row) => [
+      row.day,
+      {
+        ...row,
+        views: 0,
+        clicks: 0,
+        atbs: 0,
+        orders: 0,
+        expense_sum: 0,
+        spent_sku_count: 0,
+        ctr: null,
+        cr1: null,
+        cr2: null,
+        crf: null,
+      },
+    ]),
+  );
+  let loadedProductsCount = 0;
+
+  response.product_rows.forEach((product) => {
+    if (!requestedRefs.has(product.product_ref)) {
+      return;
+    }
+    loadedProductsCount += 1;
+    product.rows.forEach((row) => {
+      if (row.day < requestedStart || row.day > requestedEnd) {
+        return;
+      }
+      const target = rowsByDay.get(row.day);
+      if (!target) {
+        return;
+      }
+      const expenseSum = toNumber(row.expense_sum) ?? 0;
+      target.views += toNumber(row.views) ?? 0;
+      target.clicks += toNumber(row.clicks) ?? 0;
+      target.atbs += toNumber(row.atbs) ?? 0;
+      target.orders += toNumber(row.orders) ?? 0;
+      target.expense_sum += expenseSum;
+      if (expenseSum > 0) {
+        target.spent_sku_count += 1;
+      }
+    });
+  });
+
+  const rows = [...rowsByDay.values()]
+    .map((row) => finalizeCatalogChartRow(row))
+    .sort((left, right) => left.day.localeCompare(right.day));
+  const errors = response.errors.filter((error) => requestedRefs.has(error.product));
+
+  return {
+    ...response,
+    range: {
+      ...response.range,
+      current_start: requestedStart,
+      current_end: requestedEnd,
+      span_days: rows.length,
+    },
+    selection_count: productRefs.length,
+    loaded_products_count: loadedProductsCount,
+    rows,
+    totals: buildCatalogChartTotals(rows),
+    errors,
   };
 }
 
@@ -2465,8 +2552,8 @@ export function CatalogPage() {
   const [quickViewSettingsOpen, setQuickViewSettingsOpen] = useState(false);
   const [quickViewSettings, setQuickViewSettings] = useState<CatalogQuickViewSettingsState>(() => readCatalogQuickViewSettings());
   const [chartCollapsed, setChartCollapsed] = useState(false);
-  const [chartWindow, setChartWindow] = useState<CatalogChartWindow>(() => resolveCatalogChartWindow(payload.range.span_days));
-  const [chartData, setChartData] = useState<CatalogChartResponse | null>(null);
+  const [chartWindow, setChartWindow] = useState<CatalogChartWindow>(DEFAULT_CATALOG_CHART_WINDOW);
+  const [chartSourceData, setChartSourceData] = useState<CatalogChartResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartProgress, setChartProgress] = useState<CatalogChartProgressState | null>(null);
@@ -2675,14 +2762,36 @@ export function CatalogPage() {
       ]),
     ),
   ).values()];
+  const chartSourceArticles = [...new Map(
+    payload.shops.flatMap((shop) =>
+      shop.articles.map((article) => [
+        `${shop.id}:${article.product_id}`,
+        {
+          shopId: shop.id,
+          productId: article.product_id,
+        },
+      ]),
+    ),
+  ).values()];
   const visibleIssueTargetRefsKey = visibleIssueTargetRefs.join(",");
   const chartSelectionCount = visibleArticles.length;
   const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
   const chartProductRefsKey = chartProductRefs.join(",");
+  const chartSourceSelectionCount = chartSourceArticles.length;
+  const chartSourceProductRefs = chartSourceArticles.map((item) => `${item.shopId}:${item.productId}`);
+  const chartSourceProductRefsKey = chartSourceProductRefs.join(",");
   const chartRangeEnd = payload.range.current_end;
+  const chartSourceRangeStart = shiftIsoDate(chartRangeEnd, -(CATALOG_CHART_PREFETCH_WINDOW - 1));
   const chartRangeStart = shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
-  const chartCacheKey = `${chartRangeStart}|${chartRangeEnd}|${chartProductRefsKey}`;
+  const chartSourceCacheKey = `${chartSourceRangeStart}|${chartRangeEnd}|${chartSourceProductRefsKey}`;
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
+  const chartData = useMemo(
+    () =>
+      chartSourceData
+        ? aggregateCatalogChartResponse(chartSourceData, chartProductRefs, chartRangeStart, chartRangeEnd)
+        : null,
+    [chartSourceData, chartProductRefsKey, chartRangeStart, chartRangeEnd],
+  );
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
   const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
@@ -2824,26 +2933,26 @@ export function CatalogPage() {
       setChartProgress(null);
       return;
     }
-    if (!chartSelectionCount) {
+    if (!chartSourceSelectionCount) {
       setChartLoading(false);
       setChartError(null);
-      setChartData(null);
+      setChartSourceData(null);
       setChartProgress(null);
       return;
     }
 
     const cached = resolveCachedCatalogChartResponse(chartCacheRef.current, {
-      cacheKey: chartCacheKey,
-      productRefsKey: chartProductRefsKey,
-      rangeStart: chartRangeStart,
+      cacheKey: chartSourceCacheKey,
+      productRefsKey: chartSourceProductRefsKey,
+      rangeStart: chartSourceRangeStart,
       rangeEnd: chartRangeEnd,
     });
     if (cached) {
       setChartLoading(false);
       setChartError(null);
-      setChartData(cached);
+      setChartSourceData(cached);
       setChartProgress({
-        cacheKey: chartCacheKey,
+        cacheKey: chartSourceCacheKey,
         selectionCount: cached.selection_count,
         loadedProductsCount: cached.loaded_products_count,
         chunkCount: 0,
@@ -2858,11 +2967,11 @@ export function CatalogPage() {
     const timer = window.setTimeout(() => {
       setChartLoading(true);
       setChartError(null);
-      setChartData(null);
-      const productChunks = chunkItems(chartProductRefs, 24);
+      setChartSourceData(null);
+      const productChunks = chunkItems(chartSourceProductRefs, 24);
       setChartProgress({
-        cacheKey: chartCacheKey,
-        selectionCount: chartSelectionCount,
+        cacheKey: chartSourceCacheKey,
+        selectionCount: chartSourceSelectionCount,
         loadedProductsCount: 0,
         chunkCount: productChunks.length,
         loadedChunkCount: 0,
@@ -2875,18 +2984,18 @@ export function CatalogPage() {
           for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
             const chunkResponse = await fetchCatalogChart({
               productRefs: productChunks[chunkIndex]!,
-              start: chartRangeStart,
+              start: chartSourceRangeStart,
               end: chartRangeEnd,
               signal: controller.signal,
             });
             if (controller.signal.aborted) {
               return;
             }
-            nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, chartSelectionCount);
-            setChartData(nextResponse);
+            nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, chartSourceSelectionCount);
+            setChartSourceData(nextResponse);
             setChartProgress({
-              cacheKey: chartCacheKey,
-              selectionCount: chartSelectionCount,
+              cacheKey: chartSourceCacheKey,
+              selectionCount: chartSourceSelectionCount,
               loadedProductsCount: nextResponse.loaded_products_count,
               chunkCount: productChunks.length,
               loadedChunkCount: chunkIndex + 1,
@@ -2895,10 +3004,10 @@ export function CatalogPage() {
           }
 
           if (nextResponse) {
-            chartCacheRef.current.set(chartCacheKey, {
+            chartCacheRef.current.set(chartSourceCacheKey, {
               response: nextResponse,
-              productRefsKey: chartProductRefsKey,
-              rangeStart: chartRangeStart,
+              productRefsKey: chartSourceProductRefsKey,
+              rangeStart: chartSourceRangeStart,
               rangeEnd: chartRangeEnd,
             });
           }
@@ -2919,7 +3028,7 @@ export function CatalogPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [chartCacheKey, chartCollapsed, chartProductRefsKey, chartSelectionCount, chartRangeEnd, chartRangeStart]);
+  }, [chartCollapsed, chartRangeEnd, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceSelectionCount]);
 
   const ctr = visibleTotals.views > 0 ? (visibleTotals.clicks / visibleTotals.views) * 100 : 0;
   const cr = visibleTotals.clicks > 0 ? (visibleTotals.orders / visibleTotals.clicks) * 100 : 0;
@@ -3635,10 +3744,11 @@ export function CatalogPage() {
               rows={chartData?.rows ?? []}
               totals={chartData?.totals ?? null}
               selectionCount={chartSelectionCount}
-              loadedProductsCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedProductsCount : chartData?.loaded_products_count ?? null}
-              chunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.chunkCount : null}
-              loadedChunkCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.loadedChunkCount : null}
-              errorCount={chartProgress?.cacheKey === chartCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
+              loadedProductsCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.loadedProductsCount : chartSourceData?.loaded_products_count ?? null}
+              loadTargetCount={chartSourceSelectionCount}
+              chunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.chunkCount : null}
+              loadedChunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.loadedChunkCount : null}
+              errorCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
               isLoading={chartLoading}
               error={chartError}
               rangeLabel={chartRangeLabel}

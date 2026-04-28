@@ -397,16 +397,19 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
   const parsedRefs = parseCatalogChartProductRefs(productRefs);
   const days = iterIsoDays(client.range.current_start, client.range.current_end);
   const rowsByDay = new Map(days.map((day) => [day, createEmptyCatalogChartRow(day)]));
+  const productRows = [];
   const errors = [];
 
   await mapWithConcurrency(parsedRefs, 6, async ([shopId, productId]) => {
+    const productRef = `${shopId}:${productId}`;
     try {
       const rows = await client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end);
-      let spentDetected = false;
+      const productRowsByDay = new Map(days.map((day) => [day, createEmptyCatalogChartRow(day)]));
       for (const row of rows || []) {
         const day = row.day;
         const target = rowsByDay.get(day);
-        if (!target) {
+        const productTarget = productRowsByDay.get(day);
+        if (!target || !productTarget) {
           continue;
         }
         const expenseSum = asFloat(row.expense_sum);
@@ -415,35 +418,37 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
         target.atbs += asFloat(row.atbs);
         target.orders += asFloat(row.orders);
         target.expense_sum += expenseSum;
+        productTarget.views += asFloat(row.views);
+        productTarget.clicks += asFloat(row.clicks);
+        productTarget.atbs += asFloat(row.atbs);
+        productTarget.orders += asFloat(row.orders);
+        productTarget.expense_sum += expenseSum;
         if (expenseSum > 0) {
-          spentDetected = true;
+          target.spent_sku_count += 1;
+          productTarget.spent_sku_count = 1;
         }
       }
-      if (spentDetected) {
-        for (const row of rows || []) {
-          if (asFloat(row.expense_sum) > 0) {
-            const target = rowsByDay.get(row.day);
-            if (target) {
-              target.spent_sku_count += 1;
-            }
-          }
-        }
-      }
+      productRows.push({
+        product_ref: productRef,
+        rows: days.map((day) => finalizeCatalogChartRow(productRowsByDay.get(day))),
+      });
     } catch (error) {
       errors.push({
-        product: `${shopId}:${productId}`,
+        product: productRef,
         error: String(error?.message || error || "Unknown error"),
       });
     }
   });
 
   const rows = days.map((day) => finalizeCatalogChartRow(rowsByDay.get(day)));
+  productRows.sort((left, right) => left.product_ref.localeCompare(right.product_ref));
   return {
     generated_at: new Date().toISOString().slice(0, 10),
     range: client.range,
     selection_count: parsedRefs.length,
     loaded_products_count: Math.max(parsedRefs.length - errors.length, 0),
     rows,
+    product_rows: productRows,
     totals: buildCatalogChartTotals(rows),
     errors,
   };

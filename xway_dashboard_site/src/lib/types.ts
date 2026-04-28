@@ -562,6 +562,11 @@ export interface CatalogChartTotals {
   crf: number | null;
 }
 
+export interface CatalogChartProductRows {
+  product_ref: string;
+  rows: CatalogChartRow[];
+}
+
 export interface CatalogIssuesIssue {
   kind: "budget" | "limit";
   title: string;
@@ -613,6 +618,7 @@ export interface CatalogChartResponse {
   selection_count: number;
   loaded_products_count: number;
   rows: CatalogChartRow[];
+  product_rows?: CatalogChartProductRows[];
   totals: CatalogChartTotals;
   errors: Array<{ product: string; error: string }>;
 }
