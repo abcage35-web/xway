@@ -191,7 +191,9 @@ type CatalogSortField =
   | "clicks"
   | "orders"
   | "ctr"
-  | "cr";
+  | "cr"
+  | "drr"
+  | "categoryAvgCr";
 
 type CatalogSortDirection = "asc" | "desc";
 
@@ -1872,6 +1874,38 @@ function summarizeCatalogArticles(articles: CatalogArticle[]) {
   );
 }
 
+function resolveCatalogArticleDrr(article: CatalogArticle) {
+  const explicitDrr = toNumber(article.drr);
+  if (explicitDrr !== null) {
+    return explicitDrr;
+  }
+  return catalogChartRate(toNumber(article.expense_sum) ?? 0, toNumber(article.sum_price) ?? 0);
+}
+
+function buildCategoryAverageCrMap(articles: CatalogArticle[]) {
+  const byCategory = new Map<string, { totalCr: number; count: number }>();
+
+  articles.forEach((article) => {
+    const cr = toNumber(article.cr);
+    if (cr === null) {
+      return;
+    }
+
+    const key = normalizeCategoryValue(article.category_keyword);
+    const entry = byCategory.get(key) ?? { totalCr: 0, count: 0 };
+    entry.totalCr += cr;
+    entry.count += 1;
+    byCategory.set(key, entry);
+  });
+
+  return new Map(
+    [...byCategory.entries()].map(([key, entry]) => [
+      key,
+      entry.count > 0 ? entry.totalCr / entry.count : null,
+    ]),
+  );
+}
+
 function computeTurnoverDays(stock: number | string | null | undefined, orderedReport3d: number | string | null | undefined, windowDays = 3) {
   const stockValue = toNumber(stock);
   if (stockValue === null || stockValue <= 0) {
@@ -2483,54 +2517,59 @@ export function CatalogPage() {
     selectedSkus,
   })
     .map((shop) => {
-      const nextArticles = shop.articles
+      const filteredArticles = shop.articles
         .filter((article) => {
           const stockValue = toNumber(article.stock);
           const turnoverValue = computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
           return matchesNumericRange(stockValue, stockFrom, stockTo) && matchesNumericRange(turnoverValue, turnoverFrom, turnoverTo);
-        })
-        .sort((left, right) => {
-          const resolveSortValue = (article: CatalogArticle) => {
-            switch (sortField) {
-              case "article":
-                return Number(article.article) || article.article;
-              case "name":
-                return String(article.name || "");
-              case "stock":
-                return toNumber(article.stock) ?? Number.NEGATIVE_INFINITY;
-              case "turnover":
-                return computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)) ?? Number.NEGATIVE_INFINITY;
-              case "campaigns":
-                return article.campaign_states.length;
-              case "spend":
-                return toNumber(article.expense_sum) ?? Number.NEGATIVE_INFINITY;
-              case "views":
-                return toNumber(article.views) ?? Number.NEGATIVE_INFINITY;
-              case "clicks":
-                return toNumber(article.clicks) ?? Number.NEGATIVE_INFINITY;
-              case "orders":
-                return toNumber(article.orders) ?? Number.NEGATIVE_INFINITY;
-              case "ctr":
-                return toNumber(article.ctr) ?? Number.NEGATIVE_INFINITY;
-              case "cr":
-              default:
-                return toNumber(article.cr) ?? Number.NEGATIVE_INFINITY;
-            }
-          };
-
-          const leftValue = resolveSortValue(left);
-          const rightValue = resolveSortValue(right);
-          let result = 0;
-          if (typeof leftValue === "string" || typeof rightValue === "string") {
-            result = String(leftValue || "").localeCompare(String(rightValue || ""), "ru");
-          } else {
-            result = (leftValue as number) - (rightValue as number);
-          }
-          if (result === 0) {
-            result = left.article.localeCompare(right.article, "ru");
-          }
-          return sortDirection === "asc" ? result : -result;
         });
+      const categoryAverageCrByValue = buildCategoryAverageCrMap(filteredArticles);
+      const nextArticles = filteredArticles.sort((left, right) => {
+        const resolveSortValue = (article: CatalogArticle) => {
+          switch (sortField) {
+            case "article":
+              return Number(article.article) || article.article;
+            case "name":
+              return String(article.name || "");
+            case "stock":
+              return toNumber(article.stock) ?? Number.NEGATIVE_INFINITY;
+            case "turnover":
+              return computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)) ?? Number.NEGATIVE_INFINITY;
+            case "campaigns":
+              return article.campaign_states.length;
+            case "spend":
+              return toNumber(article.expense_sum) ?? Number.NEGATIVE_INFINITY;
+            case "views":
+              return toNumber(article.views) ?? Number.NEGATIVE_INFINITY;
+            case "clicks":
+              return toNumber(article.clicks) ?? Number.NEGATIVE_INFINITY;
+            case "orders":
+              return toNumber(article.orders) ?? Number.NEGATIVE_INFINITY;
+            case "ctr":
+              return toNumber(article.ctr) ?? Number.NEGATIVE_INFINITY;
+            case "drr":
+              return resolveCatalogArticleDrr(article) ?? Number.NEGATIVE_INFINITY;
+            case "categoryAvgCr":
+              return categoryAverageCrByValue.get(normalizeCategoryValue(article.category_keyword)) ?? Number.NEGATIVE_INFINITY;
+            case "cr":
+            default:
+              return toNumber(article.cr) ?? Number.NEGATIVE_INFINITY;
+          }
+        };
+
+        const leftValue = resolveSortValue(left);
+        const rightValue = resolveSortValue(right);
+        let result = 0;
+        if (typeof leftValue === "string" || typeof rightValue === "string") {
+          result = String(leftValue || "").localeCompare(String(rightValue || ""), "ru");
+        } else {
+          result = (leftValue as number) - (rightValue as number);
+        }
+        if (result === 0) {
+          result = left.article.localeCompare(right.article, "ru");
+        }
+        return sortDirection === "asc" ? result : -result;
+      });
 
       if (!nextArticles.length) {
         return null;
@@ -3474,6 +3513,8 @@ export function CatalogPage() {
                   <option value="orders">Заказы</option>
                   <option value="ctr">CTR</option>
                   <option value="cr">CR</option>
+                  <option value="drr">ДРР</option>
+                  <option value="categoryAvgCr">Ср. CR категории</option>
                   <option value="article">Артикул</option>
                   <option value="name">Название</option>
                 </select>
@@ -3750,6 +3791,7 @@ export function CatalogPage() {
         {visibleShops.map((shop) => {
           const collapsed = collapsedShopIds.includes(String(shop.id));
           const totals = summarizeCatalogArticles(shop.articles);
+          const categoryAverageCrByValue = buildCategoryAverageCrMap(shop.articles);
 
           return (
             <SectionCard
@@ -3903,6 +3945,18 @@ export function CatalogPage() {
                       { key: "orders", header: "Заказы", align: "right", render: (article) => formatNumber(article.orders) },
                       { key: "ctr", header: "CTR", align: "right", render: (article) => formatPercent(article.ctr) },
                       { key: "cr", header: "CR", align: "right", render: (article) => formatPercent(article.cr) },
+                      { key: "drr", header: "ДРР", align: "right", render: (article) => formatPercent(resolveCatalogArticleDrr(article)) },
+                      {
+                        key: "categoryAvgCr",
+                        header: (
+                          <span className="inline-flex flex-col leading-[1.05]">
+                            <span>Ср. CR</span>
+                            <span>кат.</span>
+                          </span>
+                        ),
+                        align: "right",
+                        render: (article) => formatPercent(categoryAverageCrByValue.get(normalizeCategoryValue(article.category_keyword))),
+                      },
                       {
                         key: "actions",
                         header: "Открыть",
