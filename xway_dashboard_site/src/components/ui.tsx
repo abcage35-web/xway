@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronRight, LoaderCircle, Search, Sparkles } from "lucide-react";
 import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, formatNumber, formatPercent, relativeDeltaClass, statusTone } from "../lib/format";
 import type { ScheduleAggregate } from "../lib/types";
+import { SearchableSelect } from "./searchable-multi-select";
 
 export interface TableColumn<T> {
   key: string;
@@ -137,13 +138,15 @@ export function SearchField({
   value,
   onChange,
   placeholder,
+  className,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  className?: string;
 }) {
   return (
-    <label className="metric-chip flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm text-[var(--color-muted)]">
+    <label className={cn("metric-chip flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm text-[var(--color-muted)]", className)}>
       <Search className="size-4 text-brand-200" />
       <input
         value={value}
@@ -362,6 +365,7 @@ export function RangeToolbar({
   preset,
   onPresetChange,
   onRangeChange,
+  filters,
   extra,
 }: {
   start?: string | null;
@@ -369,65 +373,56 @@ export function RangeToolbar({
   preset: string;
   onPresetChange: (preset: string) => void;
   onRangeChange: (next: { start: string; end: string }) => void;
+  filters?: ReactNode;
   extra?: ReactNode;
 }) {
   return (
-    <div className="glass-panel flex flex-col gap-3 rounded-[28px] p-3 sm:p-3.5 lg:flex-row lg:items-center lg:justify-between">
-      <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
-        <div className="metric-chip inline-flex w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 xl:w-auto">
-          <CalendarDays className="size-4 text-brand-200" />
-          <select
+    <div className="glass-panel grid gap-3 rounded-[28px] p-3 sm:p-3.5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
+          <SearchableSelect
+            label="Период"
             value={preset}
-            onChange={(event) => onPresetChange(event.target.value)}
-            className="w-full bg-transparent text-sm text-[var(--color-ink)] outline-none"
-          >
-            <option value="custom">
-              Свой диапазон
-            </option>
-            <option value="today">
-              Сегодня
-            </option>
-            <option value="yesterday">
-              Вчера
-            </option>
-            <option value="3">
-              Последние 3 дня
-            </option>
-            <option value="7">
-              Последние 7 дней
-            </option>
-            <option value="14">
-              Последние 14 дней
-            </option>
-            <option value="30">
-              Последние 30 дней
-            </option>
-          </select>
+            onChange={onPresetChange}
+            icon={<CalendarDays className="size-4" />}
+            className="w-full xl:w-[210px]"
+            options={[
+              { value: "custom", label: "Свой диапазон" },
+              { value: "today", label: "Сегодня" },
+              { value: "yesterday", label: "Вчера" },
+              { value: "3", label: "Последние 3 дня" },
+              { value: "7", label: "Последние 7 дней" },
+              { value: "14", label: "Последние 14 дней" },
+              { value: "30", label: "Последние 30 дней" },
+            ]}
+          />
+
+          <div className="metric-chip grid w-full min-w-0 overflow-hidden rounded-2xl text-sm sm:grid-cols-2 xl:w-[420px] xl:flex-none">
+            <label className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
+              <span className="shrink-0 text-[var(--color-muted)]">Начало</span>
+              <input
+                type="date"
+                value={start || ""}
+                onChange={(event) => onRangeChange({ start: event.target.value, end: end || event.target.value })}
+                className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
+              />
+            </label>
+            <label className="flex min-w-0 items-center gap-2 border-t border-[var(--color-line)] px-3.5 py-2.5 sm:border-l sm:border-t-0">
+              <span className="shrink-0 text-[var(--color-muted)]">Конец</span>
+              <input
+                type="date"
+                value={end || ""}
+                onChange={(event) => onRangeChange({ start: start || event.target.value, end: event.target.value })}
+                className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
+              />
+            </label>
+          </div>
         </div>
 
-        <div className="metric-chip grid w-full min-w-0 overflow-hidden rounded-2xl text-sm sm:grid-cols-2 xl:w-[420px] xl:flex-none">
-          <label className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
-            <span className="shrink-0 text-[var(--color-muted)]">Начало</span>
-            <input
-              type="date"
-              value={start || ""}
-              onChange={(event) => onRangeChange({ start: event.target.value, end: end || event.target.value })}
-              className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
-            />
-          </label>
-          <label className="flex min-w-0 items-center gap-2 border-t border-[var(--color-line)] px-3.5 py-2.5 sm:border-l sm:border-t-0">
-            <span className="shrink-0 text-[var(--color-muted)]">Конец</span>
-            <input
-              type="date"
-              value={end || ""}
-              onChange={(event) => onRangeChange({ start: start || event.target.value, end: event.target.value })}
-              className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
-            />
-          </label>
-        </div>
+        <div className="flex flex-wrap items-center gap-2.5">{extra}</div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2.5">{extra}</div>
+      {filters ? <div>{filters}</div> : null}
     </div>
   );
 }

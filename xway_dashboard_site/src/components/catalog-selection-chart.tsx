@@ -735,7 +735,7 @@ export function CatalogSelectionChart({
     setHiddenDrrSeries((current) => toggleLegendKey(current, key));
   };
 
-  const emptyStateClassName = chartMode === "combined" ? "h-full" : "min-h-[260px]";
+  const emptyStateClassName = chartMode === "combined" ? "min-h-[420px]" : "min-h-[260px]";
 
   return (
     <div className="chart-card catalog-selection-chart-card border-[rgba(75,123,255,0.14)]">
@@ -784,7 +784,7 @@ export function CatalogSelectionChart({
         </div>
       </div>
 
-      <div className={cn("trend-chart", chartMode === "combined" ? "h-[360px] sm:h-[420px]" : "space-y-4")}>
+      <div className="trend-chart space-y-4">
         {!selectionCount ? (
           <div className={cn("flex items-center justify-center text-sm text-[var(--color-muted)]", emptyStateClassName)}>
             Под выбранные фильтры товары не попали.
@@ -807,8 +807,8 @@ export function CatalogSelectionChart({
               Включи хотя бы один показатель в легенде ниже.
             </div>
           ) : (
-            <div className="flex h-full flex-col gap-4">
-              <div className="min-h-0 flex-1">
+            <div className="flex flex-col gap-4">
+              <div className="h-[280px] sm:h-[340px]">
                 <ResponsiveContainer>
                   <ComposedChart data={chartRows} syncId={CHART_SYNC_ID} margin={{ top: 12, right: 8, left: 8, bottom: 8 }}>
                     <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />

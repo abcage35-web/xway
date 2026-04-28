@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 import { cn } from "../lib/format";
@@ -7,6 +7,183 @@ export interface SearchableMultiSelectOption {
   value: string;
   label: string;
   searchText?: string;
+}
+
+function useAnchoredPanel(open: boolean) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const viewportWidth = typeof window !== "undefined" ? window.visualViewport?.width ?? window.innerWidth : 0;
+  const maxPanelWidth = viewportWidth ? Math.max(260, Math.min(420, viewportWidth - 24)) : 420;
+  const panelWidth = anchorRect ? Math.min(Math.max(anchorRect.width, 280), maxPanelWidth) : 280;
+  const panelLeft =
+    anchorRect && viewportWidth
+      ? Math.max(12, Math.min(anchorRect.left, viewportWidth - panelWidth - 12))
+      : anchorRect?.left ?? 0;
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const updateAnchorRect = () => {
+      if (buttonRef.current) {
+        setAnchorRect(buttonRef.current.getBoundingClientRect());
+      }
+    };
+
+    updateAnchorRect();
+
+    const handleLayoutChange = () => {
+      updateAnchorRect();
+    };
+
+    window.addEventListener("scroll", handleLayoutChange, true);
+    window.addEventListener("resize", handleLayoutChange);
+    window.visualViewport?.addEventListener("scroll", handleLayoutChange);
+    window.visualViewport?.addEventListener("resize", handleLayoutChange);
+    return () => {
+      window.removeEventListener("scroll", handleLayoutChange, true);
+      window.removeEventListener("resize", handleLayoutChange);
+      window.visualViewport?.removeEventListener("scroll", handleLayoutChange);
+      window.visualViewport?.removeEventListener("resize", handleLayoutChange);
+    };
+  }, [open]);
+
+  return {
+    rootRef,
+    buttonRef,
+    panelRef,
+    anchorRect,
+    panelWidth,
+    panelLeft,
+  };
+}
+
+export function SearchableSelect<TValue extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  className,
+  icon,
+}: {
+  label: string;
+  options: Array<{ value: TValue; label: string }>;
+  value: TValue;
+  onChange: (value: TValue) => void;
+  className?: string;
+  icon?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const { rootRef, buttonRef, panelRef, anchorRect, panelWidth, panelLeft } = useAnchoredPanel(open);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0] ?? null;
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown, true);
+    document.addEventListener("touchstart", handlePointerDown, true);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown, true);
+      document.removeEventListener("touchstart", handlePointerDown, true);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open, panelRef, rootRef]);
+
+  return (
+    <div ref={rootRef} className={cn("relative min-w-[180px] flex-1 sm:flex-none", className)}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className={cn(
+          "metric-chip flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left transition",
+          open && "border-[var(--color-brand-300)] shadow-[0_10px_30px_rgba(44,35,66,0.08)]",
+        )}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {icon ? <span className="shrink-0 text-brand-200">{icon}</span> : null}
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">{label}</p>
+          <p className="truncate text-sm font-medium text-[var(--color-ink)]">{selectedOption?.label ?? "—"}</p>
+        </div>
+        <ChevronDown className={cn("size-4 shrink-0 text-[var(--color-muted)] transition", open && "rotate-180 text-brand-200")} />
+      </button>
+
+      {open && anchorRect
+        ? createPortal(
+            <div
+              ref={panelRef}
+              className="glass-panel rounded-[24px] p-2"
+              style={{
+                position: "fixed",
+                top: anchorRect.bottom + 10,
+                left: panelLeft,
+                width: panelWidth,
+                zIndex: 9999,
+              }}
+            >
+              <div className="max-h-80 space-y-1 overflow-y-auto pr-1" role="listbox">
+                {options.map((option) => {
+                  const selected = option.value === value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        onChange(option.value);
+                        setOpen(false);
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm transition",
+                        selected ? "bg-[var(--color-brand-100)] text-[var(--color-ink)]" : "text-[var(--color-ink)] hover:bg-[var(--color-surface-soft)]",
+                      )}
+                      role="option"
+                      aria-selected={selected}
+                    >
+                      <span
+                        className={cn(
+                          "flex size-5 shrink-0 items-center justify-center rounded-full border",
+                          selected
+                            ? "border-brand-200 bg-brand-200 text-white"
+                            : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-transparent",
+                        )}
+                      >
+                        <Check className="size-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-medium">{option.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
 }
 
 export function SearchableMultiSelect({
@@ -28,17 +205,9 @@ export function SearchableMultiSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const { rootRef, buttonRef, panelRef, anchorRect, panelWidth, panelLeft } = useAnchoredPanel(open);
   const selectedSet = new Set(selectedValues);
   const normalizedSearch = search.trim().toLowerCase();
-  const viewportWidth = typeof window !== "undefined" ? window.visualViewport?.width ?? window.innerWidth : 0;
-  const panelWidth = anchorRect ? Math.max(anchorRect.width, 280) : 280;
-  const panelLeft =
-    anchorRect && viewportWidth
-      ? Math.max(12, Math.min(anchorRect.left, viewportWidth - panelWidth - 12))
-      : anchorRect?.left ?? 0;
   const filteredOptions = options.filter((option) => {
     if (!normalizedSearch) {
       return true;
@@ -59,14 +228,6 @@ export function SearchableMultiSelect({
       return;
     }
 
-    const updateAnchorRect = () => {
-      if (rootRef.current) {
-        setAnchorRect(rootRef.current.getBoundingClientRect());
-      }
-    };
-
-    updateAnchorRect();
-
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) {
@@ -78,23 +239,11 @@ export function SearchableMultiSelect({
       setOpen(false);
     };
 
-    const handleLayoutChange = () => {
-      updateAnchorRect();
-    };
-
     document.addEventListener("mousedown", handlePointerDown, true);
     document.addEventListener("touchstart", handlePointerDown, true);
-    window.addEventListener("scroll", handleLayoutChange, true);
-    window.addEventListener("resize", handleLayoutChange);
-    window.visualViewport?.addEventListener("scroll", handleLayoutChange);
-    window.visualViewport?.addEventListener("resize", handleLayoutChange);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown, true);
       document.removeEventListener("touchstart", handlePointerDown, true);
-      window.removeEventListener("scroll", handleLayoutChange, true);
-      window.removeEventListener("resize", handleLayoutChange);
-      window.visualViewport?.removeEventListener("scroll", handleLayoutChange);
-      window.visualViewport?.removeEventListener("resize", handleLayoutChange);
     };
   }, [open]);
 
@@ -126,6 +275,7 @@ export function SearchableMultiSelect({
   return (
     <div ref={rootRef} className={cn("relative min-w-[220px] flex-1 sm:flex-none", className)}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
         className={cn(

@@ -13,6 +13,12 @@ export interface CatalogCampaignState {
   status_code: string;
   status_label: string;
   active: boolean;
+  budget_limit?: number | null;
+  budget_spent_today?: number | null;
+  budget_rule_active?: boolean | null;
+  spend_limit?: number | null;
+  spend_spent_today?: number | null;
+  spend_limit_active?: boolean | null;
 }
 
 export interface GroupInfo {

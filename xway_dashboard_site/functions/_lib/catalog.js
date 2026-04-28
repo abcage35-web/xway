@@ -117,6 +117,129 @@ function extractCatalogCampaignStatusCode(rawValue) {
   return normalized || null;
 }
 
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeSpendLimitPeriod(period) {
+  const value = String(period || "").toLowerCase();
+  if (value.includes("day") || value.includes("дн")) {
+    return "day";
+  }
+  if (value.includes("week") || value.includes("нед")) {
+    return "week";
+  }
+  if (value.includes("month") || value.includes("мес")) {
+    return "month";
+  }
+  return value;
+}
+
+function asArray(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value);
+  }
+  return [];
+}
+
+function catalogCampaignRowsForKey(payload, key) {
+  const byType = payload?.campaigns_by_type || {};
+  const candidatesByKey = {
+    unified: ["unified", "auto", "automatic"],
+    manual_search: ["manual_search", "search", "manual"],
+    manual_recom: ["manual_recom", "recom", "recommendation", "recommendations"],
+    cpc: ["cpc", "clicks"],
+  };
+  return (candidatesByKey[key] || [key]).flatMap((candidateKey) => asArray(byType[candidateKey]));
+}
+
+function resolveSpendLimitConfig(source) {
+  const limitsByPeriod = source?.limits_by_period || {};
+  const periodItems = Object.entries(limitsByPeriod).map(([period, config]) => ({
+    period,
+    active: Boolean(config?.active),
+    limit: numberOrNull(config?.limit),
+  }));
+  const rawSpendLimits = Array.isArray(source?.spend_limits)
+    ? source.spend_limits
+    : Array.isArray(source?.spend_limits?.items)
+      ? source.spend_limits.items
+      : [];
+  const spendLimitItems = rawSpendLimits.map((item) => ({
+    period: item?.period ?? item?.limit_period,
+    active: Boolean(item?.active),
+    limit: numberOrNull(item?.limit),
+  }));
+  const items = [...periodItems, ...spendLimitItems].filter((item) => item.limit !== null || item.active);
+  return (
+    items.find((item) => item.active && normalizeSpendLimitPeriod(item.period) === "day") ||
+    items.find((item) => item.active) ||
+    items.find((item) => normalizeSpendLimitPeriod(item.period) === "day") ||
+    items[0] ||
+    null
+  );
+}
+
+function readCampaignSpendToday(source) {
+  return (
+    numberOrNull(source?.spend?.DAY) ??
+    numberOrNull(source?.spend?.day) ??
+    numberOrNull(source?.spend_day) ??
+    numberOrNull(source?.day_spend) ??
+    numberOrNull(source?.expense_day) ??
+    numberOrNull(source?.spent_today)
+  );
+}
+
+function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
+  const sources = [
+    rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : null,
+    ...campaigns,
+  ].filter(Boolean);
+  const budgetLimits = [];
+  const budgetSpentValues = [];
+  const spendLimits = [];
+  const spendSpentValues = [];
+  let budgetRuleActive = false;
+  let spendLimitActive = false;
+
+  for (const source of sources) {
+    const budgetRule = source.budget_rule_config || source.budget_rule || {};
+    const budgetLimit = numberOrNull(budgetRule.limit ?? source.budget_limit ?? source.budget_rule_limit);
+    const spendLimit = resolveSpendLimitConfig(source);
+    const spendToday = readCampaignSpendToday(source);
+
+    if (budgetLimit !== null && budgetLimit > 0) {
+      budgetLimits.push(budgetLimit);
+    }
+    if (spendToday !== null && spendToday >= 0) {
+      budgetSpentValues.push(spendToday);
+      spendSpentValues.push(spendToday);
+    }
+    if (spendLimit?.limit !== null && spendLimit?.limit !== undefined && spendLimit.limit > 0) {
+      spendLimits.push(spendLimit.limit);
+    }
+    budgetRuleActive = budgetRuleActive || Boolean(budgetRule.active ?? source.budget_rule_active);
+    spendLimitActive = spendLimitActive || Boolean(spendLimit?.active ?? source.spend_limit_active);
+  }
+
+  return {
+    budget_limit: budgetLimits.length ? budgetLimits.reduce((sum, value) => sum + value, 0) : null,
+    budget_spent_today: budgetSpentValues.length ? budgetSpentValues.reduce((sum, value) => sum + value, 0) : null,
+    budget_rule_active: budgetRuleActive,
+    spend_limit: spendLimits.length ? spendLimits.reduce((sum, value) => sum + value, 0) : null,
+    spend_spent_today: spendSpentValues.length ? spendSpentValues.reduce((sum, value) => sum + value, 0) : null,
+    spend_limit_active: spendLimitActive,
+  };
+}
+
 function normalizeCatalogCampaignStates(raw) {
   const payload = raw || {};
   const rows = [];
@@ -126,6 +249,7 @@ function normalizeCatalogCampaignStates(raw) {
       continue;
     }
     const meta = CATALOG_CAMPAIGN_FIELD_META[key] || {};
+    const campaigns = catalogCampaignRowsForKey(payload, key);
     rows.push({
       key,
       label: meta.label || key,
@@ -133,6 +257,7 @@ function normalizeCatalogCampaignStates(raw) {
       status_code: normalizedCode,
       status_label: catalogCampaignStatusLabel(normalizedCode),
       active: normalizedCode === "ACTIVE",
+      ...normalizeCatalogCampaignLimitSummary(payload[key], campaigns),
     });
   }
   return rows;

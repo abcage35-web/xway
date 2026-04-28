@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ExternalLink, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ExternalLink, Filter, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -7,8 +7,8 @@ import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issue
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogSelectionChart } from "../components/catalog-selection-chart";
-import { SearchableMultiSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
-import { InlineMetricSet, MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
+import { SearchableMultiSelect, SearchableSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
+import { MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
 
 interface CatalogLoaderData {
   payload: CatalogResponse;
@@ -30,12 +30,22 @@ interface CatalogCampaignSlot {
   zoneKind: "search" | "recom" | "both";
   statusCode: string | null;
   displayStatus: CatalogCampaignDisplayStatus;
+  limitRows: CatalogCampaignLimitRow[];
+}
+
+interface CatalogCampaignLimitRow {
+  key: "budget" | "spend";
+  label: string;
+  current: number;
+  total: number | null;
+  active: boolean;
+  percent: number | null;
 }
 
 const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: string }> = {
-  unified: { headline: "Единая ставка" },
-  manual: { headline: "Ручная ставка" },
-  cpc: { headline: "Оплата за клики" },
+  unified: { headline: "Единая" },
+  manual: { headline: "Ручная" },
+  cpc: { headline: "Клики" },
 };
 
 const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
@@ -233,10 +243,10 @@ interface CatalogChartCacheEntry {
 }
 
 function CatalogCampaignColumnsHeader() {
-  const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string; subtitle: string }> = [
-    { key: "unified", title: "кампания", subtitle: "Единая ставка" },
-    { key: "manual", title: "кампания", subtitle: "Ручная ставка" },
-    { key: "cpc", title: "кампания", subtitle: "Оплата за клики" },
+  const headerItems: Array<{ key: CatalogCampaignSlotKind; title: string }> = [
+    { key: "unified", title: CATALOG_CAMPAIGN_SLOT_META.unified.headline },
+    { key: "manual", title: CATALOG_CAMPAIGN_SLOT_META.manual.headline },
+    { key: "cpc", title: CATALOG_CAMPAIGN_SLOT_META.cpc.headline },
   ];
 
   return (
@@ -247,7 +257,6 @@ function CatalogCampaignColumnsHeader() {
             <span className={cn("catalog-campaign-kind-badge", `is-${item.key}`)}>{item.key === "cpc" ? "CPC" : "CPM"}</span>
             <strong className="catalog-campaign-header-title">{item.title}</strong>
           </div>
-          <span className="catalog-campaign-header-subtitle">{item.subtitle}</span>
         </div>
       ))}
     </div>
@@ -300,6 +309,67 @@ function resolveCatalogCampaignSlotStatus(states: CatalogCampaignState[]): strin
     return "ACTIVE";
   }
   return codes[0] ?? null;
+}
+
+function buildCatalogCampaignLimitRow(
+  key: CatalogCampaignLimitRow["key"],
+  label: string,
+  states: CatalogCampaignState[],
+): CatalogCampaignLimitRow | null {
+  const totalField = key === "budget" ? "budget_limit" : "spend_limit";
+  const currentField = key === "budget" ? "budget_spent_today" : "spend_spent_today";
+  const activeField = key === "budget" ? "budget_rule_active" : "spend_limit_active";
+  const totals = states.map((state) => toNumber(state[totalField])).filter((value): value is number => value !== null && value > 0);
+  const currents = states.map((state) => toNumber(state[currentField])).filter((value): value is number => value !== null && value >= 0);
+  const isActive = states.some((state) => Boolean(state[activeField]));
+
+  if (!totals.length && !currents.length && !isActive) {
+    return null;
+  }
+
+  const current = currents.reduce((sum, value) => sum + value, 0);
+  const total = totals.length ? totals.reduce((sum, value) => sum + value, 0) : null;
+  const percent = total !== null && total > 0 ? Math.max(0, Math.min((current / total) * 100, 100)) : current > 0 ? 100 : null;
+
+  return {
+    key,
+    label,
+    current,
+    total,
+    active: isActive,
+    percent,
+  };
+}
+
+function buildCatalogCampaignLimitRows(states: CatalogCampaignState[]): CatalogCampaignLimitRow[] {
+  return [
+    buildCatalogCampaignLimitRow("budget", "Бюджет", states),
+    buildCatalogCampaignLimitRow("spend", "День", states),
+  ].filter((row): row is CatalogCampaignLimitRow => Boolean(row));
+}
+
+function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] }) {
+  if (!rows.length) {
+    return null;
+  }
+
+  return (
+    <div className="catalog-campaign-limit-bars">
+      {rows.map((row) => (
+        <div
+          key={row.key}
+          className={cn("catalog-campaign-limit-row", `is-${row.key}`, !row.active && "is-muted")}
+          title={`${row.label}: ${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`}
+        >
+          <span className="catalog-campaign-limit-label">{row.label}</span>
+          <span className="catalog-campaign-limit-track" style={{ ["--campaign-limit-progress" as string]: `${row.percent ?? 0}%` }}>
+            <span />
+          </span>
+          <strong className="catalog-campaign-limit-value">{row.total !== null ? `${Math.round(row.percent ?? 0)}%` : formatMoney(row.current, true)}</strong>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function CatalogCampaignStatusGlyph({ status }: { status: CatalogCampaignDisplayStatus }) {
@@ -390,22 +460,22 @@ function resolveCatalogIssueKindCaption(kind: CatalogIssueKind) {
 function resolveCatalogIssueKindTone(kind: CatalogIssueKind) {
   if (kind === "budget") {
     return {
-      shell: "border-rose-200 bg-rose-50/70",
-      badge: "bg-rose-100 text-rose-700",
-      metric: "border-rose-200/80 bg-white/70 text-rose-700",
+      shell: "is-budget",
+      badge: "is-budget is-primary",
+      metric: "is-budget",
     };
   }
   if (kind === "limit") {
     return {
-      shell: "border-amber-200 bg-amber-50/70",
-      badge: "bg-amber-100 text-amber-700",
-      metric: "border-amber-200/80 bg-white/70 text-amber-700",
+      shell: "is-limit",
+      badge: "is-limit is-primary",
+      metric: "is-limit",
     };
   }
   return {
-    shell: "border-sky-200 bg-sky-50/70",
-    badge: "bg-sky-100 text-sky-700",
-    metric: "border-sky-200/80 bg-white/70 text-sky-700",
+    shell: "is-turnover",
+    badge: "is-turnover is-primary",
+    metric: "is-turnover",
   };
 }
 
@@ -420,10 +490,10 @@ function CatalogIssueCampaignEntry({
   const showPerformanceMetrics = issueKind !== "turnover";
   return (
     <div
-      className="flex flex-col gap-2 rounded-[18px] border border-[var(--color-line)] bg-white/88 px-3 py-2.5 shadow-[0_8px_18px_rgba(44,35,66,0.04)]"
+      className="catalog-issue-campaign-card"
       title={`${campaign.label}${campaign.statusLabel ? ` · ${campaign.statusLabel}` : ""}`}
     >
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="catalog-issue-campaign-head">
         <CatalogCampaignStatusIconBadge status={campaign.displayStatus} label={campaign.statusLabel || "Статус не задан"} />
         <span className={cn("catalog-campaign-kind-badge", campaign.paymentType === "cpc" ? "is-cpc" : "is-manual")}>
           {campaign.paymentType === "cpc" ? "CPC" : "CPM"}
@@ -441,32 +511,32 @@ function CatalogIssueCampaignEntry({
             iconOnly
           />
         ) : null}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--color-ink)]">{campaign.label.replace(/^РК\s*/, "")}</span>
+        <span className="catalog-issue-campaign-title">{campaign.label.replace(/^РК\s*/, "")}</span>
       </div>
       {campaign.hours > 0 || campaign.incidents > 0 || campaign.estimatedGap !== null || showPerformanceMetrics ? (
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="catalog-issue-pill-row">
           {campaign.hours > 0 ? (
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+            <span className={cn("catalog-issue-pill", tone.metric)}>
               {formatNumber(campaign.hours, 1)} ч
             </span>
           ) : null}
           {campaign.incidents > 0 ? (
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+            <span className={cn("catalog-issue-pill", tone.metric)}>
               {formatIssueIncidents(campaign.incidents)}
             </span>
           ) : null}
           {showPerformanceMetrics ? (
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+            <span className={cn("catalog-issue-pill", tone.metric)}>
               Заказы {formatNumber(campaign.ordersAds)}
             </span>
           ) : null}
           {showPerformanceMetrics && campaign.drr !== null ? (
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+            <span className={cn("catalog-issue-pill", tone.metric)}>
               ДРР {formatPercent(campaign.drr)}
             </span>
           ) : null}
           {campaign.estimatedGap !== null ? (
-            <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+            <span className={cn("catalog-issue-pill", tone.metric)}>
               ≈ {formatMoney(campaign.estimatedGap)}
             </span>
           ) : null}
@@ -621,20 +691,20 @@ function CatalogIssueDrawer({
             {issues.map((issue) => {
               const tone = resolveCatalogIssueKindTone(issue.kind);
               return (
-                <section key={`${item.ref}-${issue.kind}`} className={cn("rounded-[18px] border p-3", tone.shell)}>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", tone.badge)}>
+                <section key={`${item.ref}-${issue.kind}`} className={cn("catalog-issue-card", tone.shell)}>
+                  <div className="catalog-issue-card-head">
+                    <span className={cn("catalog-issue-pill", tone.badge)}>
                       {resolveCatalogIssueKindLabel(issue.kind)}
                     </span>
                     {issue.kind === "turnover" ? (
                       <>
                         {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
-                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          <span className={cn("catalog-issue-pill", tone.metric)}>
                             {formatTurnoverDays(issue.turnoverDays)}
                           </span>
                         ) : null}
                         {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
-                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          <span className={cn("catalog-issue-pill", tone.metric)}>
                             порог {formatTurnoverDays(issue.thresholdDays)}
                           </span>
                         ) : null}
@@ -642,27 +712,27 @@ function CatalogIssueDrawer({
                     ) : (
                       <>
                         {issue.hours > 0 ? (
-                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          <span className={cn("catalog-issue-pill", tone.metric)}>
                             {formatNumber(issue.hours, 1)} ч
                           </span>
                         ) : null}
                         {issue.incidents > 0 ? (
-                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          <span className={cn("catalog-issue-pill", tone.metric)}>
                             {formatIssueIncidents(issue.incidents)}
                           </span>
                         ) : null}
-                        <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                        <span className={cn("catalog-issue-pill", tone.metric)}>
                           {issue.totalOrders !== null
                             ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
                             : `Заказы ${formatNumber(issue.ordersAds)}`}
                         </span>
                         {issue.drrOverall !== null ? (
-                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          <span className={cn("catalog-issue-pill", tone.metric)}>
                             ДРР {formatPercent(issue.drrOverall)}
                           </span>
                         ) : null}
                         {issue.estimatedGap !== null ? (
-                          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-medium", tone.metric)}>
+                          <span className={cn("catalog-issue-pill", tone.metric)}>
                             ≈ {formatMoney(issue.estimatedGap)}
                           </span>
                         ) : null}
@@ -670,7 +740,7 @@ function CatalogIssueDrawer({
                     )}
                   </div>
                   {issue.campaigns.length ? (
-                    <div className="mt-2 space-y-2">
+                    <div className="catalog-issue-campaign-list">
                       {issue.campaigns.map((campaign) => (
                         <CatalogIssueCampaignEntry key={`${issue.kind}-${campaign.id}`} campaign={campaign} issueKind={issue.kind} />
                       ))}
@@ -1180,6 +1250,7 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
       zoneKind: "both",
       statusCode: unifiedState.status_code,
       displayStatus: resolveCatalogCampaignDisplayStatus(unifiedState.status_code),
+      limitRows: buildCatalogCampaignLimitRows([unifiedState]),
     });
   }
 
@@ -1195,6 +1266,7 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
       zoneKind: hasSearch && hasRecom ? "both" : hasSearch ? "search" : "recom",
       statusCode: resolveCatalogCampaignSlotStatus(manualStates),
       displayStatus: resolveCatalogCampaignDisplayStatus(resolveCatalogCampaignSlotStatus(manualStates)),
+      limitRows: buildCatalogCampaignLimitRows(manualStates),
     });
   }
 
@@ -1208,6 +1280,7 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
       zoneKind: "search",
       statusCode: cpcState.status_code,
       displayStatus: resolveCatalogCampaignDisplayStatus(cpcState.status_code),
+      limitRows: buildCatalogCampaignLimitRows([cpcState]),
     });
   }
 
@@ -3621,6 +3694,43 @@ export function CatalogPage() {
               preset={preset}
               onPresetChange={handlePresetChange}
               onRangeChange={handleRangeChange}
+              filters={
+                <div className="catalog-toolbar-filter-row">
+                  <SearchField
+                    value={query}
+                    onChange={(value) => startTransition(() => setQuery(value))}
+                    placeholder="Фильтр по артикулу, названию, бренду, категории"
+                    className="catalog-toolbar-search"
+                  />
+                  <SearchableMultiSelect
+                    label="Кабинет"
+                    allLabel="Все кабинеты"
+                    options={shopOptions}
+                    selectedValues={selectedShopIds}
+                    onChange={setSelectedShopIds}
+                    emptyText="Кабинеты не найдены"
+                    className="catalog-toolbar-select"
+                  />
+                  <SearchableMultiSelect
+                    label="Категория"
+                    allLabel="Все категории"
+                    options={categoryOptions}
+                    selectedValues={selectedCategories}
+                    onChange={setSelectedCategories}
+                    emptyText="Категории не найдены"
+                    className="catalog-toolbar-select"
+                  />
+                  <SearchableMultiSelect
+                    label="SKU"
+                    allLabel="Все SKU"
+                    options={skuOptions}
+                    selectedValues={selectedSkus}
+                    onChange={setSelectedSkus}
+                    emptyText="SKU не найдены"
+                    className="catalog-toolbar-select"
+                  />
+                </div>
+              }
               extra={
                 <>
                   <button
@@ -3648,11 +3758,11 @@ export function CatalogPage() {
                       activeListFilterCount > 0 ? "text-brand-200" : "text-[var(--color-ink)]",
                     )}
                   >
+                    <Filter className="size-4" />
                     <span>
-                      {detailsExpanded ? "Свернуть параметры" : "Параметры списка"}
+                      Фильтр
                       {activeListFilterCount > 0 ? ` · ${formatNumber(activeListFilterCount)}` : ""}
                     </span>
-                    <ChevronDown className={cn("size-4 transition-transform", detailsExpanded && "rotate-180")} />
                   </button>
                 </>
               }
@@ -3663,42 +3773,12 @@ export function CatalogPage() {
           <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
             <div className="mb-3">
               <div className="space-y-1">
-                <h3 className="font-display text-base font-semibold text-[var(--color-ink)]">Фильтры списка артикулов</h3>
-                <p className="text-sm text-[var(--color-muted)]">Поиск, кабинеты, остаток, оборачиваемость и сортировка таблиц по кабинетам.</p>
+                <h3 className="font-display text-base font-semibold text-[var(--color-ink)]">Параметры списка артикулов</h3>
+                <p className="text-sm text-[var(--color-muted)]">Остаток, оборачиваемость и сортировка таблиц по кабинетам.</p>
               </div>
             </div>
 
-            <div className="grid gap-2.5 xl:grid-cols-[minmax(260px,1.35fr)_repeat(3,minmax(220px,1fr))]">
-              <div className="min-w-0">
-                <SearchField value={query} onChange={(value) => startTransition(() => setQuery(value))} placeholder="Фильтр по артикулу, названию, бренду, категории" />
-              </div>
-              <SearchableMultiSelect
-                label="Кабинет"
-                allLabel="Все кабинеты"
-                options={shopOptions}
-                selectedValues={selectedShopIds}
-                onChange={setSelectedShopIds}
-                emptyText="Кабинеты не найдены"
-              />
-              <SearchableMultiSelect
-                label="Категория"
-                allLabel="Все категории"
-                options={categoryOptions}
-                selectedValues={selectedCategories}
-                onChange={setSelectedCategories}
-                emptyText="Категории не найдены"
-              />
-              <SearchableMultiSelect
-                label="SKU"
-                allLabel="Все SKU"
-                options={skuOptions}
-                selectedValues={selectedSkus}
-                onChange={setSelectedSkus}
-                emptyText="SKU не найдены"
-              />
-            </div>
-
-            <div className="mt-2.5 grid gap-2.5 lg:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2.5 lg:grid-cols-2 xl:grid-cols-4">
               <NumericRangeField
                 label="Остаток"
                 fromValue={stockFrom}
@@ -3714,37 +3794,37 @@ export function CatalogPage() {
                 onFromChange={setTurnoverFrom}
                 onToChange={setTurnoverTo}
               />
-              <FilterField label="Сортировать по">
-                <select
-                  value={sortField}
-                  onChange={(event) => setSortField(event.target.value as CatalogSortField)}
-                  className="bg-transparent text-sm text-[var(--color-ink)] outline-none"
-                >
-                  <option value="stock">Остаток</option>
-                  <option value="turnover">Оборачиваемость</option>
-                  <option value="campaigns">Кол-во РК</option>
-                  <option value="spend">Расход</option>
-                  <option value="views">Показы</option>
-                  <option value="clicks">Клики</option>
-                  <option value="orders">Заказы</option>
-                  <option value="ctr">CTR</option>
-                  <option value="cr">CR</option>
-                  <option value="drr">ДРР</option>
-                  <option value="categoryAvgCr">Ср. CR категории</option>
-                  <option value="article">Артикул</option>
-                  <option value="name">Название</option>
-                </select>
-              </FilterField>
-              <FilterField label="Направление">
-                <select
-                  value={sortDirection}
-                  onChange={(event) => setSortDirection(event.target.value as CatalogSortDirection)}
-                  className="bg-transparent text-sm text-[var(--color-ink)] outline-none"
-                >
-                  <option value="desc">По убыванию</option>
-                  <option value="asc">По возрастанию</option>
-                </select>
-              </FilterField>
+              <SearchableSelect<CatalogSortField>
+                label="Сортировать по"
+                value={sortField}
+                onChange={setSortField}
+                className="catalog-filter-select"
+                options={[
+                  { value: "stock", label: "Остаток" },
+                  { value: "turnover", label: "Оборачиваемость" },
+                  { value: "campaigns", label: "Кол-во РК" },
+                  { value: "spend", label: "Расход" },
+                  { value: "views", label: "Показы" },
+                  { value: "clicks", label: "Клики" },
+                  { value: "orders", label: "Заказы" },
+                  { value: "ctr", label: "CTR" },
+                  { value: "cr", label: "CR" },
+                  { value: "drr", label: "ДРР" },
+                  { value: "categoryAvgCr", label: "Ср. CR категории" },
+                  { value: "article", label: "Артикул" },
+                  { value: "name", label: "Название" },
+                ]}
+              />
+              <SearchableSelect<CatalogSortDirection>
+                label="Направление"
+                value={sortDirection}
+                onChange={setSortDirection}
+                className="catalog-filter-select"
+                options={[
+                  { value: "desc", label: "По убыванию" },
+                  { value: "asc", label: "По возрастанию" },
+                ]}
+              />
             </div>
           </div>
         }
@@ -3873,20 +3953,20 @@ export function CatalogPage() {
       <section className="catalog-issues-panel glass-panel" aria-labelledby="catalog-issues-title">
         <div className="catalog-issues-panel-main">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="catalog-issues-title-row">
               <h2 id="catalog-issues-title" className="font-display text-xl font-semibold text-[var(--color-ink)] sm:text-2xl">
                 Ошибки за {yesterdayLabel}
               </h2>
-              <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+              <span className="catalog-issues-summary-chip metric-chip">
                 {formatNumber(articleIssueRowsAllKinds.length)} с ошибками
               </span>
               {articleIssuesHoursTotal > 0 ? (
-                <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                <span className="catalog-issues-summary-chip metric-chip">
                   {formatNumber(articleIssuesHoursTotal, 1)} ч простоя
                 </span>
               ) : null}
               {articleIssuesEstimatedGapTotal > 0 ? (
-                <span className="metric-chip rounded-2xl px-2.5 py-1 text-[11px] text-[var(--color-muted)]">
+                <span className="catalog-issues-summary-chip metric-chip">
                   ≈ {formatMoney(articleIssuesEstimatedGapTotal)}
                 </span>
               ) : null}
@@ -3959,7 +4039,7 @@ export function CatalogPage() {
               onClick={handleCopyArticleIssues}
               disabled={!articleIssueRows.length}
               className={cn(
-                "metric-chip inline-flex h-9 items-center rounded-2xl px-3.5 text-sm transition",
+                "catalog-issues-secondary-action metric-chip inline-flex items-center text-sm transition",
                 articleIssueRows.length
                   ? articleIssuesCopyState === "copied"
                     ? "text-emerald-700 hover:bg-[var(--color-surface-strong)]"
@@ -3980,7 +4060,7 @@ export function CatalogPage() {
               onClick={() => setArticleIssueSettingsOpen(true)}
               title="Настройки блока ошибок"
               aria-label="Настройки блока ошибок"
-              className="metric-chip inline-flex h-9 w-9 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+              className="catalog-issues-icon-action metric-chip inline-flex items-center justify-center text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
             >
               <SlidersHorizontal className="size-4" />
             </button>
@@ -3989,7 +4069,7 @@ export function CatalogPage() {
               onClick={collectArticleIssues}
               disabled={articleIssuesLoading || !visibleIssueTargetRefs.length}
               className={cn(
-                "inline-flex h-9 items-center rounded-2xl px-3.5 text-sm font-medium transition",
+                "catalog-issues-primary-action inline-flex items-center text-sm font-medium transition",
                 articleIssuesLoading || !visibleIssueTargetRefs.length
                   ? "cursor-not-allowed border border-[var(--color-line)] bg-[var(--color-surface-soft)] text-[var(--color-muted)] opacity-70"
                   : "bg-brand-200 text-white shadow-[0_12px_28px_rgba(241,120,40,0.18)] hover:bg-brand-500",
@@ -4009,6 +4089,54 @@ export function CatalogPage() {
         {visibleShops.map((shop) => {
           const collapsed = collapsedShopIds.includes(String(shop.id));
           const totals = summarizeCatalogArticles(shop.articles);
+          const compareShop = compareVisibleShops.find((candidate) => String(candidate.id) === String(shop.id)) ?? null;
+          const compareShopTotals = compareShop ? summarizeCatalogArticles(compareShop.articles) : null;
+          const shopCr = totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null;
+          const compareShopCr = compareShopTotals && compareShopTotals.clicks > 0 ? (compareShopTotals.orders / compareShopTotals.clicks) * 100 : null;
+          const shopMetrics: Array<{ label: string; value: string; deltaText?: ReactNode; deltaClassName: string }> = [
+            {
+              label: "Артикулы",
+              value: formatNumber(shop.articles.length),
+              deltaText: renderDeltaText(formatSignedNumber(diffValue(shop.articles.length, comparePayload ? compareShop?.articles.length ?? 0 : null))),
+              deltaClassName: deltaClassName(diffValue(shop.articles.length, comparePayload ? compareShop?.articles.length ?? 0 : null), true),
+            },
+            {
+              label: "Показы",
+              value: formatCompactNumber(totals.views),
+              deltaText: renderDeltaText(formatSignedNumber(diffValue(totals.views, compareShopTotals?.views))),
+              deltaClassName: deltaClassName(diffValue(totals.views, compareShopTotals?.views), true),
+            },
+            {
+              label: "Клики",
+              value: formatCompactNumber(totals.clicks),
+              deltaText: renderDeltaText(formatSignedNumber(diffValue(totals.clicks, compareShopTotals?.clicks))),
+              deltaClassName: deltaClassName(diffValue(totals.clicks, compareShopTotals?.clicks), true),
+            },
+            {
+              label: "Заказы",
+              value: formatNumber(totals.orders),
+              deltaText: renderDeltaText(formatSignedNumber(diffValue(totals.orders, compareShopTotals?.orders))),
+              deltaClassName: deltaClassName(diffValue(totals.orders, compareShopTotals?.orders), true),
+            },
+            {
+              label: "Расход",
+              value: formatMoney(totals.expense_sum),
+              deltaText: renderDeltaText(formatSignedMoney(diffValue(totals.expense_sum, compareShopTotals?.expense_sum))),
+              deltaClassName: deltaClassName(diffValue(totals.expense_sum, compareShopTotals?.expense_sum), false),
+            },
+            {
+              label: "CR",
+              value: formatPercent(shopCr),
+              deltaText: renderDeltaText(formatSignedPercent(diffValue(shopCr, compareShopCr))),
+              deltaClassName: deltaClassName(diffValue(shopCr, compareShopCr), true),
+            },
+            {
+              label: "Баланс",
+              value: formatMoney(shop.balance),
+              deltaText: renderDeltaText(formatSignedMoney(diffValue(shop.balance, compareShop?.balance))),
+              deltaClassName: deltaClassName(diffValue(shop.balance, compareShop?.balance), true),
+            },
+          ];
           const categoryAverageCrByValue = buildCategoryAverageCrMap(shop.articles);
 
           return (
@@ -4052,17 +4180,18 @@ export function CatalogPage() {
               }
             >
               <div className="space-y-5">
-                <InlineMetricSet
-                  values={[
-                    { label: "Артикулы", value: formatNumber(shop.articles.length) },
-                    { label: "Показы", value: formatCompactNumber(totals.views) },
-                    { label: "Клики", value: formatCompactNumber(totals.clicks) },
-                    { label: "Заказы", value: formatNumber(totals.orders) },
-                    { label: "Расход", value: formatMoney(totals.expense_sum) },
-                    { label: "CR", value: formatPercent(totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null) },
-                    { label: "Баланс", value: formatMoney(shop.balance) },
-                  ]}
-                />
+                <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))" }}>
+                  {shopMetrics.map((metric) => (
+                    <MetricCard
+                      key={metric.label}
+                      label={metric.label}
+                      value={metric.value}
+                      deltaText={metric.deltaText}
+                      deltaClassName={metric.deltaClassName}
+                      density="compact"
+                    />
+                  ))}
+                </div>
 
                 {!collapsed ? (
                   <MetricTable
@@ -4153,6 +4282,7 @@ export function CatalogPage() {
                                     <CatalogCampaignZonePill label={slot.zoneLabel} kind={slot.zoneKind} iconOnly />
                                     <strong className="catalog-campaign-title">{slot.headline}</strong>
                                   </div>
+                                  <CatalogCampaignLimitBars rows={slot.limitRows} />
                                 </div>
                               ))
                             ) : (

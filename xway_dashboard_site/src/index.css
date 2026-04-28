@@ -187,6 +187,44 @@
   ::-webkit-scrollbar-track {
     background: transparent;
   }
+
+  @media (prefers-reduced-motion: no-preference) {
+    body,
+    button,
+    a,
+    input,
+    select,
+    textarea,
+    .glass-panel,
+    .metric-chip,
+    .surface-soft,
+    .surface-strong,
+    .table-shell,
+    .chart-card,
+    .chart-legend-item,
+    .catalog-selection-chart-card,
+    .catalog-issue-filter-chip,
+    .catalog-issue-filter-chip span,
+    .catalog-issue-empty-badge,
+    .catalog-issue-inline-badge,
+    .catalog-issue-drawer,
+    .catalog-issue-drawer-product,
+    .catalog-issue-drawer-metric,
+    .catalog-article-item,
+    .catalog-campaign-card,
+    .catalog-campaign-zone-pill,
+    .theme-toggle,
+    .theme-toggle-button,
+    svg,
+    path,
+    circle,
+    rect,
+    line {
+      transition-duration: 180ms;
+      transition-property: background-color, border-color, box-shadow, color, fill, opacity, stroke;
+      transition-timing-function: ease;
+    }
+  }
 }
 
 @layer components {

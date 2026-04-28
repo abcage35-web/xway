@@ -3,6 +3,7 @@ import copy
 import csv
 import io
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -1990,6 +1991,133 @@ def _extract_catalog_campaign_status_code(raw_value: Any) -> Optional[str]:
     return normalized or None
 
 
+def _catalog_number_or_none(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _normalize_catalog_spend_limit_period(period: Any) -> str:
+    value = str(period or "").lower()
+    if "day" in value or "дн" in value:
+        return "day"
+    if "week" in value or "нед" in value:
+        return "week"
+    if "month" in value or "мес" in value:
+        return "month"
+    return value
+
+
+def _catalog_values_as_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return list(value.values())
+    return []
+
+
+def _catalog_campaign_rows_for_key(payload: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+    by_type = payload.get("campaigns_by_type") or {}
+    candidates_by_key = {
+        "unified": ["unified", "auto", "automatic"],
+        "manual_search": ["manual_search", "search", "manual"],
+        "manual_recom": ["manual_recom", "recom", "recommendation", "recommendations"],
+        "cpc": ["cpc", "clicks"],
+    }
+    rows: List[Dict[str, Any]] = []
+    for candidate_key in candidates_by_key.get(key, [key]):
+        for item in _catalog_values_as_list(by_type.get(candidate_key)):
+            if isinstance(item, dict):
+                rows.append(item)
+    return rows
+
+
+def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    limits_by_period = source.get("limits_by_period") or {}
+    if isinstance(limits_by_period, dict):
+        for period, config in limits_by_period.items():
+            if isinstance(config, dict):
+                items.append({"period": period, "active": bool(config.get("active")), "limit": _catalog_number_or_none(config.get("limit"))})
+    raw_spend_limits = source.get("spend_limits") or []
+    if isinstance(raw_spend_limits, dict):
+        raw_spend_limits = raw_spend_limits.get("items") or []
+    if isinstance(raw_spend_limits, list):
+        for item in raw_spend_limits:
+            if isinstance(item, dict):
+                items.append(
+                    {
+                        "period": item.get("period") or item.get("limit_period"),
+                        "active": bool(item.get("active")),
+                        "limit": _catalog_number_or_none(item.get("limit")),
+                    }
+                )
+    meaningful = [item for item in items if item.get("limit") is not None or item.get("active")]
+    return (
+        next((item for item in meaningful if item.get("active") and _normalize_catalog_spend_limit_period(item.get("period")) == "day"), None)
+        or next((item for item in meaningful if item.get("active")), None)
+        or next((item for item in meaningful if _normalize_catalog_spend_limit_period(item.get("period")) == "day"), None)
+        or (meaningful[0] if meaningful else None)
+    )
+
+
+def _read_catalog_campaign_spend_today(source: Dict[str, Any]) -> Optional[float]:
+    spend = source.get("spend") or {}
+    if isinstance(spend, dict):
+        value = _catalog_number_or_none(spend.get("DAY"))
+        if value is not None:
+            return value
+        value = _catalog_number_or_none(spend.get("day"))
+        if value is not None:
+            return value
+    for key in ("spend_day", "day_spend", "expense_day", "spent_today"):
+        value = _catalog_number_or_none(source.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Dict[str, Any]]) -> Dict[str, Any]:
+    sources: List[Dict[str, Any]] = []
+    if isinstance(raw_value, dict):
+        sources.append(raw_value)
+    sources.extend(campaigns)
+    budget_limits: List[float] = []
+    budget_spent_values: List[float] = []
+    spend_limits: List[float] = []
+    spend_spent_values: List[float] = []
+    budget_rule_active = False
+    spend_limit_active = False
+    for source in sources:
+        budget_rule = source.get("budget_rule_config") or source.get("budget_rule") or {}
+        if not isinstance(budget_rule, dict):
+            budget_rule = {}
+        budget_limit = _catalog_number_or_none(budget_rule.get("limit") or source.get("budget_limit") or source.get("budget_rule_limit"))
+        spend_limit = _resolve_catalog_spend_limit_config(source)
+        spend_today = _read_catalog_campaign_spend_today(source)
+        if budget_limit is not None and budget_limit > 0:
+            budget_limits.append(budget_limit)
+        if spend_today is not None and spend_today >= 0:
+            budget_spent_values.append(spend_today)
+            spend_spent_values.append(spend_today)
+        if spend_limit and spend_limit.get("limit") is not None and spend_limit["limit"] > 0:
+            spend_limits.append(spend_limit["limit"])
+        budget_rule_active = budget_rule_active or bool(budget_rule.get("active") if "active" in budget_rule else source.get("budget_rule_active"))
+        spend_limit_active = spend_limit_active or bool(spend_limit.get("active") if spend_limit else source.get("spend_limit_active"))
+    return {
+        "budget_limit": sum(budget_limits) if budget_limits else None,
+        "budget_spent_today": sum(budget_spent_values) if budget_spent_values else None,
+        "budget_rule_active": budget_rule_active,
+        "spend_limit": sum(spend_limits) if spend_limits else None,
+        "spend_spent_today": sum(spend_spent_values) if spend_spent_values else None,
+        "spend_limit_active": spend_limit_active,
+    }
+
+
 def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     payload = raw or {}
     rows: List[Dict[str, Any]] = []
@@ -1998,6 +2126,7 @@ def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]]) -> List[Di
         if not normalized_code:
             continue
         meta = CATALOG_CAMPAIGN_FIELD_META.get(key) or {}
+        campaigns = _catalog_campaign_rows_for_key(payload, key)
         rows.append(
             {
                 "key": key,
@@ -2006,6 +2135,7 @@ def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]]) -> List[Di
                 "status_code": normalized_code,
                 "status_label": _catalog_campaign_status_label(normalized_code),
                 "active": normalized_code == "ACTIVE",
+                **_normalize_catalog_campaign_limit_summary(payload.get(key), campaigns),
             }
         )
     return rows
