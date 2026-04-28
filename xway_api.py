@@ -2334,11 +2334,7 @@ def _read_catalog_budget_spent_today(source: Dict[str, Any], budget_rule: Dict[s
     )
 
 
-def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Dict[str, Any]]) -> Dict[str, Any]:
-    sources: List[Dict[str, Any]] = []
-    if isinstance(raw_value, dict):
-        sources.append(raw_value)
-    sources.extend(campaigns)
+def _normalize_catalog_campaign_limit_summary_from_sources(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
     budget_limits: List[float] = []
     budget_spent_values: List[float] = []
     spend_limits: List[float] = []
@@ -2386,15 +2382,56 @@ def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Di
     }
 
 
+def _merge_missing_catalog_campaign_limit_summary(primary: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "budget_limit": primary.get("budget_limit") if primary.get("budget_limit") is not None else fallback.get("budget_limit"),
+        "budget_spent_today": primary.get("budget_spent_today") if primary.get("budget_spent_today") is not None else fallback.get("budget_spent_today"),
+        "budget_rule_active": bool(primary.get("budget_rule_active") or fallback.get("budget_rule_active")),
+        "spend_limit": primary.get("spend_limit") if primary.get("spend_limit") is not None else fallback.get("spend_limit"),
+        "spend_spent_today": primary.get("spend_spent_today") if primary.get("spend_spent_today") is not None else fallback.get("spend_spent_today"),
+        "spend_limit_active": bool(primary.get("spend_limit_active") or fallback.get("spend_limit_active")),
+    }
+
+
+def _normalize_catalog_campaign_limit_summary(
+    raw_value: Any,
+    campaigns: List[Dict[str, Any]],
+    fallback_sources: Optional[List[Any]] = None,
+) -> Dict[str, Any]:
+    sources: List[Dict[str, Any]] = []
+    if isinstance(raw_value, dict):
+        sources.append(raw_value)
+    sources.extend(campaigns)
+    primary = _normalize_catalog_campaign_limit_summary_from_sources(sources)
+    normalized_fallback_sources = [source for source in (fallback_sources or []) if isinstance(source, dict)]
+    if not normalized_fallback_sources or (primary.get("budget_limit") is not None and primary.get("spend_limit") is not None):
+        return primary
+    return _merge_missing_catalog_campaign_limit_summary(
+        primary,
+        _normalize_catalog_campaign_limit_summary_from_sources(normalized_fallback_sources),
+    )
+
+
 def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]], extra_sources: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
     payload = raw or {}
+    fallback_sources = [payload, *(extra_sources or [])]
     rows: List[Dict[str, Any]] = []
     for key in CATALOG_CAMPAIGN_FIELD_ORDER:
-        normalized_code = _extract_catalog_campaign_status_code(payload.get(key))
+        campaigns = _catalog_campaign_rows_for_key(payload, key, extra_sources)
+        status_source = next(
+            (
+                campaign
+                for campaign in campaigns
+                if _extract_catalog_campaign_status_code(campaign.get("status_xway") if campaign.get("status_xway") is not None else campaign.get("status"))
+            ),
+            None,
+        )
+        normalized_code = _extract_catalog_campaign_status_code(payload.get(key)) or _extract_catalog_campaign_status_code(
+            (status_source or {}).get("status_xway") if (status_source or {}).get("status_xway") is not None else (status_source or {}).get("status")
+        )
         if not normalized_code:
             continue
         meta = CATALOG_CAMPAIGN_FIELD_META.get(key) or {}
-        campaigns = _catalog_campaign_rows_for_key(payload, key, extra_sources)
         rows.append(
             {
                 "key": key,
@@ -2403,7 +2440,7 @@ def _normalize_catalog_campaign_states(raw: Optional[Dict[str, Any]], extra_sour
                 "status_code": normalized_code,
                 "status_label": _catalog_campaign_status_label(normalized_code),
                 "active": normalized_code == "ACTIVE",
-                **_normalize_catalog_campaign_limit_summary(payload.get(key), campaigns),
+                **_normalize_catalog_campaign_limit_summary(payload.get(key), campaigns, fallback_sources),
             }
         )
     return rows
@@ -2636,7 +2673,7 @@ def _product_summary(
         "heatmap": heatmap,
         "orders_heatmap": orders_heatmap,
         "article_sheet": article_sheet,
-            "catalog_campaign_states": _normalize_catalog_campaign_states(product.get("campaigns_data"), [product, stat_item]),
+        "catalog_campaign_states": _normalize_catalog_campaign_states(product.get("campaigns_data"), [product, stat_item, *campaigns]),
         "schedule_aggregate": _aggregate_schedule(campaigns),
         "campaigns": campaigns,
         "bid_log": sorted(

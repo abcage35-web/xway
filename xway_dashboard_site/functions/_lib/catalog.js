@@ -353,11 +353,7 @@ function readBudgetSpentToday(source, budgetRule) {
   );
 }
 
-function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
-  const sources = [
-    rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : null,
-    ...campaigns,
-  ].filter(Boolean);
+function normalizeCatalogCampaignLimitSummaryFromSources(sources) {
   const budgetLimits = [];
   const budgetSpentValues = [];
   const spendLimits = [];
@@ -408,16 +404,44 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
   };
 }
 
+function mergeMissingCampaignLimitSummary(primary, fallback) {
+  return {
+    budget_limit: primary.budget_limit ?? fallback.budget_limit,
+    budget_spent_today: primary.budget_spent_today ?? fallback.budget_spent_today,
+    budget_rule_active: primary.budget_rule_active || fallback.budget_rule_active,
+    spend_limit: primary.spend_limit ?? fallback.spend_limit,
+    spend_spent_today: primary.spend_spent_today ?? fallback.spend_spent_today,
+    spend_limit_active: primary.spend_limit_active || fallback.spend_limit_active,
+  };
+}
+
+function normalizeCatalogCampaignLimitSummary(rawValue, campaigns, fallbackSources = []) {
+  const primarySources = [
+    rawValue && typeof rawValue === "object" && !Array.isArray(rawValue) ? rawValue : null,
+    ...campaigns,
+  ].filter(Boolean);
+  const primary = normalizeCatalogCampaignLimitSummaryFromSources(primarySources);
+  const normalizedFallbackSources = fallbackSources.filter((source) => source && typeof source === "object" && !Array.isArray(source));
+  if (!normalizedFallbackSources.length || (primary.budget_limit !== null && primary.spend_limit !== null)) {
+    return primary;
+  }
+  return mergeMissingCampaignLimitSummary(primary, normalizeCatalogCampaignLimitSummaryFromSources(normalizedFallbackSources));
+}
+
 function normalizeCatalogCampaignStates(raw, extraSources = []) {
   const payload = raw || {};
+  const fallbackSources = [payload, ...extraSources];
   const rows = [];
   for (const key of CATALOG_CAMPAIGN_FIELD_ORDER) {
-    const normalizedCode = extractCatalogCampaignStatusCode(payload[key]);
+    const campaigns = catalogCampaignRowsForKey(payload, key, extraSources);
+    const statusSource = campaigns.find((campaign) => extractCatalogCampaignStatusCode(campaign?.status_xway ?? campaign?.status));
+    const normalizedCode =
+      extractCatalogCampaignStatusCode(payload[key]) ||
+      extractCatalogCampaignStatusCode(statusSource?.status_xway ?? statusSource?.status);
     if (!normalizedCode) {
       continue;
     }
     const meta = CATALOG_CAMPAIGN_FIELD_META[key] || {};
-    const campaigns = catalogCampaignRowsForKey(payload, key, extraSources);
     rows.push({
       key,
       label: meta.label || key,
@@ -425,7 +449,7 @@ function normalizeCatalogCampaignStates(raw, extraSources = []) {
       status_code: normalizedCode,
       status_label: catalogCampaignStatusLabel(normalizedCode),
       active: normalizedCode === "ACTIVE",
-      ...normalizeCatalogCampaignLimitSummary(payload[key], campaigns),
+      ...normalizeCatalogCampaignLimitSummary(payload[key], campaigns, fallbackSources),
     });
   }
   return rows;
