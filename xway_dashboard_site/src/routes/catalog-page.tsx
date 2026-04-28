@@ -500,56 +500,74 @@ function CatalogIssueCampaignEntry({
 }) {
   const tone = resolveCatalogIssueKindTone(issueKind);
   const showPerformanceMetrics = issueKind !== "turnover";
+  const cleanTitle = campaign.label.replace(/^РК\s*/, "");
+  const titleParts = cleanTitle
+    .split(/\s+[·-]\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const displayTitle = titleParts.length > 1 ? titleParts[titleParts.length - 1] : cleanTitle;
   return (
     <div
       className="catalog-issue-campaign-card"
       title={`${campaign.label}${campaign.statusLabel ? ` · ${campaign.statusLabel}` : ""}`}
     >
       <div className="catalog-issue-campaign-head">
-        <CatalogCampaignStatusIconBadge status={campaign.displayStatus} label={campaign.statusLabel || "Статус не задан"} />
-        <span className={cn("catalog-campaign-kind-badge", campaign.paymentType === "cpc" ? "is-cpc" : "is-manual")}>
-          {campaign.paymentType === "cpc" ? "CPC" : "CPM"}
-        </span>
-        {campaign.zoneKind ? (
-          <CatalogCampaignZonePill
-            label={
-              campaign.zoneKind === "both"
-                ? "Поиск + Рекомендации"
-                : campaign.zoneKind === "recom"
-                  ? "Рекомендации"
-                  : "Поиск"
-            }
-            kind={campaign.zoneKind}
-            iconOnly
-          />
-        ) : null}
-        <span className="catalog-issue-campaign-title">{campaign.label.replace(/^РК\s*/, "")}</span>
+        <div className="catalog-issue-campaign-type">
+          <CatalogCampaignStatusIconBadge status={campaign.displayStatus} label={campaign.statusLabel || "Статус не задан"} />
+          <span className={cn("catalog-campaign-kind-badge", campaign.paymentType === "cpc" ? "is-cpc" : "is-manual")}>
+            {campaign.paymentType === "cpc" ? "CPC" : "CPM"}
+          </span>
+          {campaign.zoneKind ? (
+            <CatalogCampaignZonePill
+              label={
+                campaign.zoneKind === "both"
+                  ? "Поиск + Рекомендации"
+                  : campaign.zoneKind === "recom"
+                    ? "Рекомендации"
+                    : "Поиск"
+              }
+              kind={campaign.zoneKind}
+              iconOnly
+            />
+          ) : null}
+        </div>
+        <div className="catalog-issue-campaign-copy">
+          <span className="catalog-issue-campaign-title">{displayTitle}</span>
+          <span className="catalog-issue-campaign-meta">
+            ID {campaign.id}{campaign.statusLabel ? ` · ${campaign.statusLabel}` : ""}
+          </span>
+        </div>
       </div>
       {campaign.hours > 0 || campaign.incidents > 0 || campaign.estimatedGap !== null || showPerformanceMetrics ? (
-        <div className="catalog-issue-pill-row">
+        <div className="catalog-issue-campaign-metrics">
           {campaign.hours > 0 ? (
-            <span className={cn("catalog-issue-pill", tone.metric)}>
-              {formatNumber(campaign.hours, 1)} ч
+            <span className={cn("catalog-issue-metric-chip", tone.metric)}>
+              <small>Простой</small>
+              <strong>{formatNumber(campaign.hours, 1)} ч</strong>
             </span>
           ) : null}
           {campaign.incidents > 0 ? (
-            <span className={cn("catalog-issue-pill", tone.metric)}>
-              {formatIssueIncidents(campaign.incidents)}
+            <span className={cn("catalog-issue-metric-chip", tone.metric)}>
+              <small>Остановки</small>
+              <strong>{formatIssueIncidents(campaign.incidents)}</strong>
             </span>
           ) : null}
           {showPerformanceMetrics ? (
-            <span className={cn("catalog-issue-pill", tone.metric)}>
-              Заказы {formatNumber(campaign.ordersAds)}
+            <span className={cn("catalog-issue-metric-chip", tone.metric)}>
+              <small>Заказы</small>
+              <strong>{formatNumber(campaign.ordersAds)}</strong>
             </span>
           ) : null}
           {showPerformanceMetrics && campaign.drr !== null ? (
-            <span className={cn("catalog-issue-pill", tone.metric)}>
-              ДРР {formatPercent(campaign.drr)}
+            <span className={cn("catalog-issue-metric-chip", tone.metric)}>
+              <small>ДРР</small>
+              <strong>{formatPercent(campaign.drr)}</strong>
             </span>
           ) : null}
           {campaign.estimatedGap !== null ? (
-            <span className={cn("catalog-issue-pill", tone.metric)}>
-              ≈ {formatMoney(campaign.estimatedGap)}
+            <span className={cn("catalog-issue-metric-chip", tone.metric)}>
+              <small>Потери</small>
+              <strong>≈ {formatMoney(campaign.estimatedGap)}</strong>
             </span>
           ) : null}
         </div>
@@ -655,9 +673,9 @@ function CatalogIssueDrawer({
       >
         <div className="catalog-issue-drawer-head">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-200">Ошибки за {yesterdayLabel}</p>
+            <p className="catalog-issue-drawer-eyebrow">Ошибки за {yesterdayLabel}</p>
             <h2 id="catalog-issue-drawer-title" className="font-display text-lg font-semibold text-[var(--color-ink)]">
-              {item.article}
+              Арт. {item.article}
             </h2>
             <p className="mt-1 truncate text-sm text-[var(--color-muted)]" title={item.name}>
               {item.name}
@@ -683,7 +701,7 @@ function CatalogIssueDrawer({
             >
               {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover" /> : null}
             </Link>
-            <div className="grid min-w-0 flex-1 grid-cols-3 gap-2">
+            <div className="catalog-issue-drawer-summary">
               <div className="catalog-issue-drawer-metric">
                 <span>Простой</span>
                 <strong>{totalHours > 0 ? `${formatNumber(totalHours, 1)} ч` : "—"}</strong>
@@ -702,55 +720,51 @@ function CatalogIssueDrawer({
           <div className="space-y-2">
             {issues.map((issue) => {
               const tone = resolveCatalogIssueKindTone(issue.kind);
+              const issueMetrics =
+                issue.kind === "turnover"
+                  ? [
+                      issue.turnoverDays !== undefined && issue.turnoverDays !== null
+                        ? { label: "Оборот", value: formatTurnoverDays(issue.turnoverDays) }
+                        : null,
+                      issue.thresholdDays !== undefined && issue.thresholdDays !== null
+                        ? { label: "Порог", value: formatTurnoverDays(issue.thresholdDays) }
+                        : null,
+                    ].filter((metric): metric is { label: string; value: string } => Boolean(metric))
+                  : [
+                      issue.hours > 0 ? { label: "Простой", value: `${formatNumber(issue.hours, 1)} ч` } : null,
+                      issue.incidents > 0 ? { label: "Остановки", value: formatIssueIncidents(issue.incidents) } : null,
+                      {
+                        label: "Заказы",
+                        value:
+                          issue.totalOrders !== null
+                            ? `${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
+                            : formatNumber(issue.ordersAds),
+                      },
+                      issue.drrOverall !== null ? { label: "ДРР", value: formatPercent(issue.drrOverall) } : null,
+                      issue.estimatedGap !== null ? { label: "Потери", value: `≈ ${formatMoney(issue.estimatedGap)}` } : null,
+                    ].filter((metric): metric is { label: string; value: string } => Boolean(metric));
               return (
-                <section key={`${item.ref}-${issue.kind}`} className={cn("catalog-issue-card", tone.shell)}>
+                <section
+                  key={`${item.ref}-${issue.kind}`}
+                  className={cn("catalog-issue-card", tone.shell, preferredIssue?.kind === issue.kind && "is-preferred")}
+                >
                   <div className="catalog-issue-card-head">
-                    <span className={cn("catalog-issue-pill", tone.badge)}>
-                      {resolveCatalogIssueKindLabel(issue.kind)}
-                    </span>
-                    {issue.kind === "turnover" ? (
-                      <>
-                        {issue.turnoverDays !== undefined && issue.turnoverDays !== null ? (
-                          <span className={cn("catalog-issue-pill", tone.metric)}>
-                            {formatTurnoverDays(issue.turnoverDays)}
-                          </span>
-                        ) : null}
-                        {issue.thresholdDays !== undefined && issue.thresholdDays !== null ? (
-                          <span className={cn("catalog-issue-pill", tone.metric)}>
-                            порог {formatTurnoverDays(issue.thresholdDays)}
-                          </span>
-                        ) : null}
-                      </>
-                    ) : (
-                      <>
-                        {issue.hours > 0 ? (
-                          <span className={cn("catalog-issue-pill", tone.metric)}>
-                            {formatNumber(issue.hours, 1)} ч
-                          </span>
-                        ) : null}
-                        {issue.incidents > 0 ? (
-                          <span className={cn("catalog-issue-pill", tone.metric)}>
-                            {formatIssueIncidents(issue.incidents)}
-                          </span>
-                        ) : null}
-                        <span className={cn("catalog-issue-pill", tone.metric)}>
-                          {issue.totalOrders !== null
-                            ? `Заказы ${formatNumber(issue.ordersAds)} / ${formatNumber(issue.totalOrders)}`
-                            : `Заказы ${formatNumber(issue.ordersAds)}`}
-                        </span>
-                        {issue.drrOverall !== null ? (
-                          <span className={cn("catalog-issue-pill", tone.metric)}>
-                            ДРР {formatPercent(issue.drrOverall)}
-                          </span>
-                        ) : null}
-                        {issue.estimatedGap !== null ? (
-                          <span className={cn("catalog-issue-pill", tone.metric)}>
-                            ≈ {formatMoney(issue.estimatedGap)}
-                          </span>
-                        ) : null}
-                      </>
-                    )}
+                    <span className={cn("catalog-issue-kind-dot", tone.metric)} />
+                    <div className="min-w-0">
+                      <h3>{resolveCatalogIssueKindLabel(issue.kind)}</h3>
+                      <p>{resolveCatalogIssueKindCaption(issue.kind)}</p>
+                    </div>
                   </div>
+                  {issueMetrics.length ? (
+                    <div className="catalog-issue-metric-grid">
+                      {issueMetrics.map((metric) => (
+                        <span key={`${issue.kind}-${metric.label}`} className={cn("catalog-issue-metric-chip", tone.metric)}>
+                          <small>{metric.label}</small>
+                          <strong>{metric.value}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   {issue.campaigns.length ? (
                     <div className="catalog-issue-campaign-list">
                       {issue.campaigns.map((campaign) => (
@@ -763,10 +777,10 @@ function CatalogIssueDrawer({
             })}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="catalog-issue-actions">
             <Link
               to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
-              className="inline-flex min-h-9 items-center rounded-2xl bg-brand-200 px-3.5 text-sm font-medium text-white transition hover:bg-brand-500"
+              className="catalog-issue-primary-link"
             >
               Карточка товара
             </Link>
@@ -774,7 +788,7 @@ function CatalogIssueDrawer({
               href={item.productUrl}
               target="_blank"
               rel="noreferrer"
-              className="metric-chip inline-flex min-h-9 items-center gap-1.5 rounded-2xl px-3.5 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)]"
+              className="catalog-issue-secondary-link"
             >
               XWAY
               <ExternalLink className="size-3.5" />

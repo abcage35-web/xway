@@ -1123,13 +1123,13 @@
 .catalog-issue-drawer {
   display: flex;
   flex-direction: column;
-  width: min(520px, 100%);
+  width: min(560px, 100%);
   max-height: 100%;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 24px;
+  border-radius: 22px;
   background: var(--surface);
-  box-shadow: 0 24px 70px rgba(44, 35, 66, 0.18);
+  box-shadow: 0 22px 58px rgba(44, 35, 66, 0.18);
 }
 
 .catalog-issue-drawer-head {
@@ -1137,16 +1137,25 @@
   gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 14px;
+  padding: 18px 18px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.catalog-issue-drawer-eyebrow {
+  color: var(--color-brand-200);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.18em;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 .catalog-issue-drawer-body {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px;
+  padding: 14px;
 }
 
 .catalog-issue-drawer-product {
@@ -1156,46 +1165,59 @@
   min-width: 0;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--surface-soft);
+}
+
+.catalog-issue-drawer-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .catalog-issue-drawer-metric {
   min-width: 0;
-  padding: 8px;
+  padding: 10px 11px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 13px;
   background: var(--surface);
 }
 
 .catalog-issue-drawer-metric span {
   display: block;
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.02em;
   line-height: 1;
-  text-transform: uppercase;
 }
 
 .catalog-issue-drawer-metric strong {
   display: block;
-  margin-top: 5px;
+  margin-top: 7px;
   color: var(--ink);
-  font-size: 0.96rem;
+  font-size: 1.16rem;
+  font-weight: 850;
   line-height: 1.05;
 }
 
 .catalog-issue-card {
   position: relative;
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+  padding: 13px;
   border: 1px solid var(--line);
   border-left-width: 3px;
-  border-radius: 20px;
+  border-radius: 16px;
   background: color-mix(in srgb, var(--surface) 88%, var(--surface-soft));
   box-shadow: 0 10px 24px rgba(44, 35, 66, 0.06);
+}
+
+.catalog-issue-card.is-preferred {
+  border-color: color-mix(in srgb, var(--color-brand-200) 35%, var(--line));
+  box-shadow: 0 16px 34px rgba(44, 35, 66, 0.1);
 }
 
 .catalog-issue-card.is-budget {
@@ -1213,10 +1235,101 @@
 .catalog-issue-card-head,
 .catalog-issue-pill-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
+  gap: 9px;
+  align-items: flex-start;
   min-width: 0;
+}
+
+.catalog-issue-card-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.98rem;
+  font-weight: 850;
+  line-height: 1.12;
+}
+
+.catalog-issue-card-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.catalog-issue-kind-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.catalog-issue-metric-grid,
+.catalog-issue-campaign-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 7px;
+  min-width: 0;
+}
+
+.catalog-issue-metric-chip {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.catalog-issue-metric-chip small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 750;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-issue-metric-chip strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.79rem;
+  font-weight: 850;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-issue-kind-dot.is-budget,
+.catalog-issue-metric-chip.is-budget {
+  color: var(--bad);
+}
+
+.catalog-issue-kind-dot.is-limit,
+.catalog-issue-metric-chip.is-limit {
+  color: var(--amber);
+}
+
+.catalog-issue-kind-dot.is-turnover,
+.catalog-issue-metric-chip.is-turnover {
+  color: var(--blue);
+}
+
+.catalog-issue-metric-chip.is-budget {
+  border-color: rgba(215, 95, 95, 0.18);
+  background: rgba(215, 95, 95, 0.06);
+}
+
+.catalog-issue-metric-chip.is-limit {
+  border-color: rgba(192, 139, 18, 0.2);
+  background: rgba(192, 139, 18, 0.07);
+}
+
+.catalog-issue-metric-chip.is-turnover {
+  border-color: rgba(75, 123, 255, 0.18);
+  background: rgba(75, 123, 255, 0.06);
 }
 
 .catalog-issue-pill {
@@ -1278,32 +1391,101 @@
 
 .catalog-issue-campaign-card {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px;
+  padding: 11px;
   border: 1px solid var(--line);
-  border-radius: 17px;
+  border-radius: 14px;
   background: var(--surface);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44);
 }
 
 .catalog-issue-campaign-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
   min-width: 0;
+}
+
+.catalog-issue-campaign-type {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.catalog-issue-campaign-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .catalog-issue-campaign-title {
   min-width: 0;
-  flex: 1 1 auto;
   overflow: hidden;
   color: var(--ink);
-  font-size: 0.82rem;
-  font-weight: 700;
+  font-size: 0.86rem;
+  font-weight: 850;
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.catalog-issue-campaign-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.catalog-issue-primary-link,
+.catalog-issue-secondary-link {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  padding: 0 14px;
+  font-size: 0.86rem;
+  font-weight: 800;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.catalog-issue-primary-link {
+  background: var(--color-brand-200);
+  color: white;
+}
+
+.catalog-issue-primary-link:hover {
+  background: var(--color-brand-500);
+}
+
+.catalog-issue-secondary-link {
+  gap: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--color-brand-200);
+}
+
+.catalog-issue-secondary-link:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-strong);
 }
 
 .catalog-shop-section > .mb-5 {
@@ -1881,6 +2063,18 @@ html[data-theme="dark"] .catalog-issue-card {
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
 }
 
+html[data-theme="dark"] .catalog-issue-card.is-preferred {
+  border-color: rgba(255, 141, 58, 0.3);
+  background: rgba(24, 28, 39, 0.94);
+}
+
+html[data-theme="dark"] .catalog-issue-drawer-product,
+html[data-theme="dark"] .catalog-issue-drawer-metric,
+html[data-theme="dark"] .catalog-issue-metric-chip {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(244, 240, 255, 0.045);
+}
+
 html[data-theme="dark"] .catalog-issue-card.is-budget {
   border-left-color: rgba(255, 106, 126, 0.78);
 }
@@ -1920,6 +2114,21 @@ html[data-theme="dark"] .catalog-issue-pill.is-turnover {
   border-color: rgba(92, 157, 255, 0.2);
   background: rgba(92, 157, 255, 0.1);
   color: #9ec5ff;
+}
+
+html[data-theme="dark"] .catalog-issue-metric-chip.is-budget {
+  border-color: rgba(255, 106, 126, 0.16);
+  background: rgba(255, 106, 126, 0.075);
+}
+
+html[data-theme="dark"] .catalog-issue-metric-chip.is-limit {
+  border-color: rgba(255, 171, 64, 0.18);
+  background: rgba(255, 171, 64, 0.075);
+}
+
+html[data-theme="dark"] .catalog-issue-metric-chip.is-turnover {
+  border-color: rgba(92, 157, 255, 0.16);
+  background: rgba(92, 157, 255, 0.075);
 }
 
 html[data-theme="dark"] .catalog-shop-section > .mb-5 {
@@ -2371,6 +2580,23 @@ body.sidebar-collapsed #status-pill {
 
   .catalog-issue-drawer-product {
     flex-direction: column;
+  }
+
+  .catalog-issue-drawer-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-issue-campaign-head {
+    flex-direction: column;
+  }
+
+  .catalog-issue-actions {
+    align-items: stretch;
+  }
+
+  .catalog-issue-primary-link,
+  .catalog-issue-secondary-link {
+    flex: 1 1 auto;
   }
 }
 
