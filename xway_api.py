@@ -2133,11 +2133,37 @@ def _catalog_campaign_rows_for_key(payload: Dict[str, Any], key: str, extra_sour
 
 def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
+    raw_spend = source.get("spend") or {}
+
+    def read_period_spend(period: Any) -> Optional[float]:
+        if not isinstance(raw_spend, dict):
+            return None
+        period_text = str(period or "")
+        for key in (period, period_text.upper(), period_text.lower()):
+            value = _catalog_number_or_none(raw_spend.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def first_number(*values: Any) -> Optional[float]:
+        for value in values:
+            numeric = _catalog_number_or_none(value)
+            if numeric is not None:
+                return numeric
+        return None
+
     limits_by_period = source.get("limits_by_period") or {}
     if isinstance(limits_by_period, dict):
         for period, config in limits_by_period.items():
             if isinstance(config, dict):
-                items.append({"period": period, "active": bool(config.get("active")), "limit": _catalog_number_or_none(config.get("limit"))})
+                items.append(
+                    {
+                        "period": period,
+                        "active": bool(config.get("active")),
+                        "limit": _catalog_number_or_none(config.get("limit")),
+                        "spent": read_period_spend(period),
+                    }
+                )
     raw_spend_limits = source.get("spend_limits") or []
     if isinstance(raw_spend_limits, dict):
         raw_spend_limits = raw_spend_limits.get("items") or []
@@ -2149,15 +2175,30 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
                         "period": item.get("period") or item.get("limit_period"),
                         "active": bool(item.get("active")),
                         "limit": _catalog_number_or_none(item.get("limit")),
+                        "spent": first_number(
+                            item.get("spent"),
+                            item.get("spent_today"),
+                            item.get("current"),
+                            item.get("used"),
+                            read_period_spend(item.get("period") or item.get("limit_period")),
+                        ),
                     }
                 )
-    direct_limit = _catalog_number_or_none(source.get("spend_limit") or source.get("day_limit") or source.get("daily_limit") or source.get("limit"))
+    direct_limit = first_number(source.get("spend_limit"), source.get("day_limit"), source.get("daily_limit"), source.get("limit"))
     if direct_limit is not None or source.get("spend_limit_active"):
+        direct_period = source.get("spend_limit_period") or source.get("limit_period") or "day"
         items.append(
             {
-                "period": source.get("spend_limit_period") or source.get("limit_period") or "day",
+                "period": direct_period,
                 "active": bool(source.get("spend_limit_active") if "spend_limit_active" in source else source.get("active")),
                 "limit": direct_limit,
+                "spent": first_number(
+                    source.get("spend_limit_spent"),
+                    source.get("spend_limit_spent_today"),
+                    source.get("day_limit_spent"),
+                    source.get("daily_limit_spent"),
+                    read_period_spend(direct_period),
+                ),
             }
         )
     meaningful = [item for item in items if item.get("limit") is not None or item.get("active")]
@@ -2220,7 +2261,10 @@ def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Di
             budget_limits.append(budget_limit)
         if budget_spent_today is not None and budget_spent_today >= 0:
             budget_spent_values.append(budget_spent_today)
-        if spend_today is not None and spend_today >= 0:
+        spend_limit_spent = _catalog_number_or_none(spend_limit.get("spent") if spend_limit else None)
+        if spend_limit_spent is not None and spend_limit_spent >= 0:
+            spend_spent_values.append(spend_limit_spent)
+        elif spend_today is not None and spend_today >= 0:
             spend_spent_values.append(spend_today)
         if spend_limit and spend_limit.get("limit") is not None and spend_limit["limit"] > 0:
             spend_limits.append(spend_limit["limit"])

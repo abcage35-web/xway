@@ -1488,6 +1488,161 @@
   background: var(--surface-strong);
 }
 
+.catalog-article-analytics-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.catalog-article-analytics-toggle span {
+  display: block;
+  width: 11px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.catalog-article-analytics-toggle span:nth-child(2) {
+  width: 8px;
+}
+
+.catalog-article-analytics-toggle span:nth-child(3) {
+  width: 4px;
+}
+
+.catalog-article-analytics-toggle:hover,
+.catalog-article-analytics-toggle.is-active {
+  border-color: rgba(241, 120, 40, 0.34);
+  color: var(--accent);
+  background: rgba(241, 120, 40, 0.1);
+}
+
+.catalog-article-analytics-toggle.is-active {
+  transform: translateY(-1px);
+}
+
+.catalog-article-analytics-toggle.is-loading {
+  opacity: 0.72;
+}
+
+.catalog-article-analytics-panel {
+  padding: 14px 16px 16px;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(247, 246, 250, 0.76), rgba(255, 255, 255, 0.62));
+}
+
+.catalog-article-analytics-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+}
+
+.catalog-article-analytics-head span {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.catalog-article-analytics-head small {
+  max-width: min(720px, 100%);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-article-analytics-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.catalog-article-analytics-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.catalog-article-analytics-table th,
+.catalog-article-analytics-table td {
+  min-width: 92px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.catalog-article-analytics-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.catalog-article-analytics-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 180px;
+  border-left: 0;
+  color: var(--ink);
+  background: var(--surface);
+  text-align: left;
+  font-weight: 700;
+}
+
+.catalog-article-analytics-table thead th:first-child {
+  z-index: 3;
+  background: var(--surface-soft);
+}
+
+.catalog-article-analytics-table tbody tr:last-child th,
+.catalog-article-analytics-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.catalog-article-analytics-state {
+  border: 1px dashed var(--line-strong);
+  border-radius: 16px;
+  padding: 14px 16px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.86rem;
+}
+
+.catalog-article-analytics-state.is-error {
+  border-color: rgba(215, 95, 95, 0.24);
+  color: var(--bad);
+  background: rgba(215, 95, 95, 0.08);
+}
+
 .catalog-shop-section > .mb-5 {
   display: flex;
   flex-wrap: wrap;
@@ -2129,6 +2284,83 @@ html[data-theme="dark"] .catalog-issue-metric-chip.is-limit {
 html[data-theme="dark"] .catalog-issue-metric-chip.is-turnover {
   border-color: rgba(92, 157, 255, 0.16);
   background: rgba(92, 157, 255, 0.075);
+}
+
+html[data-theme="dark"] .catalog-issue-empty-badge {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(244, 240, 255, 0.08);
+  color: #c7c3d8;
+}
+
+html[data-theme="dark"] .catalog-issue-empty-badge.is-pending {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(244, 240, 255, 0.1);
+  color: #d2cde0;
+}
+
+html[data-theme="dark"] .catalog-issue-inline-badge.is-budget {
+  border-color: rgba(255, 106, 126, 0.24);
+  background: rgba(255, 106, 126, 0.12);
+  color: #ff9aaa;
+}
+
+html[data-theme="dark"] .catalog-issue-inline-badge.is-limit {
+  border-color: rgba(255, 171, 64, 0.26);
+  background: rgba(255, 171, 64, 0.12);
+  color: #ffc078;
+}
+
+html[data-theme="dark"] .catalog-issue-inline-badge.is-turnover {
+  border-color: rgba(92, 157, 255, 0.24);
+  background: rgba(92, 157, 255, 0.12);
+  color: #9ec5ff;
+}
+
+html[data-theme="dark"] .catalog-issue-inline-badge:hover {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+  filter: brightness(1.08);
+}
+
+html[data-theme="dark"] .catalog-article-analytics-toggle {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(244, 240, 255, 0.06);
+  color: #a9a4b8;
+}
+
+html[data-theme="dark"] .catalog-article-analytics-toggle:hover,
+html[data-theme="dark"] .catalog-article-analytics-toggle.is-active {
+  border-color: rgba(255, 141, 58, 0.34);
+  background: rgba(255, 141, 58, 0.12);
+  color: #ffb16d;
+}
+
+html[data-theme="dark"] .catalog-article-analytics-panel {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(21, 24, 33, 0.92), rgba(15, 18, 26, 0.86));
+}
+
+html[data-theme="dark"] .catalog-article-analytics-scroll {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(14, 18, 28, 0.82);
+}
+
+html[data-theme="dark"] .catalog-article-analytics-table th,
+html[data-theme="dark"] .catalog-article-analytics-table td {
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+html[data-theme="dark"] .catalog-article-analytics-table thead th,
+html[data-theme="dark"] .catalog-article-analytics-table thead th:first-child {
+  background: rgba(31, 36, 50, 0.96);
+}
+
+html[data-theme="dark"] .catalog-article-analytics-table th:first-child {
+  background: rgba(19, 23, 33, 0.96);
+}
+
+html[data-theme="dark"] .catalog-article-analytics-state {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(244, 240, 255, 0.06);
 }
 
 html[data-theme="dark"] .catalog-shop-section > .mb-5 {

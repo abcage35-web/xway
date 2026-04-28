@@ -748,10 +748,11 @@ body.page-view-articles .article-nav-inline {
 }
 
 .metric-card-with-sparkline {
-  overflow: hidden;
+  overflow: visible;
 }
 
 .metric-card-sparkline {
+  position: relative;
   align-self: flex-end;
   width: min(34%, 132px);
   min-width: 86px;
@@ -769,20 +770,98 @@ body.page-view-articles .article-nav-inline {
   overflow: visible;
 }
 
-.metric-card-sparkline-area {
-  fill: color-mix(in srgb, var(--sparkline-color, var(--accent)) 18%, transparent);
-}
-
 .metric-card-sparkline-line {
   fill: none;
   stroke: var(--sparkline-color, var(--accent));
-  stroke-width: 2.4;
+  stroke-width: 2.55;
   stroke-linecap: round;
   stroke-linejoin: round;
+  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--sparkline-color, var(--accent)) 32%, transparent));
+}
+
+.metric-card-sparkline-dot {
+  fill: var(--sparkline-color, var(--accent));
+  stroke: var(--color-surface);
+  stroke-width: 1.8;
+  opacity: 0.9;
+  transition:
+    opacity 140ms ease,
+    r 140ms ease;
+}
+
+.metric-card-sparkline-dot.is-active {
+  opacity: 1;
+  stroke-width: 2.1;
+}
+
+.metric-card-sparkline-cursor {
+  stroke: color-mix(in srgb, var(--sparkline-color, var(--accent)) 64%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.metric-card-sparkline-hit {
+  fill: transparent;
+  cursor: crosshair;
+  pointer-events: all;
+}
+
+.metric-card-sparkline-tooltip {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  gap: 1px;
+  min-width: 70px;
+  transform: translateX(-50%) translateY(-100%);
+  border: 1px solid color-mix(in srgb, var(--sparkline-color, var(--accent)) 34%, var(--color-line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: 0 14px 34px rgba(22, 18, 37, 0.18);
+  padding: 7px 9px;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+}
+
+.metric-card-sparkline-tooltip span {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.metric-card-sparkline-tooltip strong {
+  color: var(--color-ink);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.05;
 }
 
 html[data-theme="dark"] .metric-card-sparkline-area {
-  fill: color-mix(in srgb, var(--sparkline-color, var(--accent)) 22%, transparent);
+  opacity: 1;
+}
+
+html[data-theme="dark"] .metric-card-sparkline-dot {
+  stroke: #151522;
+}
+
+html[data-theme="dark"] .metric-card-sparkline-tooltip {
+  background: rgba(31, 31, 45, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+}
+
+.catalog-chart-axis-tick {
+  pointer-events: none;
+}
+
+.catalog-chart-axis-date {
+  fill: var(--color-muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
 }
 
 @media (max-width: 720px) {

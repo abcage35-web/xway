@@ -31,25 +31,27 @@ type SplitChartConfig = {
   primaryKey: CatalogSeriesKey;
   rateKey?: CatalogSeriesKey;
 };
-type SkuBarLabelProps = {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  value?: number | string;
-};
 type DrrLineLabelProps = {
   x?: number | string;
   y?: number | string;
   value?: unknown;
   viewBox?: unknown;
 };
-type CatalogChartValueTableMetric = {
+type CatalogChartAxisMetric = {
   key: string;
   label: string;
   color: string;
   active?: boolean;
   getValue: (row: CatalogChartRow & { label: string }) => string;
+};
+type CatalogChartValueTableMetric = CatalogChartAxisMetric;
+type CatalogChartXAxisTickProps = {
+  x?: number | string;
+  y?: number | string;
+  payload?: { value?: string | number };
+  rows: Array<CatalogChartRow & { label: string }>;
+  metrics: CatalogChartAxisMetric[];
+  compact?: boolean;
 };
 
 const CHART_GRID = "#e7e3ee";
@@ -292,31 +294,6 @@ function CatalogChartTooltip({
   );
 }
 
-function SkuBarLabel({ x = 0, y = 0, width = 0, height = 0, value }: SkuBarLabelProps) {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue) || height < 28 || width < 10) {
-    return null;
-  }
-  const centerX = x + width / 2;
-  const centerY = y + height / 2;
-
-  return (
-    <text
-      x={centerX}
-      y={centerY}
-      fill="rgba(255,255,255,0.92)"
-      fontSize={9}
-      fontWeight={700}
-      textAnchor="middle"
-      dominantBaseline="central"
-      transform={`rotate(-90 ${centerX} ${centerY})`}
-      pointerEvents="none"
-    >
-      {formatNumber(numericValue)}
-    </text>
-  );
-}
-
 function CatalogChartValueTable({
   rows,
   metrics,
@@ -359,6 +336,44 @@ function CatalogChartValueTable({
         </div>
       </div>
     </div>
+  );
+}
+
+function catalogChartAxisHeight(metrics: CatalogChartAxisMetric[], compact = false) {
+  const visibleMetricCount = metrics.filter((metric) => metric.active !== false).length;
+  return (compact ? 22 : 26) + visibleMetricCount * (compact ? 14 : 16);
+}
+
+function CatalogChartXAxisTick({ x = 0, y = 0, payload, rows, metrics, compact = false }: CatalogChartXAxisTickProps) {
+  const tickX = Number(x) || 0;
+  const tickY = Number(y) || 0;
+  const label = String(payload?.value ?? "");
+  const row = rows.find((item) => item.label === label);
+  const visibleMetrics = metrics.filter((metric) => metric.active !== false);
+  const valueFontSize = compact ? 9 : 10;
+  const lineHeight = compact ? 14 : 16;
+
+  return (
+    <g transform={`translate(${tickX},${tickY})`} className="catalog-chart-axis-tick">
+      <text className="catalog-chart-axis-date" textAnchor="middle" x={0} y={0}>
+        {label}
+      </text>
+      {row
+        ? visibleMetrics.map((metric, index) => (
+            <text
+              key={metric.key}
+              textAnchor="middle"
+              x={0}
+              y={(index + 1) * lineHeight}
+              fill={metric.color}
+              fontSize={valueFontSize}
+              fontWeight={800}
+            >
+              {metric.getValue(row)}
+            </text>
+          ))
+        : null}
+    </g>
   );
 }
 
@@ -556,7 +571,7 @@ function SplitMetricChart({
 }
 
 function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string }> }) {
-  const skuMetrics: CatalogChartValueTableMetric[] = [
+  const skuMetrics: CatalogChartAxisMetric[] = [
     {
       key: "spent_sku_count",
       label: "SKU",
@@ -564,6 +579,7 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
       getValue: (row) => formatNumber(row.spent_sku_count),
     },
   ];
+  const axisHeight = catalogChartAxisHeight(skuMetrics, true);
 
   return (
     <div className="rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]">
@@ -571,10 +587,17 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
         <span>SKU с тратами по дням</span>
         <span>Кол-во SKU с расходом &gt; 0</span>
       </div>
-      <div className="h-[120px]">
+      <div className="h-[160px]">
         <ResponsiveContainer>
-          <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
-            <XAxis dataKey="label" hide />
+          <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+            <XAxis
+              dataKey="label"
+              tick={(props) => <CatalogChartXAxisTick {...props} rows={rows} metrics={skuMetrics} compact />}
+              axisLine={false}
+              tickLine={false}
+              interval={0}
+              height={axisHeight}
+            />
             <YAxis hide allowDecimals={false} domain={[0, "auto"]} />
             <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
             <Bar
@@ -584,13 +607,10 @@ function SplitSkuChart({ rows }: { rows: Array<CatalogChartRow & { label: string
               radius={[8, 8, 0, 0]}
               maxBarSize={20}
               isAnimationActive={false}
-            >
-              <LabelList dataKey="spent_sku_count" content={<SkuBarLabel />} />
-            </Bar>
+            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <CatalogChartValueTable rows={rows} metrics={skuMetrics} compact />
     </div>
   );
 }
@@ -608,13 +628,14 @@ function CatalogDrrChart({
 }) {
   const visibleSeries = CATALOG_DRR_SERIES.filter((series) => !hiddenKeys.includes(series.key));
   const hasVisibleSeries = visibleSeries.length > 0;
-  const valueTableMetrics: CatalogChartValueTableMetric[] = CATALOG_DRR_SERIES.map((series) => ({
+  const axisMetrics: CatalogChartAxisMetric[] = CATALOG_DRR_SERIES.map((series) => ({
     key: series.key,
     label: series.label,
     color: series.color,
     active: !hiddenKeys.includes(series.key),
     getValue: (row) => formatPercent(row[series.key]),
   }));
+  const axisHeight = catalogChartAxisHeight(axisMetrics, compact);
   const shellClassName = compact
     ? "rounded-[22px] border border-white/60 bg-white/45 px-3 py-3"
     : "rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]";
@@ -631,7 +652,7 @@ function CatalogDrrChart({
           </div>
         </div>
       </div>
-      <div className={compact ? "h-[88px]" : "h-[160px]"}>
+      <div className={compact ? "h-[142px]" : "h-[218px]"}>
         {!hasVisibleSeries ? (
           <div className="flex h-full items-center justify-center rounded-[18px] border border-dashed border-[rgba(128,122,147,0.2)] bg-[rgba(255,255,255,0.4)] px-4 text-sm text-[var(--color-muted)]">
             Включи хотя бы одну ДРР-линию ниже.
@@ -642,14 +663,12 @@ function CatalogDrrChart({
               <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />
               <XAxis
                 dataKey="label"
-                tick={compact ? false : DATE_TICK_PROPS}
+                tick={(props) => <CatalogChartXAxisTick {...props} rows={rows} metrics={axisMetrics} compact={compact} />}
                 axisLine={false}
                 tickLine={false}
-                interval="preserveStartEnd"
-                minTickGap={18}
-                angle={-35}
-                height={compact ? 0 : 58}
-                textAnchor="end"
+                interval={0}
+                minTickGap={0}
+                height={axisHeight}
               />
               <YAxis yAxisId="drr" hide orientation="right" allowDecimals domain={["auto", "auto"]} />
               <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
@@ -682,8 +701,6 @@ function CatalogDrrChart({
           </ResponsiveContainer>
         )}
       </div>
-
-      <CatalogChartValueTable rows={rows} metrics={valueTableMetrics} compact={compact} />
 
       <SeriesToggleRow
         items={CATALOG_DRR_SERIES.map((series) => ({
@@ -858,7 +875,7 @@ export function CatalogSelectionChart({
     ...row,
     label: row.day_label,
   }));
-  const skuValueMetrics: CatalogChartValueTableMetric[] = [
+  const skuAxisMetrics: CatalogChartAxisMetric[] = [
     {
       key: "spent_sku_count",
       label: "SKU",
@@ -866,6 +883,7 @@ export function CatalogSelectionChart({
       getValue: (row) => formatNumber(row.spent_sku_count),
     },
   ];
+  const compactSkuAxisHeight = catalogChartAxisHeight(skuAxisMetrics, true);
   const legendItems: LegendItem[] = CATALOG_SERIES.map((series) => ({
     key: series.key,
     label: series.label,
@@ -1009,10 +1027,17 @@ export function CatalogSelectionChart({
                   <span>SKU с тратами по дням</span>
                   <span>Кол-во SKU с расходом &gt; 0</span>
                 </div>
-                <div className="h-[72px]">
+                <div className="h-[118px]">
                   <ResponsiveContainer>
-                    <ComposedChart data={chartRows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
-                      <XAxis dataKey="label" hide />
+                    <ComposedChart data={chartRows} syncId={CHART_SYNC_ID} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                      <XAxis
+                        dataKey="label"
+                        tick={(props) => <CatalogChartXAxisTick {...props} rows={chartRows} metrics={skuAxisMetrics} compact />}
+                        axisLine={false}
+                        tickLine={false}
+                        interval={0}
+                        height={compactSkuAxisHeight}
+                      />
                       <YAxis hide allowDecimals={false} domain={[0, "auto"]} />
                       <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
                       <Bar
@@ -1026,7 +1051,6 @@ export function CatalogSelectionChart({
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
-                <CatalogChartValueTable rows={chartRows} metrics={skuValueMetrics} compact />
               </div>
 
               <CatalogDrrChart rows={chartRows} hiddenKeys={hiddenDrrSeries} onToggleKey={toggleDrrKey} compact />

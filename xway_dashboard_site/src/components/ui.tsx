@@ -1,7 +1,7 @@
 import { Group } from "@visx/group";
 import { Text as VisxText } from "@visx/text";
 import { useTooltip } from "@visx/tooltip";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronRight, LoaderCircle, Search, Sparkles } from "lucide-react";
 import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, formatNumber, formatPercent, relativeDeltaClass, statusTone } from "../lib/format";
 import type { ScheduleAggregate } from "../lib/types";
@@ -10,6 +10,8 @@ import { SearchableSelect } from "./searchable-multi-select";
 type MetricSparklineConfig = {
   points: Array<number | null | undefined>;
   color?: string;
+  labels?: Array<string | null | undefined>;
+  valueFormatter?: (value: number) => ReactNode;
 };
 
 export interface TableColumn<T> {
@@ -77,10 +79,13 @@ export function MetricCard({
   className?: string;
 }) {
   const isCompact = density === "compact";
-  const sparklinePoints = (sparkline?.points || [])
-    .map((point) => (typeof point === "number" && Number.isFinite(point) ? point : null))
-    .filter((point): point is number => point !== null);
-  const showSparkline = sparklinePoints.length >= 2;
+  const sparklineItems = (sparkline?.points || [])
+    .map((point, index) => ({
+      value: typeof point === "number" && Number.isFinite(point) ? point : null,
+      label: sparkline?.labels?.[index] ?? null,
+    }))
+    .filter((point): point is { value: number; label: string | null } => point.value !== null);
+  const showSparkline = sparklineItems.length >= 2;
   return (
     <div className={cn("glass-panel", showSparkline && "metric-card-with-sparkline", isCompact ? "rounded-[22px] p-3 sm:p-3.5" : "rounded-3xl p-4 sm:p-5", className)}>
       <div className={cn("flex items-start justify-between", isCompact ? "gap-2.5" : "gap-4")}>
@@ -90,7 +95,14 @@ export function MetricCard({
           {hint ? <p className={cn("text-[var(--color-muted)]", isCompact ? "text-xs" : "text-sm")}>{hint}</p> : null}
         </div>
         {icon ? <div className={cn("metric-chip text-brand-200", isCompact ? "rounded-[18px] p-2" : "rounded-2xl p-3")}>{icon}</div> : null}
-        {showSparkline ? <MetricCardSparkline points={sparklinePoints} color={sparkline?.color} compact={isCompact} /> : null}
+        {showSparkline ? (
+          <MetricCardSparkline
+            points={sparklineItems}
+            color={sparkline?.color}
+            compact={isCompact}
+            valueFormatter={sparkline?.valueFormatter}
+          />
+        ) : null}
       </div>
       {deltaText !== undefined || delta !== undefined ? (
         <p className={cn(isCompact ? "mt-2 text-xs font-semibold" : "mt-4 text-sm font-medium", deltaText !== undefined ? deltaClassName : relativeDeltaClass(delta))}>
@@ -105,35 +117,95 @@ function MetricCardSparkline({
   points,
   color = "#f17828",
   compact,
+  valueFormatter,
 }: {
-  points: number[];
+  points: Array<{ value: number; label?: string | null }>;
   color?: string;
   compact: boolean;
+  valueFormatter?: (value: number) => ReactNode;
 }) {
+  const gradientId = useId().replace(/:/g, "");
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const width = compact ? 112 : 144;
   const height = compact ? 42 : 50;
   const paddingX = 3;
   const paddingY = 5;
-  const min = Math.min(...points);
-  const max = Math.max(...points);
+  const values = points.map((point) => point.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const range = max - min;
   const step = points.length > 1 ? (width - paddingX * 2) / (points.length - 1) : 0;
   const coords = points.map((point, index) => {
     const x = paddingX + index * step;
-    const y = range === 0 ? height / 2 : paddingY + (1 - (point - min) / range) * (height - paddingY * 2);
-    return { x, y };
+    const y = range === 0 ? height / 2 : paddingY + (1 - (point.value - min) / range) * (height - paddingY * 2);
+    return { x, y, ...point };
   });
   const linePath = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
   const firstPoint = coords[0]!;
   const lastPoint = coords[coords.length - 1]!;
   const areaPath = `${linePath} L ${lastPoint.x.toFixed(2)} ${height - paddingY} L ${firstPoint.x.toFixed(2)} ${height - paddingY} Z`;
+  const activePoint = activeIndex === null ? null : coords[activeIndex] ?? null;
 
   return (
-    <div className="metric-card-sparkline" aria-hidden="true" style={{ ["--sparkline-color" as string]: color }}>
+    <div
+      className="metric-card-sparkline"
+      style={{ ["--sparkline-color" as string]: color }}
+      onMouseLeave={() => setActiveIndex(null)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setActiveIndex(null);
+        }
+      }}
+    >
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-        <path className="metric-card-sparkline-area" d={areaPath} />
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.32" />
+            <stop offset="68%" stopColor={color} stopOpacity="0.12" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path className="metric-card-sparkline-area" d={areaPath} fill={`url(#${gradientId})`} />
         <path className="metric-card-sparkline-line" d={linePath} />
+        {coords.map((point, index) => (
+          <circle
+            key={`${index}-${point.x}`}
+            className={cn("metric-card-sparkline-dot", activeIndex === index && "is-active")}
+            cx={point.x}
+            cy={point.y}
+            r={activeIndex === index ? 3.4 : 2.1}
+          />
+        ))}
+        {activePoint ? (
+          <line className="metric-card-sparkline-cursor" x1={activePoint.x} x2={activePoint.x} y1={paddingY} y2={height - paddingY} />
+        ) : null}
+        {coords.map((point, index) => (
+          <rect
+            key={`hit-${index}-${point.x}`}
+            className="metric-card-sparkline-hit"
+            x={index === 0 ? 0 : point.x - step / 2}
+            y={0}
+            width={index === 0 || index === coords.length - 1 ? step / 2 + paddingX : step}
+            height={height}
+            tabIndex={0}
+            aria-label={`${point.label || ""} ${formatNumber(point.value)}`}
+            onMouseEnter={() => setActiveIndex(index)}
+            onFocus={() => setActiveIndex(index)}
+          />
+        ))}
       </svg>
+      {activePoint ? (
+        <div
+          className="metric-card-sparkline-tooltip"
+          style={{
+            left: `${Math.max(16, Math.min(84, (activePoint.x / width) * 100))}%`,
+            top: `${Math.max(4, activePoint.y - 32)}px`,
+          }}
+        >
+          {activePoint.label ? <span>{activePoint.label}</span> : null}
+          <strong>{valueFormatter ? valueFormatter(activePoint.value) : formatNumber(activePoint.value)}</strong>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -215,6 +287,8 @@ export function MetricTable<T>({
   className,
   stickyHeader = false,
   headerStickyTop = 0,
+  getRowKey,
+  renderExpandedRow,
 }: {
   columns: TableColumn<T>[];
   rows: T[];
@@ -223,6 +297,8 @@ export function MetricTable<T>({
   className?: string;
   stickyHeader?: boolean;
   headerStickyTop?: number | string;
+  getRowKey?: (row: T, rowIndex: number) => string | number;
+  renderExpandedRow?: (row: T, rowIndex: number) => ReactNode;
 }) {
   const tableViewportRef = useRef<HTMLDivElement | null>(null);
   const tableElementRef = useRef<HTMLTableElement | null>(null);
@@ -382,25 +458,38 @@ export function MetricTable<T>({
           {colgroup}
           {!showStickyHeaderClone ? renderHeader() : null}
           <tbody className="divide-y divide-[var(--color-line)] bg-white">
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="transition hover:bg-[var(--color-surface-soft)]">
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
-                    className={cn(
-                      "px-4 py-3 align-top text-[var(--color-ink)]",
-                      column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-cell",
-                      column.dividerBefore && "border-l border-[var(--color-line)]",
-                      column.align === "right" ? "text-right" : "text-left",
-                      column.cellClassName,
-                    )}
-                  >
-                    {column.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {rows.map((row, rowIndex) => {
+              const expandedRow = renderExpandedRow?.(row, rowIndex);
+              const rowKey = getRowKey?.(row, rowIndex) ?? rowIndex;
+              return (
+                <Fragment key={rowKey}>
+                  <tr className="transition hover:bg-[var(--color-surface-soft)]">
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+                        className={cn(
+                          "px-4 py-3 align-top text-[var(--color-ink)]",
+                          column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-cell",
+                          column.dividerBefore && "border-l border-[var(--color-line)]",
+                          column.align === "right" ? "text-right" : "text-left",
+                          column.cellClassName,
+                        )}
+                      >
+                        {column.render(row)}
+                      </td>
+                    ))}
+                  </tr>
+                  {expandedRow ? (
+                    <tr className="metric-table-expanded-row">
+                      <td colSpan={columns.length} className="p-0 align-top">
+                        {expandedRow}
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

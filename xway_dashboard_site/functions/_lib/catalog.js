@@ -224,10 +224,17 @@ function catalogCampaignRowsForKey(payload, key, extraSources = []) {
 
 function resolveSpendLimitConfig(source) {
   const limitsByPeriod = source?.limits_by_period || {};
+  const spendByPeriod = source?.spend || {};
+  const readPeriodSpend = (period) =>
+    numberOrNull(spendByPeriod?.[period]) ??
+    numberOrNull(spendByPeriod?.[String(period || "").toUpperCase()]) ??
+    numberOrNull(spendByPeriod?.[String(period || "").toLowerCase()]) ??
+    null;
   const periodItems = Object.entries(limitsByPeriod).map(([period, config]) => ({
     period,
     active: Boolean(config?.active),
     limit: numberOrNull(config?.limit),
+    spent: readPeriodSpend(period),
   }));
   const rawSpendLimits = Array.isArray(source?.spend_limits)
     ? source.spend_limits
@@ -238,6 +245,12 @@ function resolveSpendLimitConfig(source) {
     period: item?.period ?? item?.limit_period,
     active: Boolean(item?.active),
     limit: numberOrNull(item?.limit),
+    spent:
+      numberOrNull(item?.spent) ??
+      numberOrNull(item?.spent_today) ??
+      numberOrNull(item?.current) ??
+      numberOrNull(item?.used) ??
+      readPeriodSpend(item?.period ?? item?.limit_period),
   }));
   const directLimit = numberOrNull(source?.spend_limit ?? source?.day_limit ?? source?.daily_limit ?? source?.limit);
   const directLimitItem =
@@ -246,6 +259,12 @@ function resolveSpendLimitConfig(source) {
           period: source?.spend_limit_period ?? source?.limit_period ?? "day",
           active: Boolean(source?.spend_limit_active ?? source?.active),
           limit: directLimit,
+          spent:
+            numberOrNull(source?.spend_limit_spent) ??
+            numberOrNull(source?.spend_limit_spent_today) ??
+            numberOrNull(source?.day_limit_spent) ??
+            numberOrNull(source?.daily_limit_spent) ??
+            readPeriodSpend(source?.spend_limit_period ?? source?.limit_period ?? "day"),
         }
       : null;
   const items = [...periodItems, ...spendLimitItems, directLimitItem].filter((item) => item && (item.limit !== null || item.active));
@@ -302,7 +321,7 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
     const budgetRule = source.budget_rule_config || source.budget_rule || {};
     const budgetLimit = numberOrNull(budgetRule.limit ?? source.budget_limit ?? source.budget_rule_limit);
     const spendLimit = resolveSpendLimitConfig(source);
-    const spendToday = readCampaignSpendToday(source);
+    const spendToday = numberOrNull(spendLimit?.spent) ?? readCampaignSpendToday(source);
     const budgetSpentToday = readBudgetSpentToday(source, budgetRule);
 
     if (budgetLimit !== null && budgetLimit > 0) {

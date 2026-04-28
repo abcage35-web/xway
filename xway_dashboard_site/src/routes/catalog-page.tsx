@@ -87,7 +87,12 @@ const CATALOG_SUMMARY_METRIC_KEYS = [
 type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
 type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "turnover">, boolean>;
 type CatalogSummaryMetricKey = (typeof CATALOG_SUMMARY_METRIC_KEYS)[number];
-type CatalogSummarySparkline = { points: number[]; color: string };
+type CatalogSummarySparkline = {
+  points: number[];
+  labels: string[];
+  color: string;
+  valueFormatter: (value: number) => ReactNode;
+};
 type CatalogQuickView = "all" | "attention" | "withSpend" | "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
 type CatalogAttentionRuleKey = "noOrders" | "lowCr" | "slowTurnover" | "withoutCampaigns";
 
@@ -261,6 +266,12 @@ interface CatalogChartCacheEntry {
   productRefsKey: string;
   rangeStart: string;
   rangeEnd: string;
+}
+
+interface CatalogArticleAnalyticsState {
+  loading: boolean;
+  error: string | null;
+  rows: CatalogChartResponse["rows"] | null;
 }
 
 function CatalogCampaignColumnsHeader() {
@@ -2593,6 +2604,89 @@ async function readApiErrorMessage(error: unknown) {
   return "Не удалось собрать ошибки по артикулам.";
 }
 
+const CATALOG_ARTICLE_ANALYTICS_METRICS: Array<{
+  key: string;
+  label: string;
+  format: (row: CatalogChartResponse["rows"][number]) => string;
+}> = [
+  { key: "expense_sum", label: "Расход", format: (row) => formatMoney(row.expense_sum, true) },
+  { key: "views", label: "Показы", format: (row) => formatNumber(row.views) },
+  { key: "clicks", label: "Клики", format: (row) => formatNumber(row.clicks) },
+  { key: "atbs", label: "Корзины", format: (row) => formatNumber(row.atbs) },
+  { key: "orders", label: "Заказы", format: (row) => formatNumber(row.orders) },
+  { key: "sum_price", label: "Заказано с РК", format: (row) => formatMoney(row.sum_price, true) },
+  { key: "ctr", label: "CTR", format: (row) => formatPercent(row.ctr) },
+  { key: "cr1", label: "Клик -> корзина", format: (row) => formatPercent(row.cr1) },
+  { key: "cr2", label: "Корзина -> заказ", format: (row) => formatPercent(row.cr2) },
+  { key: "drr_ads", label: "ДРР РК", format: (row) => formatPercent(row.drr_ads) },
+];
+
+function CatalogArticleAnalyticsPanel({
+  article,
+  state,
+}: {
+  article: CatalogArticle;
+  state: CatalogArticleAnalyticsState | undefined;
+}) {
+  if (!state || state.loading) {
+    return (
+      <div className="catalog-article-analytics-panel">
+        <div className="catalog-article-analytics-state">Загружаем динамику по дням...</div>
+      </div>
+    );
+  }
+
+  if (state.error) {
+    return (
+      <div className="catalog-article-analytics-panel">
+        <div className="catalog-article-analytics-state is-error">{state.error}</div>
+      </div>
+    );
+  }
+
+  const rows = [...(state.rows || [])].reverse();
+  if (!rows.length) {
+    return (
+      <div className="catalog-article-analytics-panel">
+        <div className="catalog-article-analytics-state">По товару нет дневной статистики за выбранный период.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="catalog-article-analytics-panel">
+      <div className="catalog-article-analytics-head">
+        <span>Динамика по дням</span>
+        <small>
+          {article.name} · арт.: {article.article}
+        </small>
+      </div>
+      <div className="catalog-article-analytics-scroll">
+        <table className="catalog-article-analytics-table">
+          <thead>
+            <tr>
+              <th>Метрика</th>
+              {rows.map((row) => (
+                <th key={row.day}>{row.day_label || formatDate(row.day)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {CATALOG_ARTICLE_ANALYTICS_METRICS.map((metric) => (
+              <tr key={metric.key}>
+                <th>{metric.label}</th>
+                {rows.map((row) => (
+                  <td key={`${metric.key}-${row.day}`}>{metric.format(row)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function waitForCatalogIssuesRetry(ms: number, signal: AbortSignal) {
   if (signal.aborted) {
     return Promise.reject(new DOMException("Aborted", "AbortError"));
@@ -2728,6 +2822,8 @@ export function CatalogPage() {
   const [summaryMetricSettingsOpen, setSummaryMetricSettingsOpen] = useState(false);
   const [summaryMetricSettings, setSummaryMetricSettings] = useState<CatalogSummaryMetricSettings>(() => readCatalogSummaryMetricSettings());
   const [collapsedShopIds, setCollapsedShopIds] = useState<string[]>([]);
+  const [expandedAnalyticsRefs, setExpandedAnalyticsRefs] = useState<string[]>([]);
+  const [articleAnalyticsByRef, setArticleAnalyticsByRef] = useState<Record<string, CatalogArticleAnalyticsState>>({});
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -2761,6 +2857,11 @@ export function CatalogPage() {
     window.addEventListener("scroll", updateScrollTopVisibility, { passive: true });
     return () => window.removeEventListener("scroll", updateScrollTopVisibility);
   }, []);
+
+  useEffect(() => {
+    setExpandedAnalyticsRefs([]);
+    setArticleAnalyticsByRef({});
+  }, [start, end]);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -3041,6 +3142,47 @@ export function CatalogPage() {
     setCollapsedShopIds((current) =>
       current.includes(String(shopId)) ? current.filter((item) => item !== String(shopId)) : [...current, String(shopId)],
     );
+  };
+
+  const toggleArticleAnalytics = async (ref: string) => {
+    const isExpanded = expandedAnalyticsRefs.includes(ref);
+    if (isExpanded) {
+      setExpandedAnalyticsRefs((current) => current.filter((item) => item !== ref));
+      return;
+    }
+
+    setExpandedAnalyticsRefs((current) => (current.includes(ref) ? current : [...current, ref]));
+    const existingState = articleAnalyticsByRef[ref];
+    if (existingState?.loading || existingState?.rows) {
+      return;
+    }
+
+    setArticleAnalyticsByRef((current) => ({
+      ...current,
+      [ref]: { loading: true, error: null, rows: null },
+    }));
+    try {
+      const response = await fetchCatalogChart({
+        productRefs: [ref],
+        start: payload.range.current_start,
+        end: payload.range.current_end,
+      });
+      const productRows = response.product_rows?.find((item) => item.product_ref === ref)?.rows ?? response.rows;
+      setArticleAnalyticsByRef((current) => ({
+        ...current,
+        [ref]: { loading: false, error: null, rows: productRows },
+      }));
+    } catch (error) {
+      setArticleAnalyticsByRef((current) => ({
+        ...current,
+        [ref]: { loading: false, error: null, rows: null },
+      }));
+      const message = await readApiErrorMessage(error);
+      setArticleAnalyticsByRef((current) => ({
+        ...current,
+        [ref]: { loading: false, error: message, rows: null },
+      }));
+    }
   };
 
   const toggleArticleIssueKind = (kind: CatalogIssueKind) => {
@@ -3353,6 +3495,15 @@ export function CatalogPage() {
     }
     return summaryMetricSettings[key].compact ? `${formatCompactNumber(numeric)} ₽` : formatMoney(numeric);
   };
+  const formatSummarySparklineValue = (key: CatalogSummaryMetricKey, value: number) => {
+    if (["spend", "cpm", "cpc", "atbCost", "cpo", "revenue"].includes(key)) {
+      return formatMoney(value, true);
+    }
+    if (["ctr", "cr", "cr1", "cr2", "drr"].includes(key)) {
+      return formatPercent(value);
+    }
+    return summaryMetricSettings[key].compact ? formatCompactNumber(value) : formatNumber(value);
+  };
   const chartSparklineRows = (chartData?.rows ?? []).slice(-7);
   const buildSummarySparkline = (
     key: CatalogSummaryMetricKey,
@@ -3361,10 +3512,20 @@ export function CatalogPage() {
     if (!comparePayload || chartSparklineRows.length < 2) {
       return undefined;
     }
-    const points = chartSparklineRows
-      .map((row) => toNumber(getValue(row)))
-      .filter((value): value is number => value !== null);
-    return points.length >= 2 ? { points, color: CATALOG_SUMMARY_SPARKLINE_COLORS[key] } : undefined;
+    const items = chartSparklineRows
+      .map((row) => ({
+        value: toNumber(getValue(row)),
+        label: formatDate(row.day),
+      }))
+      .filter((item): item is { value: number; label: string } => item.value !== null);
+    return items.length >= 2
+      ? {
+          points: items.map((item) => item.value),
+          labels: items.map((item) => item.label),
+          color: CATALOG_SUMMARY_SPARKLINE_COLORS[key],
+          valueFormatter: (value) => formatSummarySparklineValue(key, value),
+        }
+      : undefined;
   };
   const summaryMetrics: Array<{
     key: CatalogSummaryMetricKey;
@@ -4223,17 +4384,6 @@ export function CatalogPage() {
               title={
                 <div className="flex flex-wrap items-center gap-2">
                   <span>{shop.name}</span>
-                  <span className="metric-chip inline-flex min-h-7 items-center rounded-2xl px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                    {shop.marketplace}
-                  </span>
-                  <span className="metric-chip inline-flex min-h-7 items-center rounded-2xl px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                    {shop.tariff_code}
-                  </span>
-                  {shop.expire_in ? (
-                    <span className="metric-chip inline-flex min-h-7 items-center rounded-2xl px-2.5 text-[11px] font-medium tracking-normal text-[var(--color-muted)]">
-                      {shop.expire_in}
-                    </span>
-                  ) : null}
                   <a
                     href={shop.shop_url}
                     target="_blank"
@@ -4244,6 +4394,17 @@ export function CatalogPage() {
                   >
                     <ExternalLink className="size-4" />
                   </a>
+                  <span className="metric-chip inline-flex h-8 items-center rounded-2xl px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">
+                    {shop.marketplace}
+                  </span>
+                  <span className="metric-chip inline-flex h-8 items-center rounded-2xl px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">
+                    {shop.tariff_code}
+                  </span>
+                  {shop.expire_in ? (
+                    <span className="metric-chip inline-flex h-8 items-center rounded-2xl px-2.5 text-[11px] font-medium tracking-normal text-[var(--color-muted)]">
+                      {shop.expire_in}
+                    </span>
+                  ) : null}
                 </div>
               }
               actions={
@@ -4276,13 +4437,36 @@ export function CatalogPage() {
                     stickyHeader
                     headerStickyTop={toolbarHeight}
                     emptyText="Под текущий фильтр артикулы не попали."
+                    getRowKey={(article) => `${shop.id}:${article.product_id}`}
+                    renderExpandedRow={(article) => {
+                      const ref = `${shop.id}:${article.product_id}`;
+                      return expandedAnalyticsRefs.includes(ref) ? (
+                        <CatalogArticleAnalyticsPanel article={article} state={articleAnalyticsByRef[ref]} />
+                      ) : null;
+                    }}
                     columns={[
                       {
                         key: "product",
                         header: <span className="inline-block w-[232px]">Товар</span>,
-                        render: (article) => (
-                          <div className="flex w-[232px] max-w-[232px] items-start gap-3">
-                            <div className="h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-2xl bg-[var(--color-surface-strong)]">
+                        render: (article) => {
+                          const ref = `${shop.id}:${article.product_id}`;
+                          const isExpanded = expandedAnalyticsRefs.includes(ref);
+                          const analyticsState = articleAnalyticsByRef[ref];
+                          return (
+                            <div className="flex w-[232px] max-w-[232px] items-start gap-2.5">
+                              <button
+                                type="button"
+                                className={cn("catalog-article-analytics-toggle", isExpanded && "is-active", analyticsState?.loading && "is-loading")}
+                                title="Аналитика по дням"
+                                aria-label="Показать аналитику по дням"
+                                aria-expanded={isExpanded}
+                                onClick={() => void toggleArticleAnalytics(ref)}
+                              >
+                                <span />
+                                <span />
+                                <span />
+                              </button>
+                            <div className="h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-lg bg-[var(--color-surface-strong)]">
                               {article.image_url ? <img src={article.image_url} alt={article.name} className="h-full w-full object-cover" /> : null}
                             </div>
                             <div className="min-w-0 flex-1">
@@ -4294,16 +4478,19 @@ export function CatalogPage() {
                               </p>
                               <p className="mt-1 text-xs text-[var(--color-muted)]">{article.category_keyword}</p>
                             </div>
-                          </div>
-                        ),
+                            </div>
+                          );
+                        },
                       },
                       {
                         key: "issues",
-                        header: <span className="inline-block w-[190px]">Ошибки</span>,
+                        header: <span className="inline-block w-[112px]">Ошибки</span>,
+                        headerClassName: "w-[128px] max-w-[128px] px-2",
+                        cellClassName: "w-[128px] max-w-[128px] px-2",
                         render: (article) => {
                           const ref = `${shop.id}:${article.product_id}`;
                           return (
-                            <div className="w-[190px] max-w-[190px]">
+                            <div className="w-[112px] max-w-[112px]">
                               <CatalogIssueInlineBadges
                                 item={articleIssueRowsByRef.get(ref) ?? null}
                                 isLoaded={Boolean(articleIssueCacheByRef[ref])}
