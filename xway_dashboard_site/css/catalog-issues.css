@@ -771,6 +771,10 @@
 }
 
 .catalog-article-analytics-panel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  contain: inline-size;
   padding: 14px 16px 16px;
   border-top: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(247, 246, 250, 0.76), rgba(255, 255, 255, 0.62));
@@ -928,6 +932,8 @@
 }
 
 .catalog-article-analytics-scroll {
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 16px;

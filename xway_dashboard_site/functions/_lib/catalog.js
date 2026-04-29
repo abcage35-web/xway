@@ -330,9 +330,11 @@ function resolveSpendLimitConfig(source) {
 }
 
 function readCampaignSpendToday(source) {
+  const readSpendValue = (value) => firstNumber(value, value?.spent, value?.spent_today, value?.current, value?.used, value?.value, value?.sum, value?.amount);
+  const stat = source?.stat || source?.metrics || {};
   return (
-    numberOrNull(source?.spend?.DAY) ??
-    numberOrNull(source?.spend?.day) ??
+    readSpendValue(source?.spend?.DAY) ??
+    readSpendValue(source?.spend?.day) ??
     numberOrNull(source?.spend_today) ??
     numberOrNull(source?.spent_day) ??
     numberOrNull(source?.spend_day) ??
@@ -341,7 +343,8 @@ function readCampaignSpendToday(source) {
     numberOrNull(source?.today_expense) ??
     numberOrNull(source?.expense_day) ??
     numberOrNull(source?.expense_today) ??
-    numberOrNull(source?.spent_today)
+    numberOrNull(source?.spent_today) ??
+    firstNumber(stat?.sum, stat?.expense_sum)
   );
 }
 
@@ -349,6 +352,7 @@ function readBudgetSpentToday(source, budgetRule) {
   return (
     firstNumber(budgetRule?.spent, budgetRule?.spent_today, budgetRule?.current, budgetRule?.used, budgetRule?.value, budgetRule?.sum, budgetRule?.amount) ??
     firstNumber(source?.budget_spent_today, source?.budget_spent, source?.budget_used, source?.budget_current) ??
+    readCampaignSpendToday(source) ??
     null
   );
 }
@@ -396,6 +400,10 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
     }
     budgetRuleActive = budgetRuleActive || Boolean(budgetRule.active ?? source.budget_rule_active);
     spendLimitActive = spendLimitActive || Boolean(spendLimit?.active ?? source.spend_limit_active);
+    if ((spendLimit?.limit === null || spendLimit?.limit === undefined) && budgetLimit !== null && budgetLimit > 0) {
+      spendLimits.push(budgetLimit);
+      spendLimitActive = spendLimitActive || Boolean(budgetRule.active ?? source.budget_rule_active);
+    }
   }
 
   return {

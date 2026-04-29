@@ -305,10 +305,12 @@ export function MetricTable<T>({
   const [headerCloneState, setHeaderCloneState] = useState<{
     columnWidths: number[];
     tableWidth: number;
+    viewportWidth: number;
     scrollLeft: number;
   }>({
     columnWidths: [],
     tableWidth: 0,
+    viewportWidth: 0,
     scrollLeft: 0,
   });
   const columnKeys = columns.map((column) => column.key).join("|");
@@ -331,18 +333,20 @@ export function MetricTable<T>({
       const measuredCells = firstBodyCells.length === columns.length ? firstBodyCells : headerCells;
       const nextColumnWidths = measuredCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
       const nextTableWidth = Math.round(Math.max(tableNode.getBoundingClientRect().width, tableNode.scrollWidth));
+      const nextViewportWidth = Math.round(viewportNode.clientWidth);
       syncScrollLeft();
       setHeaderCloneState((current) => {
         const sameWidths =
           current.columnWidths.length === nextColumnWidths.length &&
           current.columnWidths.every((value, index) => value === nextColumnWidths[index]);
-        if (sameWidths && current.tableWidth === nextTableWidth) {
+        if (sameWidths && current.tableWidth === nextTableWidth && current.viewportWidth === nextViewportWidth) {
           return current;
         }
         return {
           ...current,
           columnWidths: nextColumnWidths,
           tableWidth: nextTableWidth,
+          viewportWidth: nextViewportWidth,
         };
       });
     };
@@ -482,8 +486,13 @@ export function MetricTable<T>({
                   </tr>
                   {expandedRow ? (
                     <tr className="metric-table-expanded-row">
-                      <td colSpan={columns.length} className="p-0 align-top">
-                        {expandedRow}
+                      <td colSpan={columns.length} className="metric-table-expanded-cell p-0 align-top">
+                        <div
+                          className="metric-table-expanded-content"
+                          style={headerCloneState.viewportWidth ? { width: `${headerCloneState.viewportWidth}px` } : undefined}
+                        >
+                          {expandedRow}
+                        </div>
                       </td>
                     </tr>
                   ) : null}

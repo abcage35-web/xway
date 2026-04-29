@@ -2304,17 +2304,34 @@ def _resolve_catalog_spend_limit_config(source: Dict[str, Any]) -> Optional[Dict
 
 def _read_catalog_campaign_spend_today(source: Dict[str, Any]) -> Optional[float]:
     spend = source.get("spend") or {}
+
+    def read_spend_value(value: Any) -> Optional[float]:
+        if isinstance(value, dict):
+            return _catalog_first_number(
+                value.get("spent"),
+                value.get("spent_today"),
+                value.get("current"),
+                value.get("used"),
+                value.get("value"),
+                value.get("sum"),
+                value.get("amount"),
+            )
+        return _catalog_first_number(value)
+
     if isinstance(spend, dict):
-        value = _catalog_number_or_none(spend.get("DAY"))
+        value = read_spend_value(spend.get("DAY"))
         if value is not None:
             return value
-        value = _catalog_number_or_none(spend.get("day"))
+        value = read_spend_value(spend.get("day"))
         if value is not None:
             return value
     for key in ("spend_today", "spent_day", "spend_day", "day_spend", "today_spend", "today_expense", "expense_day", "expense_today", "spent_today"):
         value = _catalog_number_or_none(source.get(key))
         if value is not None:
             return value
+    stat = source.get("stat") or source.get("metrics") or {}
+    if isinstance(stat, dict):
+        return _catalog_first_number(stat.get("sum"), stat.get("expense_sum"))
     return None
 
 
@@ -2331,6 +2348,7 @@ def _read_catalog_budget_spent_today(source: Dict[str, Any], budget_rule: Dict[s
         source.get("budget_spent"),
         source.get("budget_used"),
         source.get("budget_current"),
+        _read_catalog_campaign_spend_today(source),
     )
 
 
@@ -2376,6 +2394,9 @@ def _normalize_catalog_campaign_limit_summary(raw_value: Any, campaigns: List[Di
             spend_limits.append(spend_limit["limit"])
         budget_rule_active = budget_rule_active or bool(budget_rule.get("active") if "active" in budget_rule else source.get("budget_rule_active"))
         spend_limit_active = spend_limit_active or bool(spend_limit.get("active") if spend_limit else source.get("spend_limit_active"))
+        if (not spend_limit or spend_limit.get("limit") is None) and budget_limit is not None and budget_limit > 0:
+            spend_limits.append(budget_limit)
+            spend_limit_active = spend_limit_active or bool(budget_rule.get("active") if "active" in budget_rule else source.get("budget_rule_active"))
     return {
         "budget_limit": sum(budget_limits) if budget_limits else None,
         "budget_spent_today": sum(budget_spent_values) if budget_spent_values else None,

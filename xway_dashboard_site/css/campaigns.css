@@ -1118,6 +1118,16 @@
   background: #f7fbf9;
 }
 
+.metric-table-expanded-cell {
+  overflow: hidden;
+}
+
+.metric-table-expanded-content {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .cluster-strategy-value-stack {
   display: inline-flex;
   align-items: center;
