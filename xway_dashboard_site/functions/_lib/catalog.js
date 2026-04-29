@@ -186,11 +186,31 @@ function catalogCampaignSlotForRow(row) {
   return isRecom ? "manual_recom" : "manual_search";
 }
 
+function isCatalogCampaignRow(source) {
+  const hasIdentity = ["id", "campaign_id", "external_id", "wb_id"].some((field) => source?.[field] !== null && source?.[field] !== undefined);
+  const hasCampaignFields = [
+    "status",
+    "status_xway",
+    "payment_type",
+    "paymentType",
+    "auction_mode",
+    "auto_type",
+    "unified",
+    "budget_rule",
+    "budget_rule_config",
+    "limits_by_period",
+  ].some((field) => Object.prototype.hasOwnProperty.call(source || {}, field));
+  return hasIdentity && hasCampaignFields;
+}
+
 function collectCampaignRowsFromSource(source) {
   if (!source || typeof source !== "object") {
     return [];
   }
   const rows = [];
+  if (isCatalogCampaignRow(source)) {
+    rows.push(source);
+  }
   const directKeys = ["campaigns", "campaign_wb", "campaigns_wb", "campaign_items", "items"];
   for (const key of directKeys) {
     rows.push(...asArray(source[key]).filter((item) => item && typeof item === "object"));
@@ -416,7 +436,7 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
   };
 }
 
-function normalizeCatalogCampaignStates(raw, extraSources = []) {
+export function normalizeCatalogCampaignStates(raw, extraSources = []) {
   const payload = raw || {};
   const rows = [];
   for (const key of CATALOG_CAMPAIGN_FIELD_ORDER) {

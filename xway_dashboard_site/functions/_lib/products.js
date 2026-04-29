@@ -1,4 +1,5 @@
 import { XwayApiClient } from "./xway-client.js";
+import { normalizeCatalogCampaignStates as normalizeCatalogCampaignStatesForCatalog } from "./catalog.js";
 import { asFloat, cloneValue, formatDay, mapWithConcurrency } from "./utils.js";
 
 const WEEKDAYS = [
@@ -894,7 +895,7 @@ function productSummary(article, match, shopInfo, info, stocksRulePayload, statI
     heatmap,
     orders_heatmap: ordersHeatmap,
     article_sheet: defaultArticleSheetPayload(),
-    catalog_campaign_states: normalizeCatalogCampaignStates(product?.campaigns_data),
+    catalog_campaign_states: normalizeCatalogCampaignStatesForCatalog(product?.campaigns_data, [product, statItem, ...campaigns]),
     schedule_aggregate: aggregateSchedule(campaigns),
     campaigns,
     bid_log: campaigns

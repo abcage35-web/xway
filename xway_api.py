@@ -2088,10 +2088,32 @@ def _catalog_campaign_slot_for_row(row: Dict[str, Any]) -> str:
     return "manual_recom" if is_recom else "manual_search"
 
 
+def _is_catalog_campaign_row(source: Dict[str, Any]) -> bool:
+    has_identity = any(source.get(field) is not None for field in ("id", "campaign_id", "external_id", "wb_id"))
+    has_campaign_fields = any(
+        field in source
+        for field in (
+            "status",
+            "status_xway",
+            "payment_type",
+            "paymentType",
+            "auction_mode",
+            "auto_type",
+            "unified",
+            "budget_rule",
+            "budget_rule_config",
+            "limits_by_period",
+        )
+    )
+    return has_identity and has_campaign_fields
+
+
 def _collect_catalog_campaign_rows_from_source(source: Any) -> List[Dict[str, Any]]:
     if not isinstance(source, dict):
         return []
     rows: List[Dict[str, Any]] = []
+    if _is_catalog_campaign_row(source):
+        rows.append(source)
     for direct_key in ("campaigns", "campaign_wb", "campaigns_wb", "campaign_items", "items"):
         rows.extend([item for item in _catalog_values_as_list(source.get(direct_key)) if isinstance(item, dict)])
     by_type = source.get("campaigns_by_type")
