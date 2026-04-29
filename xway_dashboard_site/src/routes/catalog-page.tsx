@@ -4182,11 +4182,18 @@ export function CatalogPage() {
                         header: <CatalogCampaignColumnsHeader />,
                         render: (article) => {
                           const slots = buildCatalogCampaignSlots(article);
+                          const slotByKey = new Map(slots.map((slot) => [slot.key, slot] as const));
+                          const slotOrder: CatalogCampaignSlotKind[] = ["unified", "manual", "cpc"];
                           return (
                           <div className="catalog-campaign-board min-w-[560px]">
                             {slots.length ? (
-                              slots.map((slot) => (
-                                <div key={`${article.article}-${slot.key}`} className={cn("catalog-campaign-card", `tone-${slot.displayStatus}`)}>
+                              slotOrder.map((slotKey) => {
+                                const slot = slotByKey.get(slotKey);
+                                if (!slot) {
+                                  return <div key={`${article.article}-${slotKey}-empty`} className="catalog-campaign-slot-empty" aria-hidden="true" />;
+                                }
+                                return (
+                                <div key={`${article.article}-${slot.key}`} className={cn("catalog-campaign-card", `slot-${slot.key}`, `tone-${slot.displayStatus}`)}>
                                   <div className="catalog-campaign-card-head" title={`${slot.headline} · ${slot.zoneLabel}`}>
                                     <CatalogCampaignStatusIconBadge
                                       status={slot.displayStatus}
@@ -4206,7 +4213,8 @@ export function CatalogPage() {
                                   </div>
                                   <CatalogCampaignLimitBars rows={slot.limitRows} />
                                 </div>
-                              ))
+                                );
+                              })
                             ) : (
                               <span className="text-[var(--color-muted)]">Нет кампаний</span>
                             )}

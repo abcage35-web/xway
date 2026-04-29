@@ -302,6 +302,23 @@
   line-height: 1.08;
 }
 
+.catalog-campaign-card.slot-unified {
+  grid-column: 1;
+}
+
+.catalog-campaign-card.slot-manual {
+  grid-column: 2;
+}
+
+.catalog-campaign-card.slot-cpc {
+  grid-column: 3;
+}
+
+.catalog-campaign-slot-empty {
+  min-width: 0;
+  min-height: 70px;
+}
+
 .catalog-campaign-card-head {
   display: flex;
   align-items: center;
