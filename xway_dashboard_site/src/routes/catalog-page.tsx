@@ -80,9 +80,9 @@ const CATALOG_CAMPAIGN_TYPE_ROWS: Array<{
   tone: CatalogCampaignSlotKind;
   color: string;
 }> = [
-  { key: "cpm-manual", label: "Ручная", badge: "CPM", tone: "manual", color: "#65d315" },
-  { key: "cpm-unified", label: "Единая", badge: "CPM", tone: "unified", color: "#ff4f9a" },
-  { key: "cpc", label: "Клики", badge: "CPC", tone: "cpc", color: "#8b5cf6" },
+  { key: "cpm-manual", label: "Ручная", badge: "CPM", tone: "manual", color: "#248a3d" },
+  { key: "cpm-unified", label: "Единая", badge: "CPM", tone: "unified", color: "#c2255c" },
+  { key: "cpc", label: "Клики", badge: "CPC", tone: "cpc", color: "#5f3dc4" },
 ];
 
 const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: string }> = {
@@ -376,20 +376,13 @@ function buildCatalogCampaignTypeTotals(rows: CatalogChartResponse["rows"]): Cat
   return totals;
 }
 
-function hasCatalogCampaignTypeTotals(totalsByType: CatalogCampaignTypeTotalsByKey | null | undefined) {
-  return Boolean(
-    totalsByType &&
-      CATALOG_CAMPAIGN_TYPE_ROWS.some((type) => Object.values(totalsByType[type.key]).some((value) => value > 0)),
-  );
-}
-
 function resolveCatalogCampaignTypeTotalsForRef(
   productRef: string,
   totalsByRef: Record<string, CatalogCampaignTypeTotalsByKey>,
   chartData: CatalogChartResponse | null,
 ) {
   const directTotals = totalsByRef[productRef];
-  if (hasCatalogCampaignTypeTotals(directTotals)) {
+  if (directTotals) {
     return directTotals;
   }
 
@@ -397,8 +390,7 @@ function resolveCatalogCampaignTypeTotalsForRef(
   if (!productRows?.length) {
     return null;
   }
-  const chartTotals = buildCatalogCampaignTypeTotals(productRows);
-  return hasCatalogCampaignTypeTotals(chartTotals) ? chartTotals : null;
+  return buildCatalogCampaignTypeTotals(productRows);
 }
 
 function resolveCatalogCampaignTypeMetricValue(totals: CatalogCampaignTypeTotals, metric: CatalogCampaignTypeMetricKey) {
@@ -427,13 +419,10 @@ function formatCatalogCampaignTypeMetricValue(metric: CatalogCampaignTypeMetricK
   return formatNumber(value);
 }
 
-function CatalogCampaignTypeRowsLegend({ totalsByType }: { totalsByType: CatalogCampaignTypeTotalsByKey | null | undefined }) {
-  if (!hasCatalogCampaignTypeTotals(totalsByType)) {
-    return <span className="catalog-campaign-type-empty">—</span>;
-  }
-
+function CatalogCampaignTypeRowsLegend() {
   return (
     <div className="catalog-campaign-type-row-list">
+      <div className="catalog-campaign-type-total-label">—</div>
       {CATALOG_CAMPAIGN_TYPE_ROWS.map((type) => (
         <div key={type.key} className="catalog-campaign-type-row-label">
           <span className={cn("catalog-campaign-kind-badge", `is-${type.tone}`)}>{type.badge}</span>
@@ -453,14 +442,13 @@ function CatalogCampaignTypeMetricStack({
   metric: CatalogCampaignTypeMetricKey;
   fallback: ReactNode;
 }) {
-  if (!hasCatalogCampaignTypeTotals(totalsByType)) {
-    return <>{fallback}</>;
-  }
+  const resolvedTotals = totalsByType ?? createEmptyCatalogCampaignTypeTotalsByKey();
 
   return (
     <div className="catalog-campaign-type-metric-stack">
+      <span className="catalog-campaign-type-total-value">{fallback}</span>
       {CATALOG_CAMPAIGN_TYPE_ROWS.map((type) => {
-        const value = resolveCatalogCampaignTypeMetricValue(totalsByType![type.key], metric);
+        const value = resolveCatalogCampaignTypeMetricValue(resolvedTotals[type.key], metric);
         const formatted = formatCatalogCampaignTypeMetricValue(metric, value);
         return (
           <span
@@ -4574,15 +4562,7 @@ export function CatalogPage() {
                         key: "campaignType",
                         header: <span className="catalog-campaign-type-header">Тип РК</span>,
                         cellClassName: "catalog-campaign-type-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeRowsLegend
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                          />
-                        ),
+                        render: () => <CatalogCampaignTypeRowsLegend />,
                       },
                       {
                         key: "spend",

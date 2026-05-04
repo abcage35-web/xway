@@ -310,9 +310,34 @@
   min-width: 0;
 }
 
+.catalog-campaign-type-total-label,
+.catalog-campaign-type-total-value,
 .catalog-campaign-type-row-label,
 .catalog-campaign-type-metric-pill {
   min-height: 18px;
+}
+
+.catalog-campaign-type-total-label,
+.catalog-campaign-type-total-value {
+  display: inline-flex;
+  align-items: center;
+  min-width: 76px;
+  color: var(--color-muted);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.catalog-campaign-type-total-label {
+  justify-content: flex-start;
+}
+
+.catalog-campaign-type-total-value {
+  justify-content: center;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
 }
 
 .catalog-campaign-type-row-label {
@@ -349,11 +374,8 @@
   font-weight: 900;
   line-height: 1;
   white-space: nowrap;
-  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.16);
-}
-
-.catalog-campaign-type-empty {
-  color: var(--color-muted);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .catalog-campaign-card {
