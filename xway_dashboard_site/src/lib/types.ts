@@ -569,6 +569,7 @@ export interface CatalogChartRow {
   rel_atbs: number;
   ordered_sum_total: number;
   spent_sku_count: number;
+  orders_by_campaign_type?: Record<string, number>;
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
@@ -657,6 +658,7 @@ export interface CatalogChartResponse {
   loaded_products_count: number;
   rows: CatalogChartRow[];
   product_rows?: CatalogChartProductRows[];
+  campaign_type_meta?: Record<string, { label: string; color: string; order: number }>;
   totals: CatalogChartTotals;
   errors: Array<{ product: string; error: string }>;
 }

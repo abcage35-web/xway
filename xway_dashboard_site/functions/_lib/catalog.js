@@ -81,6 +81,11 @@ const SHOP_STAT_SAFE_FIELDS = [
   "spend_limits",
   "dispatcher_enabled",
 ];
+const CATALOG_CHART_CAMPAIGN_TYPE_META = {
+  "cpm-manual": { label: "CPM · Ручная", color: "#2ea36f", order: 1 },
+  "cpm-unified": { label: "CPM · Единая", color: "#4b7bff", order: 2 },
+  cpc: { label: "CPC", color: "#8b64f6", order: 3 },
+};
 
 function snapshotFields(payload, fields) {
   const source = payload || {};
@@ -184,6 +189,41 @@ function catalogCampaignSlotForRow(row) {
     return "unified";
   }
   return isRecom ? "manual_recom" : "manual_search";
+}
+
+function catalogChartCampaignTypeForRow(row) {
+  const slot = catalogCampaignSlotForRow(row || {});
+  if (slot === "cpc") {
+    return "cpc";
+  }
+  if (slot === "unified") {
+    return "cpm-unified";
+  }
+  return "cpm-manual";
+}
+
+function cloneCatalogChartCampaignTypeOrders(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([key, rawValue]) => [key, asFloat(rawValue)])
+      .filter(([, numeric]) => numeric > 0),
+  );
+}
+
+function addCatalogChartCampaignTypeOrder(target, typeKey, value) {
+  const numeric = asFloat(value);
+  if (!typeKey || numeric <= 0) {
+    return;
+  }
+  target.orders_by_campaign_type = target.orders_by_campaign_type || {};
+  target.orders_by_campaign_type[typeKey] = asFloat(target.orders_by_campaign_type[typeKey]) + numeric;
+}
+
+function addCatalogChartCampaignTypeOrders(target, source) {
+  for (const [typeKey, value] of Object.entries(source || {})) {
+    addCatalogChartCampaignTypeOrder(target, typeKey, value);
+  }
 }
 
 function isCatalogCampaignRow(source) {
@@ -713,6 +753,7 @@ function createEmptyCatalogChartRow(day) {
     rel_atbs: 0,
     ordered_sum_total: 0,
     spent_sku_count: 0,
+    orders_by_campaign_type: {},
   };
 }
 
@@ -730,6 +771,7 @@ function finalizeCatalogChartRow(row) {
   const relAtbs = asFloat(row.rel_atbs);
   const orderedSumTotal = asFloat(row.ordered_sum_total);
   const spentSkuCount = Number.parseInt(String(row.spent_sku_count || 0), 10) || 0;
+  const ordersByCampaignType = cloneCatalogChartCampaignTypeOrders(row.orders_by_campaign_type);
   return {
     ...row,
     views,
@@ -745,6 +787,7 @@ function finalizeCatalogChartRow(row) {
     rel_atbs: relAtbs,
     ordered_sum_total: orderedSumTotal,
     spent_sku_count: spentSkuCount,
+    orders_by_campaign_type: ordersByCampaignType,
     ctr: catalogChartRate(clicks, views),
     cr1: catalogChartRate(atbs, clicks),
     cr2: catalogChartRate(orders, atbs),
@@ -769,6 +812,7 @@ function buildCatalogChartTotals(rows) {
     rel_shks: 0,
     rel_atbs: 0,
     ordered_sum_total: 0,
+    orders_by_campaign_type: {},
   };
   for (const row of rows) {
     totals.views += asFloat(row.views);
@@ -783,9 +827,11 @@ function buildCatalogChartTotals(rows) {
     totals.rel_shks += asFloat(row.rel_shks);
     totals.rel_atbs += asFloat(row.rel_atbs);
     totals.ordered_sum_total += asFloat(row.ordered_sum_total);
+    addCatalogChartCampaignTypeOrders(totals, row.orders_by_campaign_type);
   }
   return {
     ...totals,
+    orders_by_campaign_type: cloneCatalogChartCampaignTypeOrders(totals.orders_by_campaign_type),
     ctr: catalogChartRate(totals.clicks, totals.views),
     cr1: catalogChartRate(totals.atbs, totals.clicks),
     cr2: catalogChartRate(totals.orders, totals.atbs),
@@ -808,6 +854,18 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
     const productRef = `${shopId}:${productId}`;
     try {
       const rows = await client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end);
+      let campaignDailyExact = {};
+      let campaignTypeById = new Map();
+      try {
+        const stata = await client.productStata(shopId, productId);
+        const campaigns = stata?.campaign_wb || [];
+        const campaignIds = campaigns.map((campaign) => campaign?.id).filter((campaignId) => campaignId !== null && campaignId !== undefined);
+        campaignTypeById = new Map(campaigns.map((campaign) => [String(campaign.id), catalogChartCampaignTypeForRow(campaign)]));
+        campaignDailyExact = await client.campaignDailyExact(shopId, productId, campaignIds, client.range.current_start, client.range.current_end);
+      } catch {
+        campaignDailyExact = {};
+        campaignTypeById = new Map();
+      }
       const productRowsByDay = new Map(days.map((day) => [day, createEmptyCatalogChartRow(day)]));
       for (const row of rows || []) {
         const day = row.day;
@@ -853,6 +911,23 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
           productTarget.spent_sku_count = 1;
         }
       }
+      for (const [campaignId, campaignRows] of Object.entries(campaignDailyExact || {})) {
+        const typeKey = campaignTypeById.get(String(campaignId));
+        if (!typeKey) {
+          continue;
+        }
+        for (const campaignRow of campaignRows || []) {
+          const day = campaignRow?.day;
+          const target = rowsByDay.get(day);
+          const productTarget = productRowsByDay.get(day);
+          if (!target || !productTarget) {
+            continue;
+          }
+          const orders = asFloat(campaignRow.orders);
+          addCatalogChartCampaignTypeOrder(target, typeKey, orders);
+          addCatalogChartCampaignTypeOrder(productTarget, typeKey, orders);
+        }
+      }
       productRows.push({
         product_ref: productRef,
         rows: days.map((day) => finalizeCatalogChartRow(productRowsByDay.get(day))),
@@ -874,6 +949,7 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
     loaded_products_count: Math.max(parsedRefs.length - errors.length, 0),
     rows,
     product_rows: productRows,
+    campaign_type_meta: CATALOG_CHART_CAMPAIGN_TYPE_META,
     totals: buildCatalogChartTotals(rows),
     errors,
   };

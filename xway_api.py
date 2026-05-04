@@ -87,6 +87,11 @@ CATALOG_CAMPAIGN_FIELD_META: Dict[str, Dict[str, str]] = {
     "manual_recom": {"label": "Рекомендации", "short_label": "CPM Реком"},
     "cpc": {"label": "Оплата за клики", "short_label": "CPC"},
 }
+CATALOG_CHART_CAMPAIGN_TYPE_META: Dict[str, Dict[str, Any]] = {
+    "cpm-manual": {"label": "CPM · Ручная", "color": "#2ea36f", "order": 1},
+    "cpm-unified": {"label": "CPM · Единая", "color": "#4b7bff", "order": 2},
+    "cpc": {"label": "CPC", "color": "#8b64f6", "order": 3},
+}
 SHOP_DETAIL_SAFE_FIELDS: Tuple[str, ...] = (
     "id",
     "name",
@@ -2088,6 +2093,44 @@ def _catalog_campaign_slot_for_row(row: Dict[str, Any]) -> str:
     return "manual_recom" if is_recom else "manual_search"
 
 
+def _catalog_chart_campaign_type_for_row(row: Dict[str, Any]) -> str:
+    slot = _catalog_campaign_slot_for_row(row or {})
+    if slot == "cpc":
+        return "cpc"
+    if slot == "unified":
+        return "cpm-unified"
+    return "cpm-manual"
+
+
+def _clone_catalog_chart_campaign_type_orders(value: Any) -> Dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    result: Dict[str, float] = {}
+    for key, raw_value in value.items():
+        numeric = _catalog_chart_number(raw_value)
+        if numeric > 0:
+            result[str(key)] = numeric
+    return result
+
+
+def _add_catalog_chart_campaign_type_order(target: Dict[str, Any], type_key: str, value: Any) -> None:
+    numeric = _catalog_chart_number(value)
+    if not type_key or numeric <= 0:
+        return
+    bucket = target.setdefault("orders_by_campaign_type", {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        target["orders_by_campaign_type"] = bucket
+    bucket[type_key] = _catalog_chart_number(bucket.get(type_key)) + numeric
+
+
+def _add_catalog_chart_campaign_type_orders(target: Dict[str, Any], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    for type_key, value in source.items():
+        _add_catalog_chart_campaign_type_order(target, str(type_key), value)
+
+
 def _is_catalog_campaign_row(source: Dict[str, Any]) -> bool:
     has_identity = any(source.get(field) is not None for field in ("id", "campaign_id", "external_id", "wb_id"))
     has_campaign_fields = any(
@@ -3322,6 +3365,7 @@ def _create_catalog_chart_row(day: str) -> Dict[str, Any]:
         "rel_atbs": 0.0,
         "ordered_sum_total": 0.0,
         "spent_sku_count": 0,
+        "orders_by_campaign_type": {},
     }
 
 
@@ -3339,6 +3383,7 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
     rel_atbs = _catalog_chart_number(row.get("rel_atbs"))
     ordered_sum_total = _catalog_chart_number(row.get("ordered_sum_total"))
     spent_sku_count = int(row.get("spent_sku_count") or 0)
+    orders_by_campaign_type = _clone_catalog_chart_campaign_type_orders(row.get("orders_by_campaign_type"))
     return {
         **row,
         "views": views,
@@ -3354,6 +3399,7 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "rel_atbs": rel_atbs,
         "ordered_sum_total": ordered_sum_total,
         "spent_sku_count": spent_sku_count,
+        "orders_by_campaign_type": orders_by_campaign_type,
         "ctr": _catalog_chart_rate(clicks, views),
         "cr1": _catalog_chart_rate(atbs, clicks),
         "cr2": _catalog_chart_rate(orders, atbs),
@@ -3378,6 +3424,7 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "rel_shks": 0.0,
         "rel_atbs": 0.0,
         "ordered_sum_total": 0.0,
+        "orders_by_campaign_type": {},
     }
     for row in rows:
         totals["views"] += _catalog_chart_number(row.get("views"))
@@ -3392,8 +3439,10 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         totals["rel_shks"] += _catalog_chart_number(row.get("rel_shks"))
         totals["rel_atbs"] += _catalog_chart_number(row.get("rel_atbs"))
         totals["ordered_sum_total"] += _catalog_chart_number(row.get("ordered_sum_total"))
+        _add_catalog_chart_campaign_type_orders(totals, row.get("orders_by_campaign_type"))
     return {
         **totals,
+        "orders_by_campaign_type": _clone_catalog_chart_campaign_type_orders(totals.get("orders_by_campaign_type")),
         "ctr": _catalog_chart_rate(totals["clicks"], totals["views"]),
         "cr1": _catalog_chart_rate(totals["atbs"], totals["clicks"]),
         "cr2": _catalog_chart_rate(totals["orders"], totals["atbs"]),
@@ -3944,18 +3993,44 @@ def collect_catalog_chart(
     chart_product_rows: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
 
-    def collect_ref(shop_id: int, product_id: int, ref: str) -> Tuple[str, Optional[List[Dict[str, Any]]], Optional[str]]:
+    def collect_ref(
+        shop_id: int,
+        product_id: int,
+        ref: str,
+    ) -> Tuple[str, Optional[List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]], Dict[str, str], Optional[str]]:
         try:
             api = XwayApi(storage_state_path, start=range_payload["current_start"], end=range_payload["current_end"])
-            return ref, api.product_stats_by_day(shop_id, product_id), None
+            product_daily_rows = api.product_stats_by_day(shop_id, product_id)
+            campaign_daily_exact: Dict[str, List[Dict[str, Any]]] = {}
+            campaign_type_by_id: Dict[str, str] = {}
+            try:
+                stata = api.product_stata(shop_id, product_id) or {}
+                campaign_rows = stata.get("campaign_wb") or []
+                campaign_ids = [campaign.get("id") for campaign in campaign_rows if campaign.get("id") is not None]
+                campaign_type_by_id = {
+                    str(campaign.get("id")): _catalog_chart_campaign_type_for_row(campaign)
+                    for campaign in campaign_rows
+                    if campaign.get("id") is not None
+                }
+                campaign_daily_exact = api.campaign_daily_exact(
+                    shop_id,
+                    product_id,
+                    campaign_ids,
+                    range_payload["current_start"],
+                    range_payload["current_end"],
+                )
+            except Exception:
+                campaign_daily_exact = {}
+                campaign_type_by_id = {}
+            return ref, product_daily_rows, campaign_daily_exact, campaign_type_by_id, None
         except Exception as exc:
-            return ref, None, str(exc)
+            return ref, None, {}, {}, str(exc)
 
     max_workers = min(6, max(1, len(parsed_refs)))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(collect_ref, shop_id, product_id, ref) for shop_id, product_id, ref in parsed_refs]
         for future in as_completed(futures):
-            ref, product_daily_rows, error = future.result()
+            ref, product_daily_rows, campaign_daily_exact, campaign_type_by_id, error = future.result()
             if error:
                 errors.append({"product": ref, "error": error})
                 continue
@@ -4001,6 +4076,19 @@ def collect_catalog_chart(
                 if expense_sum > 0:
                     target["spent_sku_count"] += 1
                     product_target["spent_sku_count"] = 1
+            for campaign_id, campaign_rows in (campaign_daily_exact or {}).items():
+                type_key = campaign_type_by_id.get(str(campaign_id))
+                if not type_key:
+                    continue
+                for campaign_row in campaign_rows or []:
+                    day = campaign_row.get("day")
+                    target = rows_by_day.get(day)
+                    product_target = product_rows_by_day.get(day)
+                    if target is None or product_target is None:
+                        continue
+                    orders = _catalog_chart_number(campaign_row.get("orders"))
+                    _add_catalog_chart_campaign_type_order(target, type_key, orders)
+                    _add_catalog_chart_campaign_type_order(product_target, type_key, orders)
             chart_product_rows.append(
                 {
                     "product_ref": ref,
@@ -4018,6 +4106,7 @@ def collect_catalog_chart(
         "loaded_products_count": max(len(parsed_refs) - len(errors), 0),
         "rows": rows,
         "product_rows": chart_product_rows,
+        "campaign_type_meta": CATALOG_CHART_CAMPAIGN_TYPE_META,
         "totals": _catalog_chart_totals(rows),
         "errors": errors,
     }

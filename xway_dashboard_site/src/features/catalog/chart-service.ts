@@ -21,6 +21,30 @@ function catalogChartRate(numerator: number, denominator: number) {
   return denominator > 0 ? (numerator / denominator) * 100 : null;
 }
 
+function catalogChartTypeOrders(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.entries(value).reduce<Record<string, number>>((result, [key, rawValue]) => {
+    const numeric = toNumber(rawValue) ?? 0;
+    if (numeric > 0) {
+      result[key] = numeric;
+    }
+    return result;
+  }, {});
+}
+
+function addCatalogChartTypeOrders(
+  target: CatalogChartResponse["rows"][number],
+  source: unknown,
+) {
+  const sourceValues = catalogChartTypeOrders(source);
+  target.orders_by_campaign_type = target.orders_by_campaign_type || {};
+  Object.entries(sourceValues).forEach(([key, value]) => {
+    target.orders_by_campaign_type![key] = (target.orders_by_campaign_type![key] ?? 0) + value;
+  });
+}
+
 function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
   const views = toNumber(row.views) ?? 0;
   const clicks = toNumber(row.clicks) ?? 0;
@@ -51,6 +75,7 @@ function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
     rel_atbs: relAtbs,
     ordered_sum_total: orderedSumTotal,
     spent_sku_count: spentSkuCount,
+    orders_by_campaign_type: catalogChartTypeOrders(row.orders_by_campaign_type),
     ctr: catalogChartRate(clicks, views),
     cr1: catalogChartRate(atbs, clicks),
     cr2: catalogChartRate(orders, atbs),
@@ -130,6 +155,7 @@ export function mergeCatalogChartResponses(
       rel_atbs: 0,
       ordered_sum_total: 0,
       spent_sku_count: 0,
+      orders_by_campaign_type: {},
       ctr: null,
       cr1: null,
       cr2: null,
@@ -160,6 +186,7 @@ export function mergeCatalogChartResponses(
       target.rel_atbs += toNumber(row.rel_atbs) ?? 0;
       target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
       target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
+      addCatalogChartTypeOrders(target, row.orders_by_campaign_type);
     });
   });
 
@@ -175,6 +202,7 @@ export function mergeCatalogChartResponses(
     loaded_products_count: (current?.loaded_products_count ?? 0) + (incoming.loaded_products_count ?? 0),
     rows,
     product_rows: [...(current?.product_rows ?? []), ...(incoming.product_rows ?? [])],
+    campaign_type_meta: incoming.campaign_type_meta ?? current?.campaign_type_meta,
     totals: buildCatalogChartTotals(rows),
     errors: [...(current?.errors ?? []), ...(incoming.errors ?? [])],
   };
@@ -233,6 +261,7 @@ export function aggregateCatalogChartResponse(
         rel_atbs: 0,
         ordered_sum_total: 0,
         spent_sku_count: 0,
+        orders_by_campaign_type: {},
         ctr: null,
         cr1: null,
         cr2: null,
@@ -271,6 +300,7 @@ export function aggregateCatalogChartResponse(
       target.rel_shks += toNumber(row.rel_shks) ?? 0;
       target.rel_atbs += toNumber(row.rel_atbs) ?? 0;
       target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
+      addCatalogChartTypeOrders(target, row.orders_by_campaign_type);
       if (expenseSum > 0) {
         target.spent_sku_count += 1;
       }
