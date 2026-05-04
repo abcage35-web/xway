@@ -1,11 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ExternalLink, Filter, Pause, Play, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ExternalLink, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData, useNavigate } from "react-router";
+import { Link, useLoaderData, useNavigate, useRevalidator } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
-import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogResponse, CatalogShop } from "../lib/types";
+import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesRow, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogArticleAnalyticsPanel, formatCatalogShortDate, type CatalogArticleAnalyticsState } from "../features/catalog/article-analytics-panel";
 import {
   aggregateCatalogChartResponse,
@@ -323,6 +323,76 @@ interface CatalogIssueCachePayload {
   day: string;
   rowsByRef: Record<string, CatalogIssueCacheEntry>;
   updatedAt: string;
+}
+
+function applyCatalogArticleOverrides(payload: CatalogResponse, overridesByRef: Record<string, CatalogArticle>): CatalogResponse {
+  if (!Object.keys(overridesByRef).length) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    shops: payload.shops.map((shop) => ({
+      ...shop,
+      articles: shop.articles.map((article) => overridesByRef[`${shop.id}:${article.product_id}`] ?? article),
+    })),
+  };
+}
+
+function findCatalogArticleByRef(payload: CatalogResponse, productRef: string): CatalogArticle | null {
+  for (const shop of payload.shops) {
+    const article = shop.articles.find((item) => `${shop.id}:${item.product_id}` === productRef);
+    if (article) {
+      return article;
+    }
+  }
+  return null;
+}
+
+function mapCatalogIssuesRowToCacheEntry(row: CatalogIssuesRow): CatalogIssueCacheEntry {
+  return {
+    product_ref: row.product_ref,
+    issues: row.issues.map((issue) => ({
+      kind: issue.kind,
+      title: issue.title,
+      hours: issue.hours,
+      incidents: issue.incidents,
+      ordersAds: issue.orders_ads,
+      totalOrders: issue.total_orders,
+      drrOverall: issue.drr_overall,
+      estimatedGap: issue.estimated_gap,
+      campaignIds: issue.campaign_ids,
+      campaignLabels: issue.campaign_labels,
+      campaigns: issue.campaigns.map((campaign) => ({
+        id: campaign.id,
+        label: campaign.label,
+        paymentType: campaign.payment_type,
+        zoneKind: campaign.zone_kind,
+        statusCode: campaign.status_code,
+        statusLabel: campaign.status_label,
+        displayStatus: campaign.display_status,
+        hours: campaign.hours,
+        incidents: campaign.incidents,
+        ordersAds: campaign.orders_ads,
+        drr: campaign.drr,
+        estimatedGap: campaign.estimated_gap,
+      })),
+    })),
+    campaigns: row.campaigns.map((campaign) => ({
+      id: campaign.id,
+      label: campaign.label,
+      paymentType: campaign.payment_type,
+      zoneKind: campaign.zone_kind,
+      statusCode: campaign.status_code,
+      statusLabel: campaign.status_label,
+      displayStatus: campaign.display_status,
+      hours: campaign.hours,
+      incidents: campaign.incidents,
+      ordersAds: campaign.orders_ads,
+      drr: campaign.drr,
+      estimatedGap: campaign.estimated_gap,
+    })),
+  };
 }
 
 function CatalogCampaignColumnsHeader() {
@@ -2207,6 +2277,51 @@ function chunkItems<T>(items: T[], size: number) {
   return chunks;
 }
 
+async function fetchCatalogCampaignTypeTotalsForRefs({
+  productRefs,
+  start,
+  end,
+  signal,
+}: {
+  productRefs: string[];
+  start?: string | null;
+  end?: string | null;
+  signal?: AbortSignal;
+}) {
+  const totalsByRef: Record<string, CatalogCampaignTypeTotalsByKey> = {};
+  const failedRefs: string[] = [];
+
+  for (const chunkRefs of chunkItems(productRefs, 8)) {
+    try {
+      const response = await fetchCatalogChart({
+        productRefs: chunkRefs,
+        start,
+        end,
+        includeCampaignTypes: true,
+        signal,
+      });
+      if (signal?.aborted) {
+        return { totalsByRef, failedRefs };
+      }
+
+      if (response.product_rows?.length) {
+        response.product_rows.forEach((product) => {
+          totalsByRef[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
+        });
+      } else if (chunkRefs.length === 1) {
+        totalsByRef[chunkRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
+      }
+    } catch {
+      if (signal?.aborted) {
+        return { totalsByRef, failedRefs };
+      }
+      failedRefs.push(...chunkRefs);
+    }
+  }
+
+  return { totalsByRef, failedRefs };
+}
+
 function catalogChartHasCampaignTypeData(response: CatalogChartResponse | null) {
   if (!response) {
     return false;
@@ -2617,8 +2732,9 @@ function sumCatalogShopArticleField(shops: CatalogShop[], field: keyof Pick<Cata
 }
 
 export function CatalogPage() {
-  const { payload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
+  const { payload: loaderPayload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const [query, setQuery] = useState("");
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
   const [selectedIssueShopIds, setSelectedIssueShopIds] = useState<string[]>([]);
@@ -2643,7 +2759,13 @@ export function CatalogPage() {
   const [chartCampaignTypesLoading, setChartCampaignTypesLoading] = useState(false);
   const [chartCampaignTypesError, setChartCampaignTypesError] = useState<string | null>(null);
   const [chartCampaignTypesLoadedKey, setChartCampaignTypesLoadedKey] = useState<string | null>(null);
+  const [catalogArticleOverridesByRef, setCatalogArticleOverridesByRef] = useState<Record<string, CatalogArticle>>({});
   const [catalogRowCampaignTypesByRef, setCatalogRowCampaignTypesByRef] = useState<Record<string, CatalogCampaignTypeTotalsByKey>>({});
+  const [catalogRowCampaignTypesRefreshToken, setCatalogRowCampaignTypesRefreshToken] = useState(0);
+  const [turnoverOrdersOverridesByRef, setTurnoverOrdersOverridesByRef] = useState<Record<string, number | string | null | undefined>>({});
+  const [refreshingAllCatalog, setRefreshingAllCatalog] = useState(false);
+  const [refreshingArticleRefs, setRefreshingArticleRefs] = useState<string[]>([]);
+  const [catalogRefreshError, setCatalogRefreshError] = useState<string | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssuesCopyState, setArticleIssuesCopyState] = useState<"idle" | "copied" | "error">("idle");
@@ -2666,6 +2788,11 @@ export function CatalogPage() {
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
+  const payload = useMemo(
+    () => applyCatalogArticleOverrides(loaderPayload, catalogArticleOverridesByRef),
+    [catalogArticleOverridesByRef, loaderPayload],
+  );
+  const catalogRefreshing = refreshingAllCatalog || revalidator.state !== "idle";
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2673,6 +2800,17 @@ export function CatalogPage() {
     }
     window.localStorage.setItem(CATALOG_QUICK_VIEW_STORAGE_KEY, quickView);
   }, [quickView]);
+
+  useEffect(() => {
+    setCatalogArticleOverridesByRef({});
+    setTurnoverOrdersOverridesByRef({});
+  }, [loaderPayload]);
+
+  useEffect(() => {
+    if (revalidator.state === "idle") {
+      setRefreshingAllCatalog(false);
+    }
+  }, [revalidator.state]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2701,11 +2839,14 @@ export function CatalogPage() {
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
   const skuOptions = buildSkuOptions(payload);
-  const turnoverOrdersByRef = new Map(
+  const turnoverOrdersByRef = new Map<string, number | string | null | undefined>(
     (turnoverPayload?.shops || []).flatMap((shop) =>
       shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
     ),
   );
+  Object.entries(turnoverOrdersOverridesByRef).forEach(([ref, value]) => {
+    turnoverOrdersByRef.set(ref, value);
+  });
   const baseVisibleShops = filterShops(payload, {
     query: deferredQuery,
     selectedShopIds,
@@ -2904,7 +3045,7 @@ export function CatalogPage() {
   );
   const catalogRowCampaignTypesRangeStart = payload.range.current_start;
   const catalogRowCampaignTypesRangeEnd = payload.range.current_end;
-  const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${chartProductRefsKey}`;
+  const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${chartProductRefsKey}|${catalogRowCampaignTypesRefreshToken}`;
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
   const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
@@ -3094,37 +3235,17 @@ export function CatalogPage() {
 
     const timer = window.setTimeout(() => {
       (async () => {
-        const productChunks = chunkItems(chartProductRefs, 8);
-        for (const chunkRefs of productChunks) {
-          try {
-            const response = await fetchCatalogChart({
-              productRefs: chunkRefs,
-              start: catalogRowCampaignTypesRangeStart,
-              end: catalogRowCampaignTypesRangeEnd,
-              includeCampaignTypes: true,
-              signal: controller.signal,
-            });
-            if (controller.signal.aborted) {
-              return;
-            }
-
-            const chunkTotals: Record<string, CatalogCampaignTypeTotalsByKey> = {};
-            if (response.product_rows?.length) {
-              response.product_rows.forEach((product) => {
-                chunkTotals[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
-              });
-            } else if (chunkRefs.length === 1) {
-              chunkTotals[chunkRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
-            }
-
-            if (Object.keys(chunkTotals).length) {
-              setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...chunkTotals }));
-            }
-          } catch {
-            if (controller.signal.aborted) {
-              return;
-            }
-          }
+        const result = await fetchCatalogCampaignTypeTotalsForRefs({
+          productRefs: chartProductRefs,
+          start: catalogRowCampaignTypesRangeStart,
+          end: catalogRowCampaignTypesRangeEnd,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (Object.keys(result.totalsByRef).length) {
+          setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...result.totalsByRef }));
         }
       })();
     }, 260);
@@ -3732,49 +3853,7 @@ export function CatalogPage() {
           end: yesterdayIso,
           signal: controller.signal,
         });
-        return response.rows.map((row) => ({
-          product_ref: row.product_ref,
-          issues: row.issues.map((issue) => ({
-            kind: issue.kind,
-            title: issue.title,
-            hours: issue.hours,
-            incidents: issue.incidents,
-            ordersAds: issue.orders_ads,
-            totalOrders: issue.total_orders,
-            drrOverall: issue.drr_overall,
-            estimatedGap: issue.estimated_gap,
-            campaignIds: issue.campaign_ids,
-            campaignLabels: issue.campaign_labels,
-            campaigns: issue.campaigns.map((campaign) => ({
-              id: campaign.id,
-              label: campaign.label,
-              paymentType: campaign.payment_type,
-              zoneKind: campaign.zone_kind,
-              statusCode: campaign.status_code,
-              statusLabel: campaign.status_label,
-              displayStatus: campaign.display_status,
-              hours: campaign.hours,
-              incidents: campaign.incidents,
-              ordersAds: campaign.orders_ads,
-              drr: campaign.drr,
-              estimatedGap: campaign.estimated_gap,
-            })),
-          })),
-          campaigns: row.campaigns.map((campaign) => ({
-            id: campaign.id,
-            label: campaign.label,
-            paymentType: campaign.payment_type,
-            zoneKind: campaign.zone_kind,
-            statusCode: campaign.status_code,
-            statusLabel: campaign.status_label,
-            displayStatus: campaign.display_status,
-            hours: campaign.hours,
-            incidents: campaign.incidents,
-            ordersAds: campaign.orders_ads,
-            drr: campaign.drr,
-            estimatedGap: campaign.estimated_gap,
-          })),
-        }));
+        return response.rows.map(mapCatalogIssuesRowToCacheEntry);
       };
 
       const fetchIssueRowsAdaptive = async (refs: string[]): Promise<CatalogIssueFetchResult> => {
@@ -3883,6 +3962,124 @@ export function CatalogPage() {
     }
   };
 
+  const handleRefreshAllCatalog = () => {
+    setCatalogRefreshError(null);
+    setRefreshingAllCatalog(true);
+    chartCacheRef.current.clear();
+    chartFetchAbortRef.current?.abort();
+    chartCampaignTypesAbortRef.current?.abort();
+    catalogRowCampaignTypesAbortRef.current?.abort();
+    setCatalogArticleOverridesByRef({});
+    setTurnoverOrdersOverridesByRef({});
+    setCatalogRowCampaignTypesByRef({});
+    setArticleAnalyticsByRef({});
+    setChartSourceData(null);
+    setChartProgress(null);
+    setChartError(null);
+    setChartCampaignTypesLoadedKey(null);
+    setChartCampaignTypesError(null);
+    setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
+    revalidator.revalidate();
+  };
+
+  const handleRefreshArticle = async (productRef: string) => {
+    if (refreshingArticleRefs.includes(productRef)) {
+      return;
+    }
+
+    setCatalogRefreshError(null);
+    setRefreshingArticleRefs((current) => (current.includes(productRef) ? current : [...current, productRef]));
+
+    try {
+      const currentCatalog = await fetchCatalog({
+        start: payload.range.current_start,
+        end: payload.range.current_end,
+      });
+      const nextArticle = findCatalogArticleByRef(currentCatalog, productRef);
+      if (!nextArticle) {
+        throw new Error("Товар не найден в свежем ответе каталога.");
+      }
+      setCatalogArticleOverridesByRef((current) => ({ ...current, [productRef]: nextArticle }));
+
+      const turnoverEnd = payload.range.current_end;
+      const turnoverStart = shiftIsoDate(turnoverEnd, -2);
+      try {
+        const turnoverCatalog = await fetchCatalog({ start: turnoverStart, end: turnoverEnd });
+        const turnoverArticle = findCatalogArticleByRef(turnoverCatalog, productRef);
+        if (turnoverArticle) {
+          setTurnoverOrdersOverridesByRef((current) => ({ ...current, [productRef]: turnoverArticle.ordered_report }));
+        }
+      } catch {
+        // Base row data is more important; keep the previous turnover value if this auxiliary request fails.
+      }
+
+      const campaignTypeResult = await fetchCatalogCampaignTypeTotalsForRefs({
+        productRefs: [productRef],
+        start: catalogRowCampaignTypesRangeStart,
+        end: catalogRowCampaignTypesRangeEnd,
+      });
+      if (campaignTypeResult.totalsByRef[productRef]) {
+        setCatalogRowCampaignTypesByRef((current) => ({
+          ...current,
+          [productRef]: campaignTypeResult.totalsByRef[productRef]!,
+        }));
+      }
+
+      if (expandedAnalyticsRefs.includes(productRef)) {
+        setArticleAnalyticsByRef((current) => ({
+          ...current,
+          [productRef]: { loading: true, error: null, rows: current[productRef]?.rows ?? null },
+        }));
+        try {
+          const response = await fetchCatalogChart({
+            productRefs: [productRef],
+            start: payload.range.current_start,
+            end: payload.range.current_end,
+            includeCampaignTypes: true,
+          });
+          const productRows = response.product_rows?.find((item) => item.product_ref === productRef)?.rows ?? response.rows;
+          setArticleAnalyticsByRef((current) => ({
+            ...current,
+            [productRef]: { loading: false, error: null, rows: productRows },
+          }));
+        } catch (error) {
+          const message = await readApiErrorMessage(error);
+          setArticleAnalyticsByRef((current) => ({
+            ...current,
+            [productRef]: { loading: false, error: message, rows: current[productRef]?.rows ?? null },
+          }));
+        }
+      }
+
+      if (articleIssueCacheByRef[productRef]) {
+        try {
+          const response = await fetchCatalogIssues({
+            productRefs: [productRef],
+            start: yesterdayIso,
+            end: yesterdayIso,
+          });
+          const nextIssueRow = response.rows.find((row) => row.product_ref === productRef);
+          setArticleIssueCacheByRef((current) => ({
+            ...current,
+            [productRef]: nextIssueRow
+              ? mapCatalogIssuesRowToCacheEntry(nextIssueRow)
+              : {
+                  product_ref: productRef,
+                  issues: [],
+                  campaigns: [],
+                },
+          }));
+        } catch {
+          // Issue refresh is auxiliary for this row action.
+        }
+      }
+    } catch (error) {
+      setCatalogRefreshError(await readApiErrorMessage(error));
+    } finally {
+      setRefreshingArticleRefs((current) => current.filter((ref) => ref !== productRef));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHero
@@ -3947,6 +4144,15 @@ export function CatalogPage() {
               }
               extra={
                 <>
+                  <button
+                    type="button"
+                    onClick={handleRefreshAllCatalog}
+                    disabled={catalogRefreshing}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
+                  >
+                    <RefreshCw className={cn("size-4", catalogRefreshing && "animate-spin")} />
+                    Обновить все товары
+                  </button>
                   <button
                     type="button"
                     onClick={collapseAll}
@@ -4023,6 +4229,12 @@ export function CatalogPage() {
           </div>
         }
       />
+
+      {catalogRefreshError ? (
+        <div className="rounded-[18px] border border-rose-300/70 bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">
+          {catalogRefreshError}
+        </div>
+      ) : null}
 
       <section className="glass-panel rounded-[26px] p-2.5 sm:p-3" aria-label="Быстрые фильтры каталога">
         <div className="flex flex-wrap items-center gap-2">
@@ -4696,16 +4908,32 @@ export function CatalogPage() {
                       },
                       {
                         key: "actions",
-                        header: "Открыть",
+                        header: "Действия",
                         align: "right",
-                        render: (article) => (
-                          <Link
-                            to={`/product${buildProductSearch(article.article, start, end)}`}
-                            className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-active-bg)] px-3 py-2 text-xs font-medium text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)]"
-                          >
-                            Детали
-                          </Link>
-                        ),
+                        render: (article) => {
+                          const ref = `${shop.id}:${article.product_id}`;
+                          const isRefreshing = refreshingArticleRefs.includes(ref);
+                          return (
+                            <div className="inline-flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleRefreshArticle(ref)}
+                                disabled={isRefreshing || catalogRefreshing}
+                                title="Обновить товар"
+                                aria-label="Обновить товар"
+                                className="metric-chip inline-flex h-8 w-8 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-60"
+                              >
+                                <RefreshCw className={cn("size-3.5", isRefreshing && "animate-spin")} />
+                              </button>
+                              <Link
+                                to={`/product${buildProductSearch(article.article, start, end)}`}
+                                className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-active-bg)] px-3 py-2 text-xs font-medium text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)]"
+                              >
+                                Детали
+                              </Link>
+                            </div>
+                          );
+                        },
                       },
                     ]}
                   />
