@@ -89,12 +89,17 @@ async function handleNativeRequest(context, pathname) {
   }
 
   if (pathname === "/api/catalog") {
+    const productRefs = String(requestUrl.searchParams.get("products") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
     return jsonResponse(
       await collectCatalog(context.env, {
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
         mode: searchParamsValue(requestUrl, "mode") || "compact",
         forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+        productRefs,
       }),
     );
   }

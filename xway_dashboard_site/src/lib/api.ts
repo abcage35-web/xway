@@ -69,9 +69,13 @@ export async function fetchCatalog(options: {
   end?: string | null;
   signal?: AbortSignal;
   forceRefresh?: boolean;
+  productRefs?: string[];
 }) {
   const url = new URL("/api/catalog", buildBaseUrl(options.request));
   url.searchParams.set("mode", "compact");
+  if (options.productRefs?.length) {
+    url.searchParams.set("products", options.productRefs.join(","));
+  }
   appendRange(url.searchParams, options.start, options.end);
   if (options.forceRefresh) {
     url.searchParams.set("refresh", "1");

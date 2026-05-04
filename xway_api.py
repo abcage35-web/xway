@@ -1317,6 +1317,21 @@ def _catalog_cache_key(
     )
 
 
+def _catalog_product_refs_by_shop(product_refs: Optional[Iterable[str]]) -> Dict[int, set]:
+    refs_by_shop: Dict[int, set] = {}
+    for raw_ref in product_refs or []:
+        parts = str(raw_ref or "").split(":", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            shop_id = int(parts[0])
+            product_id = int(parts[1])
+        except (TypeError, ValueError):
+            continue
+        refs_by_shop.setdefault(shop_id, set()).add(product_id)
+    return refs_by_shop
+
+
 def _products_cache_key(
     storage_state_path: str,
     range_payload: Dict[str, str],
@@ -3166,6 +3181,7 @@ def _collect_shop_catalog(
     end: str,
     include_extended: bool = False,
     force_refresh: bool = False,
+    product_ids: Optional[set] = None,
 ) -> Dict[str, Any]:
     shop_id = int(shop["id"])
     api = XwayApi(storage_state_path, start=start, end=end, force_refresh=force_refresh)
@@ -3191,6 +3207,16 @@ def _collect_shop_catalog(
     }
     shop_detail_snapshot = _snapshot_fields(shop_detail, SHOP_DETAIL_SAFE_FIELDS) if include_extended else {}
     products = (listing.get("list_wo") or {}).get("products_wb") or []
+    if product_ids is not None:
+        filtered_products = []
+        for product in products:
+            try:
+                product_id = int(product.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if product_id in product_ids:
+                filtered_products.append(product)
+        products = filtered_products
     stat_map = (listing.get("list_stat") or {}).get("products_wb") or {}
     campaign_detail_sources, campaign_detail_error_count = _collect_catalog_campaign_detail_sources(api, shop_id, products, stat_map)
     shop_articles: List[Dict[str, Any]] = []
@@ -3323,17 +3349,22 @@ def collect_catalog(
     end: Optional[str] = None,
     mode: str = "compact",
     force_refresh: bool = False,
+    product_refs: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     normalized_mode = "full" if str(mode).lower() == "full" else "compact"
     include_extended = normalized_mode == "full"
     api = XwayApi(storage_state_path, start=start, end=end, force_refresh=force_refresh)
     range_payload = api.range
+    refs_by_shop = _catalog_product_refs_by_shop(product_refs)
+    is_partial = bool(refs_by_shop)
     cache_key = _catalog_cache_key(storage_state_path, range_payload, normalized_mode)
-    cached = None if force_refresh else _get_cached_catalog(cache_key)
+    cached = None if force_refresh or is_partial else _get_cached_catalog(cache_key)
     if cached is not None:
         return cached
 
     shops = api.list_shops()
+    if refs_by_shop:
+        shops = [shop for shop in shops if int(shop["id"]) in refs_by_shop]
     max_workers = min(8, max(1, len(shops)))
     catalog_shops: List[Dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -3346,6 +3377,7 @@ def collect_catalog(
                 range_payload["current_end"],
                 include_extended=include_extended,
                 force_refresh=force_refresh,
+                product_ids=refs_by_shop.get(int(shop["id"])) if refs_by_shop else None,
             )
             for shop in shops
         ]
@@ -3382,7 +3414,8 @@ def collect_catalog(
         "totals": totals,
         "shops": catalog_shops,
     }
-    _set_cached_catalog(cache_key, payload)
+    if not is_partial:
+        _set_cached_catalog(cache_key, payload)
     return payload
 
 

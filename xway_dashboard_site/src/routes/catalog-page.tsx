@@ -356,6 +356,17 @@ function findCatalogArticleByRef(payload: CatalogResponse, productRef: string): 
   return null;
 }
 
+function catalogArticleOverridesFromPayload(payload: CatalogResponse, productRefs: string[]) {
+  const overrides: Record<string, CatalogArticle> = {};
+  productRefs.forEach((ref) => {
+    const article = findCatalogArticleByRef(payload, ref);
+    if (article) {
+      overrides[ref] = article;
+    }
+  });
+  return overrides;
+}
+
 function mapCatalogIssuesRowToCacheEntry(row: CatalogIssuesRow): CatalogIssueCacheEntry {
   return {
     product_ref: row.product_ref,
@@ -2856,6 +2867,7 @@ export function CatalogPage() {
   const chartCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRowCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const chartAutoRetrySignatureRef = useRef<string | null>(null);
+  const catalogAutoRefreshKeyRef = useRef<string | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
@@ -3291,7 +3303,7 @@ export function CatalogPage() {
 
   useEffect(() => {
     catalogRowCampaignTypesAbortRef.current?.abort();
-    if (!chartProductRefs.length) {
+    if (catalogRefreshing || !chartProductRefs.length) {
       setCatalogRowCampaignTypesByRef({});
       return;
     }
@@ -3321,7 +3333,7 @@ export function CatalogPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [catalogRowCampaignTypesKey, catalogRowCampaignTypesRangeStart, catalogRowCampaignTypesRangeEnd, chartProductRefsKey]);
+  }, [catalogRefreshing, catalogRowCampaignTypesKey, catalogRowCampaignTypesRangeStart, catalogRowCampaignTypesRangeEnd, chartProductRefsKey]);
 
   useEffect(() => {
     chartFetchAbortRef.current?.abort();
@@ -3330,7 +3342,7 @@ export function CatalogPage() {
     setChartCampaignTypesError(null);
     setChartCampaignTypesLoadedKey(null);
     chartAutoRetrySignatureRef.current = null;
-    if (chartCollapsed) {
+    if (catalogRefreshing || chartCollapsed) {
       setChartLoading(false);
       setChartError(null);
       setChartProgress(null);
@@ -3368,6 +3380,9 @@ export function CatalogPage() {
     const controller = new AbortController();
     chartFetchAbortRef.current = controller;
     const timer = window.setTimeout(() => {
+      if (controller.signal.aborted) {
+        return;
+      }
       setChartLoading(true);
       setChartError(null);
       setChartSourceData(null);
@@ -3435,7 +3450,7 @@ export function CatalogPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [chartCollapsed, chartRangeEnd, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceSelectionCount]);
+  }, [catalogRefreshing, chartCollapsed, chartRangeEnd, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceSelectionCount]);
 
   const loadChartCampaignTypes = async () => {
     if (
@@ -3607,7 +3622,7 @@ export function CatalogPage() {
   };
 
   useEffect(() => {
-    if (chartCollapsed || chartLoading || !chartSourceData?.errors.length) {
+    if (catalogRefreshing || chartCollapsed || chartLoading || !chartSourceData?.errors.length) {
       return undefined;
     }
 
@@ -4079,13 +4094,152 @@ export function CatalogPage() {
     }
   };
 
+  const mergeChartResponseForRefs = (response: CatalogChartResponse, productRefs: string[], progress?: { chunkCount: number; loadedChunkCount: number }) => {
+    setChartSourceData((current) => {
+      const nextResponse = current
+        ? mergeCatalogChartRetryResponse(current, response, chartSourceSelectionCount, productRefs)
+        : mergeCatalogChartResponses(null, response, chartSourceSelectionCount);
+      chartCacheRef.current.set(chartSourceCacheKey, {
+        response: nextResponse,
+        productRefsKey: chartSourceProductRefsKey,
+        rangeStart: chartSourceRangeStart,
+        rangeEnd: chartRangeEnd,
+      });
+      setChartProgress({
+        cacheKey: chartSourceCacheKey,
+        selectionCount: chartSourceSelectionCount,
+        loadedProductsCount: nextResponse.loaded_products_count,
+        chunkCount: progress?.chunkCount ?? 0,
+        loadedChunkCount: progress?.loadedChunkCount ?? 0,
+        errorCount: nextResponse.errors.length,
+      });
+      return nextResponse;
+    });
+
+    const nextTypeTotals: Record<string, CatalogCampaignTypeTotalsByKey> = {};
+    response.product_rows?.forEach((product) => {
+      nextTypeTotals[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
+    });
+    if (Object.keys(nextTypeTotals).length) {
+      setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...nextTypeTotals }));
+    }
+  };
+
+  const refreshCatalogProductRefs = async (
+    productRefs: string[],
+    options: { refreshIssues?: boolean; progress?: { chunkCount: number; loadedChunkCount: number } } = {},
+  ) => {
+    const refs = [...new Set(productRefs)];
+    if (!refs.length) {
+      return;
+    }
+
+    setRefreshingArticleRefs((current) => [...new Set([...current, ...refs])]);
+
+    try {
+      const currentCatalog = await fetchCatalog({
+        productRefs: refs,
+        start: payload.range.current_start,
+        end: payload.range.current_end,
+        forceRefresh: true,
+      });
+      const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, refs);
+      if (Object.keys(articleOverrides).length) {
+        setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+      }
+
+      const turnoverEnd = payload.range.current_end;
+      const turnoverStart = shiftIsoDate(turnoverEnd, -2);
+      try {
+        const turnoverCatalog = await fetchCatalog({
+          productRefs: refs,
+          start: turnoverStart,
+          end: turnoverEnd,
+          forceRefresh: true,
+        });
+        const turnoverOverrides: Record<string, number | string | null | undefined> = {};
+        refs.forEach((ref) => {
+          const turnoverArticle = findCatalogArticleByRef(turnoverCatalog, ref);
+          if (turnoverArticle) {
+            turnoverOverrides[ref] = turnoverArticle.ordered_report;
+          }
+        });
+        if (Object.keys(turnoverOverrides).length) {
+          setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
+        }
+      } catch {
+        // Turnover is auxiliary; keep existing values if the short-range request fails.
+      }
+
+      try {
+        const chartResponse = await fetchCatalogChart({
+          productRefs: refs,
+          start: chartSourceRangeStart,
+          end: chartRangeEnd,
+          includeCampaignTypes: true,
+        });
+        mergeChartResponseForRefs(chartResponse, refs, options.progress);
+
+        const expandedRefs = refs.filter((ref) => expandedAnalyticsRefs.includes(ref));
+        if (expandedRefs.length) {
+          setArticleAnalyticsByRef((current) => {
+            const next = { ...current };
+            expandedRefs.forEach((ref) => {
+              const productRows = chartResponse.product_rows?.find((item) => item.product_ref === ref)?.rows ?? null;
+              next[ref] = { loading: false, error: null, rows: productRows ?? current[ref]?.rows ?? null };
+            });
+            return next;
+          });
+        }
+      } catch (error) {
+        if (refs.length === 1) {
+          setCatalogRefreshError(await readApiErrorMessage(error));
+        }
+      }
+
+      if (options.refreshIssues) {
+        try {
+          const response = await fetchCatalogIssues({
+            productRefs: refs,
+            start: yesterdayIso,
+            end: yesterdayIso,
+          });
+          const rowByRef = new Map(response.rows.map((row) => [row.product_ref, row]));
+          setArticleIssueCacheByRef((current) => {
+            const next = { ...current };
+            refs.forEach((ref) => {
+              const issueRow = rowByRef.get(ref);
+              if (issueRow) {
+                next[ref] = mapCatalogIssuesRowToCacheEntry(issueRow);
+              } else if (current[ref]) {
+                next[ref] = { product_ref: ref, issues: [], campaigns: [] };
+              }
+            });
+            return next;
+          });
+        } catch {
+          // Issue refresh is auxiliary for row/catalog refresh.
+        }
+      }
+    } finally {
+      setRefreshingArticleRefs((current) => current.filter((ref) => !refs.includes(ref)));
+    }
+  };
+
   const handleRefreshAllCatalog = async () => {
+    if (refreshingAllCatalog) {
+      return;
+    }
+
     setCatalogRefreshError(null);
     setRefreshingAllCatalog(true);
     chartCacheRef.current.clear();
     chartFetchAbortRef.current?.abort();
     chartCampaignTypesAbortRef.current?.abort();
     catalogRowCampaignTypesAbortRef.current?.abort();
+    setChartLoading(false);
+    setCatalogPayloadOverride(null);
+    setTurnoverPayloadOverride(null);
     setCatalogArticleOverridesByRef({});
     setTurnoverOrdersOverridesByRef({});
     setCatalogRowCampaignTypesByRef({});
@@ -4096,24 +4250,32 @@ export function CatalogPage() {
     setChartCampaignTypesLoadedKey(null);
     setChartCampaignTypesError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
-    try {
-      const nextPayload = await fetchCatalog({
-        start: loaderPayload.range.current_start,
-        end: loaderPayload.range.current_end,
-        forceRefresh: true,
-      });
-      setCatalogPayloadOverride(nextPayload);
 
-      const turnoverEnd = nextPayload.range.current_end;
-      const turnoverStart = shiftIsoDate(turnoverEnd, -2);
-      try {
-        const nextTurnoverPayload =
-          nextPayload.range.current_start === turnoverStart && nextPayload.range.current_end === turnoverEnd
-            ? nextPayload
-            : await fetchCatalog({ start: turnoverStart, end: turnoverEnd, forceRefresh: true });
-        setTurnoverPayloadOverride(nextTurnoverPayload);
-      } catch {
-        setTurnoverPayloadOverride(null);
+    const productGroups = payload.shops.flatMap((shop) =>
+      chunkItems(
+        shop.articles.map((article) => `${shop.id}:${article.product_id}`),
+        CATALOG_CHART_FETCH_CHUNK_SIZE,
+      ),
+    );
+
+    setChartProgress({
+      cacheKey: chartSourceCacheKey,
+      selectionCount: chartSourceSelectionCount,
+      loadedProductsCount: 0,
+      chunkCount: productGroups.length,
+      loadedChunkCount: 0,
+      errorCount: 0,
+    });
+
+    try {
+      for (let index = 0; index < productGroups.length; index += 1) {
+        await refreshCatalogProductRefs(productGroups[index]!, {
+          refreshIssues: false,
+          progress: { chunkCount: productGroups.length, loadedChunkCount: index + 1 },
+        });
+        if (index < productGroups.length - 1) {
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, new AbortController().signal);
+        }
       }
     } catch (error) {
       setCatalogRefreshError(await readApiErrorMessage(error));
@@ -4128,98 +4290,20 @@ export function CatalogPage() {
     }
 
     setCatalogRefreshError(null);
-    setRefreshingArticleRefs((current) => (current.includes(productRef) ? current : [...current, productRef]));
-
-    try {
-      const currentCatalog = await fetchCatalog({
-        start: payload.range.current_start,
-        end: payload.range.current_end,
-        forceRefresh: true,
-      });
-      const nextArticle = findCatalogArticleByRef(currentCatalog, productRef);
-      if (!nextArticle) {
-        throw new Error("Товар не найден в свежем ответе каталога.");
-      }
-      setCatalogArticleOverridesByRef((current) => ({ ...current, [productRef]: nextArticle }));
-
-      const turnoverEnd = payload.range.current_end;
-      const turnoverStart = shiftIsoDate(turnoverEnd, -2);
-      try {
-        const turnoverCatalog = await fetchCatalog({ start: turnoverStart, end: turnoverEnd, forceRefresh: true });
-        const turnoverArticle = findCatalogArticleByRef(turnoverCatalog, productRef);
-        if (turnoverArticle) {
-          setTurnoverOrdersOverridesByRef((current) => ({ ...current, [productRef]: turnoverArticle.ordered_report }));
-        }
-      } catch {
-        // Base row data is more important; keep the previous turnover value if this auxiliary request fails.
-      }
-
-      const campaignTypeResult = await fetchCatalogCampaignTypeTotalsForRefs({
-        productRefs: [productRef],
-        start: catalogRowCampaignTypesRangeStart,
-        end: catalogRowCampaignTypesRangeEnd,
-      });
-      if (campaignTypeResult.totalsByRef[productRef]) {
-        setCatalogRowCampaignTypesByRef((current) => ({
-          ...current,
-          [productRef]: campaignTypeResult.totalsByRef[productRef]!,
-        }));
-      }
-
-      if (expandedAnalyticsRefs.includes(productRef)) {
-        setArticleAnalyticsByRef((current) => ({
-          ...current,
-          [productRef]: { loading: true, error: null, rows: current[productRef]?.rows ?? null },
-        }));
-        try {
-          const response = await fetchCatalogChart({
-            productRefs: [productRef],
-            start: payload.range.current_start,
-            end: payload.range.current_end,
-            includeCampaignTypes: true,
-          });
-          const productRows = response.product_rows?.find((item) => item.product_ref === productRef)?.rows ?? response.rows;
-          setArticleAnalyticsByRef((current) => ({
-            ...current,
-            [productRef]: { loading: false, error: null, rows: productRows },
-          }));
-        } catch (error) {
-          const message = await readApiErrorMessage(error);
-          setArticleAnalyticsByRef((current) => ({
-            ...current,
-            [productRef]: { loading: false, error: message, rows: current[productRef]?.rows ?? null },
-          }));
-        }
-      }
-
-      if (articleIssueCacheByRef[productRef]) {
-        try {
-          const response = await fetchCatalogIssues({
-            productRefs: [productRef],
-            start: yesterdayIso,
-            end: yesterdayIso,
-          });
-          const nextIssueRow = response.rows.find((row) => row.product_ref === productRef);
-          setArticleIssueCacheByRef((current) => ({
-            ...current,
-            [productRef]: nextIssueRow
-              ? mapCatalogIssuesRowToCacheEntry(nextIssueRow)
-              : {
-                  product_ref: productRef,
-                  issues: [],
-                  campaigns: [],
-                },
-          }));
-        } catch {
-          // Issue refresh is auxiliary for this row action.
-        }
-      }
-    } catch (error) {
-      setCatalogRefreshError(await readApiErrorMessage(error));
-    } finally {
-      setRefreshingArticleRefs((current) => current.filter((ref) => ref !== productRef));
-    }
+    await refreshCatalogProductRefs([productRef], { refreshIssues: true });
   };
+
+  useEffect(() => {
+    if (!chartSourceProductRefs.length || refreshingAllCatalog) {
+      return;
+    }
+    const refreshKey = `${loaderPayload.range.current_start}|${loaderPayload.range.current_end}|${chartSourceProductRefsKey}`;
+    if (catalogAutoRefreshKeyRef.current === refreshKey) {
+      return;
+    }
+    catalogAutoRefreshKeyRef.current = refreshKey;
+    void handleRefreshAllCatalog();
+  });
 
   return (
     <div className="space-y-6">
@@ -4484,7 +4568,7 @@ export function CatalogPage() {
               chunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.chunkCount : null}
               loadedChunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.loadedChunkCount : null}
               errorCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
-              isLoading={chartLoading}
+              isLoading={chartLoading || catalogRefreshing}
               error={chartError}
               rangeLabel={chartRangeLabel}
               windowDays={chartWindow}
@@ -4794,37 +4878,58 @@ export function CatalogPage() {
                     columns={[
                       {
                         key: "product",
-                        header: <span className="inline-block w-[232px]">Товар</span>,
+                        header: <span className="inline-block w-[252px]">Товар</span>,
                         render: (article) => {
                           const ref = `${shop.id}:${article.product_id}`;
                           const isExpanded = expandedAnalyticsRefs.includes(ref);
                           const analyticsState = articleAnalyticsByRef[ref];
+                          const isRefreshing = refreshingArticleRefs.includes(ref);
                           return (
-                            <div className="flex w-[232px] max-w-[232px] items-start gap-2.5">
-                              <button
-                                type="button"
-                                className={cn("catalog-article-analytics-toggle", isExpanded && "is-active", analyticsState?.loading && "is-loading")}
-                                title="Аналитика по дням"
-                                aria-label="Показать аналитику по дням"
-                                aria-expanded={isExpanded}
-                                onClick={() => void toggleArticleAnalytics(ref)}
-                              >
-                                <span />
-                                <span />
-                                <span />
-                              </button>
-                            <div className="h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-[4px] bg-[var(--color-surface-strong)]">
-                              {article.image_url ? <img src={article.image_url} alt={article.name} className="h-full w-full object-cover" /> : null}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-medium text-[var(--color-ink)]" title={article.name}>
-                                {article.name}
-                              </p>
-                              <p className="mt-1 text-xs text-[var(--color-muted)]">
-                                {article.article} · {article.brand || "Без бренда"} · {article.vendor_code || "без vendor"}
-                              </p>
-                              <p className="mt-1 text-xs text-[var(--color-muted)]">{article.category_keyword}</p>
-                            </div>
+                            <div className={cn("catalog-product-row-cell flex w-[252px] max-w-[252px] items-start gap-2.5", isRefreshing && "is-refreshing")}>
+                              <div className="catalog-article-row-actions">
+                                <button
+                                  type="button"
+                                  className={cn("catalog-article-analytics-toggle", isExpanded && "is-active", analyticsState?.loading && "is-loading")}
+                                  title="Аналитика по дням"
+                                  aria-label="Показать аналитику по дням"
+                                  aria-expanded={isExpanded}
+                                  onClick={() => void toggleArticleAnalytics(ref)}
+                                >
+                                  <span />
+                                  <span />
+                                  <span />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRefreshArticle(ref)}
+                                  disabled={isRefreshing || catalogRefreshing}
+                                  title="Обновить товар"
+                                  aria-label="Обновить товар"
+                                  className={cn("catalog-article-action-button", isRefreshing && "is-loading")}
+                                >
+                                  <RefreshCw className="size-3.5" />
+                                </button>
+                                <Link
+                                  to={`/product${buildProductSearch(article.article, start, end)}`}
+                                  title="Детали"
+                                  aria-label="Открыть детали"
+                                  className="catalog-article-action-button"
+                                >
+                                  <ExternalLink className="size-3.5" />
+                                </Link>
+                              </div>
+                              <div className="catalog-product-thumb h-14 aspect-[51/68] shrink-0 overflow-hidden rounded-[4px] bg-[var(--color-surface-strong)]">
+                                {article.image_url ? <img src={article.image_url} alt={article.name} className="h-full w-full object-cover" /> : null}
+                              </div>
+                              <div className="catalog-product-copy min-w-0 flex-1">
+                                <p className="truncate font-medium text-[var(--color-ink)]" title={article.name}>
+                                  {article.name}
+                                </p>
+                                <p className="mt-1 text-xs text-[var(--color-muted)]">
+                                  {article.article} · {article.brand || "Без бренда"} · {article.vendor_code || "без vendor"}
+                                </p>
+                                <p className="mt-1 text-xs text-[var(--color-muted)]">{article.category_keyword}</p>
+                              </div>
                             </div>
                           );
                         },
@@ -5046,35 +5151,6 @@ export function CatalogPage() {
                         ),
                         align: "right",
                         render: (article) => formatPercent(categoryAverageCrByValue.get(normalizeCategoryValue(article.category_keyword))),
-                      },
-                      {
-                        key: "actions",
-                        header: "Действия",
-                        align: "right",
-                        render: (article) => {
-                          const ref = `${shop.id}:${article.product_id}`;
-                          const isRefreshing = refreshingArticleRefs.includes(ref);
-                          return (
-                            <div className="inline-flex items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void handleRefreshArticle(ref)}
-                                disabled={isRefreshing || catalogRefreshing}
-                                title="Обновить товар"
-                                aria-label="Обновить товар"
-                                className="metric-chip inline-flex h-8 w-8 items-center justify-center rounded-2xl text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-60"
-                              >
-                                <RefreshCw className={cn("size-3.5", isRefreshing && "animate-spin")} />
-                              </button>
-                              <Link
-                                to={`/product${buildProductSearch(article.article, start, end)}`}
-                                className="inline-flex items-center gap-2 rounded-2xl bg-[var(--color-active-bg)] px-3 py-2 text-xs font-medium text-[var(--color-active-ink)] transition hover:bg-[var(--color-active-bg-hover)]"
-                              >
-                                Детали
-                              </Link>
-                            </div>
-                          );
-                        },
                       },
                     ]}
                   />

@@ -597,7 +597,7 @@ async function collectCatalogCampaignDetailSources(shopId, products, statMap, cl
   return { detailByProductId, loadedCount: detailByProductId.size, errorCount };
 }
 
-async function collectShopCatalog(shop, client, includeExtended) {
+async function collectShopCatalog(shop, client, includeExtended, productIds = null) {
   const shopId = Number(shop.id);
   const [listingResult, shopDetailResult] = await Promise.allSettled([
     client.shopListing(shopId, client.range.current_start, client.range.current_end),
@@ -620,7 +620,9 @@ async function collectShopCatalog(shop, client, includeExtended) {
     shop_spend: cloneValue(listStat.spend || {}),
     shop_totals: cloneValue(listStat.totals || {}),
   };
-  const products = listWo.products_wb || [];
+  const products = productIds
+    ? (listWo.products_wb || []).filter((product) => product?.id !== null && product?.id !== undefined && productIds.has(Number(product.id)))
+    : listWo.products_wb || [];
   const statMap = listStat.products_wb || {};
   const campaignDetailSources = await collectCatalogCampaignDetailSources(shopId, products, statMap, client);
 
@@ -752,12 +754,32 @@ async function collectShopCatalog(shop, client, includeExtended) {
   return shopPayload;
 }
 
-export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false } = {}) {
+function catalogProductRefsByShop(productRefs = []) {
+  const refsByShop = new Map();
+  for (const rawRef of productRefs || []) {
+    const [shopPart, productPart] = String(rawRef || "").split(":", 2);
+    const shopId = Number(shopPart);
+    const productId = Number(productPart);
+    if (!Number.isFinite(shopId) || !Number.isFinite(productId)) {
+      continue;
+    }
+    if (!refsByShop.has(shopId)) {
+      refsByShop.set(shopId, new Set());
+    }
+    refsByShop.get(shopId).add(productId);
+  }
+  return refsByShop;
+}
+
+export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false, productRefs = [] } = {}) {
   const normalizedMode = String(mode || "").toLowerCase() === "full" ? "full" : "compact";
   const includeExtended = normalizedMode === "full";
   const client = new XwayApiClient(env, { start, end, forceRefresh });
-  const shops = await client.listShops();
-  const catalogShops = await mapWithConcurrency(shops, 4, (shop) => collectShopCatalog(shop, client, includeExtended));
+  const refsByShop = catalogProductRefsByShop(productRefs);
+  const shops = (await client.listShops()).filter((shop) => !refsByShop.size || refsByShop.has(Number(shop?.id)));
+  const catalogShops = await mapWithConcurrency(shops, 4, (shop) =>
+    collectShopCatalog(shop, client, includeExtended, refsByShop.get(Number(shop?.id)) || null),
+  );
 
   const totals = {
     expense_sum: 0,
