@@ -101,7 +101,8 @@ const CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY = "xway-catalog-quick-view-setting
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
-const CATALOG_CHART_FETCH_CHUNK_SIZE = 6;
+const CATALOG_CHART_FETCH_CHUNK_SIZE = 48;
+const CATALOG_REFRESH_FETCH_CHUNK_SIZE = 48;
 const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
 const CATALOG_CHART_CHUNK_DELAY_MS = 650;
@@ -955,12 +956,14 @@ function CatalogIssueDrawer({
   yesterdayIso,
   yesterdayLabel,
   onClose,
+  onProductNavigate,
 }: {
   item: CatalogIssueDisplayRow;
   preferredKind: CatalogIssueKind | null;
   yesterdayIso: string;
   yesterdayLabel: string;
   onClose: () => void;
+  onProductNavigate?: () => void;
 }) {
   const preferredIssue = preferredKind ? getArticleIssueByKind(item, preferredKind) : null;
   const issues = preferredIssue ? [preferredIssue, ...item.issues.filter((issue) => issue.kind !== preferredIssue.kind)] : item.issues;
@@ -1002,6 +1005,7 @@ function CatalogIssueDrawer({
           <div className="catalog-issue-drawer-product">
             <Link
               to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+              onClick={onProductNavigate}
               className="h-[76px] w-[58px] shrink-0 overflow-hidden rounded-[16px] border border-[var(--color-line)] bg-[var(--color-surface-soft)]"
               aria-label={`Открыть товар ${item.name}`}
             >
@@ -1086,6 +1090,7 @@ function CatalogIssueDrawer({
           <div className="catalog-issue-actions">
             <Link
               to={`/product${buildProductSearch(item.article, yesterdayIso, yesterdayIso)}`}
+              onClick={onProductNavigate}
               className="catalog-issue-primary-link"
             >
               Карточка товара
@@ -2333,6 +2338,10 @@ async function waitForCatalogRetry(ms: number, signal: AbortSignal) {
   });
 }
 
+function isAbortError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "name" in error && (error as { name?: unknown }).name === "AbortError");
+}
+
 async function fetchCatalogCampaignTypeTotalsForRefs({
   productRefs,
   start,
@@ -2867,6 +2876,7 @@ export function CatalogPage() {
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const chartCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRowCampaignTypesAbortRef = useRef<AbortController | null>(null);
+  const catalogRefreshAbortRef = useRef<AbortController | null>(null);
   const chartAutoRetrySignatureRef = useRef<string | null>(null);
   const catalogAutoRefreshKeyRef = useRef<string | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
@@ -2877,6 +2887,9 @@ export function CatalogPage() {
     [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
   );
   const catalogRefreshing = refreshingAllCatalog || refreshingShopIds.length > 0;
+  const abortCatalogRefresh = () => {
+    catalogRefreshAbortRef.current?.abort();
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2909,6 +2922,10 @@ export function CatalogPage() {
     updateScrollTopVisibility();
     window.addEventListener("scroll", updateScrollTopVisibility, { passive: true });
     return () => window.removeEventListener("scroll", updateScrollTopVisibility);
+  }, []);
+
+  useEffect(() => () => {
+    catalogRefreshAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -4128,11 +4145,14 @@ export function CatalogPage() {
 
   const refreshCatalogProductRefs = async (
     productRefs: string[],
-    options: { refreshIssues?: boolean; progress?: { chunkCount: number; loadedChunkCount: number } } = {},
+    options: { refreshIssues?: boolean; progress?: { chunkCount: number; loadedChunkCount: number }; signal?: AbortSignal } = {},
   ) => {
     const refs = [...new Set(productRefs)];
     if (!refs.length) {
       return;
+    }
+    if (options.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
     }
 
     setRefreshingArticleRefs((current) => [...new Set([...current, ...refs])]);
@@ -4143,6 +4163,7 @@ export function CatalogPage() {
         start: payload.range.current_start,
         end: payload.range.current_end,
         forceRefresh: true,
+        signal: options.signal,
       });
       const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, refs);
       if (Object.keys(articleOverrides).length) {
@@ -4157,6 +4178,7 @@ export function CatalogPage() {
           start: turnoverStart,
           end: turnoverEnd,
           forceRefresh: true,
+          signal: options.signal,
         });
         const turnoverOverrides: Record<string, number | string | null | undefined> = {};
         refs.forEach((ref) => {
@@ -4169,6 +4191,9 @@ export function CatalogPage() {
           setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
         }
       } catch {
+        if (options.signal?.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
         // Turnover is auxiliary; keep existing values if the short-range request fails.
       }
 
@@ -4178,6 +4203,7 @@ export function CatalogPage() {
           start: chartSourceRangeStart,
           end: chartRangeEnd,
           includeCampaignTypes: true,
+          signal: options.signal,
         });
         mergeChartResponseForRefs(chartResponse, refs, options.progress);
 
@@ -4193,6 +4219,9 @@ export function CatalogPage() {
           });
         }
       } catch (error) {
+        if (isAbortError(error) || options.signal?.aborted) {
+          throw error;
+        }
         if (refs.length === 1) {
           setCatalogRefreshError(await readApiErrorMessage(error));
         }
@@ -4204,6 +4233,7 @@ export function CatalogPage() {
             productRefs: refs,
             start: yesterdayIso,
             end: yesterdayIso,
+            signal: options.signal,
           });
           const rowByRef = new Map(response.rows.map((row) => [row.product_ref, row]));
           setArticleIssueCacheByRef((current) => {
@@ -4219,6 +4249,9 @@ export function CatalogPage() {
             return next;
           });
         } catch {
+          if (options.signal?.aborted) {
+            throw new DOMException("Aborted", "AbortError");
+          }
           // Issue refresh is auxiliary for row/catalog refresh.
         }
       }
@@ -4232,6 +4265,9 @@ export function CatalogPage() {
       return;
     }
 
+    catalogRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogRefreshAbortRef.current = controller;
     setCatalogRefreshError(null);
     setRefreshingAllCatalog(true);
     chartCacheRef.current.clear();
@@ -4255,7 +4291,7 @@ export function CatalogPage() {
     const productGroups = payload.shops.flatMap((shop) =>
       chunkItems(
         shop.articles.map((article) => `${shop.id}:${article.product_id}`),
-        CATALOG_CHART_FETCH_CHUNK_SIZE,
+        CATALOG_REFRESH_FETCH_CHUNK_SIZE,
       ),
     );
 
@@ -4272,15 +4308,21 @@ export function CatalogPage() {
       for (let index = 0; index < productGroups.length; index += 1) {
         await refreshCatalogProductRefs(productGroups[index]!, {
           refreshIssues: false,
+          signal: controller.signal,
           progress: { chunkCount: productGroups.length, loadedChunkCount: index + 1 },
         });
         if (index < productGroups.length - 1) {
-          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, new AbortController().signal);
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
       }
     } catch (error) {
-      setCatalogRefreshError(await readApiErrorMessage(error));
+      if (!isAbortError(error) && !controller.signal.aborted) {
+        setCatalogRefreshError(await readApiErrorMessage(error));
+      }
     } finally {
+      if (catalogRefreshAbortRef.current === controller) {
+        catalogRefreshAbortRef.current = null;
+      }
       setRefreshingAllCatalog(false);
     }
   };
@@ -4290,13 +4332,26 @@ export function CatalogPage() {
       return;
     }
 
+    catalogRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogRefreshAbortRef.current = controller;
     setCatalogRefreshError(null);
-    await refreshCatalogProductRefs([productRef], { refreshIssues: true });
+    try {
+      await refreshCatalogProductRefs([productRef], { refreshIssues: true, signal: controller.signal });
+    } catch (error) {
+      if (!isAbortError(error) && !controller.signal.aborted) {
+        setCatalogRefreshError(await readApiErrorMessage(error));
+      }
+    } finally {
+      if (catalogRefreshAbortRef.current === controller) {
+        catalogRefreshAbortRef.current = null;
+      }
+    }
   };
 
   const handleRefreshShopCatalog = async (shop: CatalogShop) => {
     const shopId = String(shop.id);
-    if (refreshingAllCatalog || refreshingShopIds.includes(shopId)) {
+    if (refreshingAllCatalog || refreshingShopIds.length || refreshingShopIds.includes(shopId)) {
       return;
     }
 
@@ -4306,25 +4361,33 @@ export function CatalogPage() {
       return;
     }
 
+    catalogRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogRefreshAbortRef.current = controller;
     setCatalogRefreshError(null);
     setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
 
     try {
       for (let index = 0; index < productRefs.length; index += 1) {
-        await refreshCatalogProductRefs([productRefs[index]!], { refreshIssues: true });
+        await refreshCatalogProductRefs([productRefs[index]!], { refreshIssues: true, signal: controller.signal });
         if (index < productRefs.length - 1) {
-          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, new AbortController().signal);
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
       }
     } catch (error) {
-      setCatalogRefreshError(await readApiErrorMessage(error));
+      if (!isAbortError(error) && !controller.signal.aborted) {
+        setCatalogRefreshError(await readApiErrorMessage(error));
+      }
     } finally {
+      if (catalogRefreshAbortRef.current === controller) {
+        catalogRefreshAbortRef.current = null;
+      }
       setRefreshingShopIds((current) => current.filter((id) => id !== shopId));
     }
   };
 
   useEffect(() => {
-    if (!chartSourceProductRefs.length || refreshingAllCatalog) {
+    if (!chartSourceProductRefs.length || catalogRefreshing) {
       return;
     }
     const refreshKey = `${loaderPayload.range.current_start}|${loaderPayload.range.current_end}|${chartSourceProductRefsKey}`;
@@ -4953,6 +5016,7 @@ export function CatalogPage() {
                                 </button>
                                 <Link
                                   to={`/product${buildProductSearch(article.article, start, end)}`}
+                                  onClick={abortCatalogRefresh}
                                   title="Детали"
                                   aria-label="Открыть детали"
                                   className="catalog-article-action-button"
@@ -5239,6 +5303,7 @@ export function CatalogPage() {
           preferredKind={selectedArticleIssueKind}
           yesterdayIso={yesterdayIso}
           yesterdayLabel={yesterdayLabel}
+          onProductNavigate={abortCatalogRefresh}
           onClose={() => {
             setSelectedArticleIssueRef(null);
             setSelectedArticleIssueKind(null);

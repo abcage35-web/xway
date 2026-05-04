@@ -9,20 +9,82 @@ function buildBaseUrl(request?: Request) {
   return window.location.origin;
 }
 
-async function requestJson<T>(input: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(input, { signal });
-  const text = await response.text();
-  const data = text ? (JSON.parse(text) as T & { ok?: boolean; error?: string }) : ({} as T & { ok?: boolean; error?: string });
-  if (!response.ok) {
-    throw new Response(text || response.statusText, {
-      status: response.status,
-      statusText: response.statusText,
-    });
+function isRetryableXwayUnavailable(status: number, text: string) {
+  return status === 503 || /\b503\b|temporarily unavailable|XWAY request failed \(503\)/i.test(text);
+}
+
+function waitForRequestRetry(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    const error = new Error("Aborted");
+    error.name = "AbortError";
+    return Promise.reject(error);
   }
-  if ("ok" in data && data.ok === false) {
-    throw new Error(data.error || "API request failed");
+
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+    const handleAbort = () => {
+      globalThis.clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", handleAbort);
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+async function requestJson<T>(
+  input: string,
+  signal?: AbortSignal,
+  options: { retry503?: boolean; maxAttempts?: number; retryDelayMs?: number } = {},
+): Promise<T> {
+  const maxAttempts = options.retry503 ? Math.max(1, options.maxAttempts ?? 3) : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await fetch(input, { signal });
+    const text = await response.text();
+    let data = {} as T & { ok?: boolean; error?: string };
+    try {
+      data = text ? (JSON.parse(text) as T & { ok?: boolean; error?: string }) : data;
+    } catch (error) {
+      if (!response.ok) {
+        if (options.retry503 && attempt < maxAttempts - 1 && isRetryableXwayUnavailable(response.status, text)) {
+          await waitForRequestRetry(options.retryDelayMs ?? 800, signal);
+          continue;
+        }
+        throw new Response(text || response.statusText, {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      }
+      throw error;
+    }
+
+    if (!response.ok) {
+      if (options.retry503 && attempt < maxAttempts - 1 && isRetryableXwayUnavailable(response.status, data.error || text)) {
+        await waitForRequestRetry(options.retryDelayMs ?? 800, signal);
+        continue;
+      }
+      throw new Response(text || response.statusText, {
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
+    if ("ok" in data && data.ok === false) {
+      const message = data.error || "API request failed";
+      if (options.retry503 && attempt < maxAttempts - 1 && isRetryableXwayUnavailable(response.status, message)) {
+        await waitForRequestRetry(options.retryDelayMs ?? 800, signal);
+        continue;
+      }
+      throw new Error(message);
+    }
+    return data;
   }
-  return data;
+
+  throw new Error("API request failed");
 }
 
 function appendRange(params: URLSearchParams, start?: string | null, end?: string | null) {
@@ -60,7 +122,7 @@ export async function fetchProducts(options: {
   if (options.heavyCampaignIds?.length) {
     url.searchParams.set("heavy_campaign_ids", options.heavyCampaignIds.map((id) => String(id)).join(","));
   }
-  return requestJson<ProductsResponse>(url.toString(), options.signal ?? options.request?.signal);
+  return requestJson<ProductsResponse>(url.toString(), options.signal ?? options.request?.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
 }
 
 export async function fetchCatalog(options: {
