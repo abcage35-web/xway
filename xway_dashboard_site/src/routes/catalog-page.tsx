@@ -2845,6 +2845,7 @@ export function CatalogPage() {
   const [catalogRowCampaignTypesRefreshToken, setCatalogRowCampaignTypesRefreshToken] = useState(0);
   const [turnoverOrdersOverridesByRef, setTurnoverOrdersOverridesByRef] = useState<Record<string, number | string | null | undefined>>({});
   const [refreshingAllCatalog, setRefreshingAllCatalog] = useState(false);
+  const [refreshingShopIds, setRefreshingShopIds] = useState<string[]>([]);
   const [refreshingArticleRefs, setRefreshingArticleRefs] = useState<string[]>([]);
   const [catalogRefreshError, setCatalogRefreshError] = useState<string | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
@@ -2875,7 +2876,7 @@ export function CatalogPage() {
     () => applyCatalogArticleOverrides(catalogPayloadOverride ?? loaderPayload, catalogArticleOverridesByRef),
     [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
   );
-  const catalogRefreshing = refreshingAllCatalog;
+  const catalogRefreshing = refreshingAllCatalog || refreshingShopIds.length > 0;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -4227,7 +4228,7 @@ export function CatalogPage() {
   };
 
   const handleRefreshAllCatalog = async () => {
-    if (refreshingAllCatalog) {
+    if (refreshingAllCatalog || refreshingShopIds.length) {
       return;
     }
 
@@ -4285,12 +4286,41 @@ export function CatalogPage() {
   };
 
   const handleRefreshArticle = async (productRef: string) => {
-    if (refreshingArticleRefs.includes(productRef)) {
+    if (catalogRefreshing || refreshingArticleRefs.includes(productRef)) {
       return;
     }
 
     setCatalogRefreshError(null);
     await refreshCatalogProductRefs([productRef], { refreshIssues: true });
+  };
+
+  const handleRefreshShopCatalog = async (shop: CatalogShop) => {
+    const shopId = String(shop.id);
+    if (refreshingAllCatalog || refreshingShopIds.includes(shopId)) {
+      return;
+    }
+
+    const sourceShop = payload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
+    const productRefs = sourceShop.articles.map((article) => `${sourceShop.id}:${article.product_id}`);
+    if (!productRefs.length) {
+      return;
+    }
+
+    setCatalogRefreshError(null);
+    setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
+
+    try {
+      for (let index = 0; index < productRefs.length; index += 1) {
+        await refreshCatalogProductRefs([productRefs[index]!], { refreshIssues: true });
+        if (index < productRefs.length - 1) {
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, new AbortController().signal);
+        }
+      }
+    } catch (error) {
+      setCatalogRefreshError(await readApiErrorMessage(error));
+    } finally {
+      setRefreshingShopIds((current) => current.filter((id) => id !== shopId));
+    }
   };
 
   useEffect(() => {
@@ -4724,6 +4754,7 @@ export function CatalogPage() {
       <div className="space-y-5">
         {visibleShops.map((shop) => {
           const collapsed = collapsedShopIds.includes(String(shop.id));
+          const isShopRefreshing = refreshingShopIds.includes(String(shop.id));
           const totals = summarizeCatalogArticles(shop.articles);
           const compareShop = compareVisibleShops.find((candidate) => String(candidate.id) === String(shop.id)) ?? null;
           const compareShopTotals = compareShop ? summarizeCatalogArticles(compareShop.articles) : null;
@@ -4838,13 +4869,24 @@ export function CatalogPage() {
                 </div>
               }
               actions={
-                <button
-                  type="button"
-                  onClick={() => toggleShop(shop.id)}
-                  className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
-                >
-                  {collapsed ? "Развернуть" : "Свернуть"}
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshShopCatalog(shop)}
+                    disabled={catalogRefreshing}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
+                  >
+                    <RefreshCw className={cn("size-4", isShopRefreshing && "animate-spin")} />
+                    Обновить товары
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleShop(shop.id)}
+                    className="metric-chip rounded-2xl px-4 py-2 text-sm text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+                  >
+                    {collapsed ? "Развернуть" : "Свернуть"}
+                  </button>
+                </div>
               }
             >
               <div className="space-y-5">
