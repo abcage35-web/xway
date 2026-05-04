@@ -168,37 +168,42 @@ function CatalogArticleCampaignTypeMatrix({ rows }: { rows: CatalogChartResponse
   }
 
   return (
-    <div className="catalog-article-campaign-type-matrix">
-      <div
-        className="catalog-article-campaign-type-grid"
-        style={{ gridTemplateColumns: `minmax(124px, 1.1fr) repeat(${CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.length}, minmax(88px, 1fr))` }}
-      >
-        <div className="catalog-article-campaign-type-head is-type">Тип РК</div>
-        {CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.map((metric) => (
-          <div key={metric.key} className="catalog-article-campaign-type-head">
-            {metric.label}
-          </div>
-        ))}
-        {visibleTypes.map((type) => {
-          const totals = totalsByType[type.key];
-          return (
-            <div key={type.key} className="contents">
-              <div className="catalog-article-campaign-type-label">
-                <span style={{ backgroundColor: type.color }}>{type.badge}</span>
-                <strong>{type.label}</strong>
-              </div>
-              {CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.map((metric) => {
-                const value = metric.getValue(totals);
-                return (
-                  <div key={`${type.key}-${metric.key}`} className="catalog-article-campaign-type-cell">
-                    <span style={{ backgroundColor: type.color }}>{metric.format(value)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
+    <div className="catalog-article-analytics-scroll is-campaign-types">
+      <table className="catalog-article-analytics-table catalog-article-campaign-type-table">
+        <thead>
+          <tr>
+            <th>Тип РК</th>
+            {CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.map((metric) => (
+              <th key={metric.key}>{metric.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {visibleTypes.map((type) => {
+            const totals = totalsByType[type.key];
+            return (
+              <tr key={type.key}>
+                <th>
+                  <span className="catalog-article-campaign-type-label">
+                    <span style={{ backgroundColor: type.color }}>{type.badge}</span>
+                    <strong>{type.label}</strong>
+                  </span>
+                </th>
+                {CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.map((metric) => {
+                  const value = metric.getValue(totals);
+                  return (
+                    <td key={`${type.key}-${metric.key}`}>
+                      <span className="catalog-article-campaign-type-value" style={{ backgroundColor: type.color }}>
+                        {metric.format(value)}
+                      </span>
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

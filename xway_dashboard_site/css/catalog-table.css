@@ -741,25 +741,6 @@ html[data-theme="dark"] .catalog-article-analytics-settings-row {
   background: rgba(244, 240, 255, 0.05);
 }
 
-html[data-theme="dark"] .catalog-article-campaign-type-matrix,
-html[data-theme="dark"] .catalog-article-campaign-type-head,
-html[data-theme="dark"] .catalog-article-campaign-type-label,
-html[data-theme="dark"] .catalog-article-campaign-type-cell {
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-html[data-theme="dark"] .catalog-article-campaign-type-matrix {
-  background: rgba(14, 18, 28, 0.74);
-}
-
-html[data-theme="dark"] .catalog-article-campaign-type-head {
-  background: rgba(27, 31, 42, 0.88);
-}
-
-html[data-theme="dark"] .catalog-article-campaign-type-label {
-  background: rgba(21, 24, 33, 0.82);
-}
-
 html[data-theme="dark"] .catalog-article-analytics-settings-button:hover,
 html[data-theme="dark"] .catalog-article-analytics-settings-button.is-active {
   border-color: rgba(255, 141, 58, 0.34);
