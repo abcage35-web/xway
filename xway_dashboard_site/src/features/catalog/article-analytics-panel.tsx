@@ -74,48 +74,6 @@ type CatalogArticleAnalyticsMetric = {
   label: string;
   format: (row: CatalogChartResponse["rows"][number]) => string;
 };
-type CatalogArticleCampaignTypeKey = "cpm-manual" | "cpm-unified" | "cpc";
-type CatalogArticleCampaignTypeTotals = {
-  views: number;
-  clicks: number;
-  atbs: number;
-  orders: number;
-  spend: number;
-  revenue: number;
-};
-
-const EMPTY_CAMPAIGN_TYPE_TOTALS: CatalogArticleCampaignTypeTotals = {
-  views: 0,
-  clicks: 0,
-  atbs: 0,
-  orders: 0,
-  spend: 0,
-  revenue: 0,
-};
-const CATALOG_ARTICLE_CAMPAIGN_TYPES: Array<{
-  key: CatalogArticleCampaignTypeKey;
-  label: string;
-  badge: string;
-  color: string;
-}> = [
-  { key: "cpm-manual", label: "Ручная", badge: "CPM", color: "#2ea36f" },
-  { key: "cpm-unified", label: "Единая", badge: "CPM", color: "#4b7bff" },
-  { key: "cpc", label: "Клики", badge: "CPC", color: "#8b64f6" },
-];
-const CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS: Array<{
-  key: "spend" | "views" | "clicks" | "orders" | "ctr" | "cr" | "drr";
-  label: string;
-  getValue: (totals: CatalogArticleCampaignTypeTotals) => number | null;
-  format: (value: number | null) => string;
-}> = [
-  { key: "spend", label: "Расход", getValue: (totals) => totals.spend, format: (value) => formatMoney(value, true) },
-  { key: "views", label: "Показы", getValue: (totals) => totals.views, format: (value) => formatNumber(value) },
-  { key: "clicks", label: "Клики", getValue: (totals) => totals.clicks, format: (value) => formatNumber(value) },
-  { key: "orders", label: "Заказы", getValue: (totals) => totals.orders, format: (value) => formatNumber(value) },
-  { key: "ctr", label: "CTR", getValue: (totals) => catalogMetricRate(totals.clicks, totals.views), format: (value) => formatPercent(value) },
-  { key: "cr", label: "CR", getValue: (totals) => catalogMetricRate(totals.orders, totals.clicks), format: (value) => formatPercent(value) },
-  { key: "drr", label: "ДРР", getValue: (totals) => catalogMetricRate(totals.spend, totals.revenue), format: (value) => formatPercent(value) },
-];
 
 function catalogMetricRate(numerator: number | string | null | undefined, denominator: number | string | null | undefined) {
   const top = toNumber(numerator);
@@ -132,80 +90,6 @@ function catalogMetricMoneyPer(numerator: number | string | null | undefined, de
 function catalogMetricCpm(spend: number | string | null | undefined, views: number | string | null | undefined) {
   const value = catalogMetricMoneyPer(spend, views);
   return value === null ? null : value * 1000;
-}
-
-function buildCampaignTypeTotals(rows: CatalogChartResponse["rows"]): Record<CatalogArticleCampaignTypeKey, CatalogArticleCampaignTypeTotals> {
-  const totals = Object.fromEntries(
-    CATALOG_ARTICLE_CAMPAIGN_TYPES.map((type) => [type.key, { ...EMPTY_CAMPAIGN_TYPE_TOTALS }]),
-  ) as Record<CatalogArticleCampaignTypeKey, CatalogArticleCampaignTypeTotals>;
-
-  rows.forEach((row) => {
-    CATALOG_ARTICLE_CAMPAIGN_TYPES.forEach((type) => {
-      const metrics = row.metrics_by_campaign_type?.[type.key];
-      if (metrics) {
-        totals[type.key].views += toNumber(metrics.views) ?? 0;
-        totals[type.key].clicks += toNumber(metrics.clicks) ?? 0;
-        totals[type.key].atbs += toNumber(metrics.atbs) ?? 0;
-        totals[type.key].orders += toNumber(metrics.orders) ?? 0;
-        totals[type.key].spend += toNumber(metrics.spend) ?? 0;
-        totals[type.key].revenue += toNumber(metrics.revenue) ?? 0;
-      } else {
-        totals[type.key].orders += toNumber(row.orders_by_campaign_type?.[type.key]) ?? 0;
-      }
-    });
-  });
-
-  return totals;
-}
-
-function CatalogArticleCampaignTypeMatrix({ rows }: { rows: CatalogChartResponse["rows"] }) {
-  const totalsByType = buildCampaignTypeTotals(rows);
-  const visibleTypes = CATALOG_ARTICLE_CAMPAIGN_TYPES.filter((type) =>
-    Object.values(totalsByType[type.key]).some((value) => value > 0),
-  );
-  if (!visibleTypes.length) {
-    return null;
-  }
-
-  return (
-    <div className="catalog-article-analytics-scroll is-campaign-types">
-      <table className="catalog-article-analytics-table catalog-article-campaign-type-table">
-        <thead>
-          <tr>
-            <th>Тип РК</th>
-            {CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.map((metric) => (
-              <th key={metric.key}>{metric.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {visibleTypes.map((type) => {
-            const totals = totalsByType[type.key];
-            return (
-              <tr key={type.key}>
-                <th>
-                  <span className="catalog-article-campaign-type-label">
-                    <span style={{ backgroundColor: type.color }}>{type.badge}</span>
-                    <strong>{type.label}</strong>
-                  </span>
-                </th>
-                {CATALOG_ARTICLE_CAMPAIGN_TYPE_METRICS.map((metric) => {
-                  const value = metric.getValue(totals);
-                  return (
-                    <td key={`${type.key}-${metric.key}`}>
-                      <span className="catalog-article-campaign-type-value" style={{ backgroundColor: type.color }}>
-                        {metric.format(value)}
-                      </span>
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
 }
 
 const CATALOG_ARTICLE_ANALYTICS_METRICS: CatalogArticleAnalyticsMetric[] = [
@@ -417,7 +301,6 @@ export function CatalogArticleAnalyticsPanel({
           </DndContext>
         </div>
       ) : null}
-      <CatalogArticleCampaignTypeMatrix rows={rows} />
       <div className="catalog-article-analytics-scroll">
         <table className="catalog-article-analytics-table">
           <thead>

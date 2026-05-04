@@ -289,6 +289,73 @@
   gap: 8px;
 }
 
+.catalog-campaign-type-header {
+  display: inline-flex;
+  min-width: 66px;
+  white-space: nowrap;
+}
+
+.catalog-campaign-type-cell {
+  min-width: 92px;
+}
+
+.catalog-campaign-type-metric-cell {
+  min-width: 104px;
+}
+
+.catalog-campaign-type-row-list,
+.catalog-campaign-type-metric-stack {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.catalog-campaign-type-row-label,
+.catalog-campaign-type-metric-pill {
+  min-height: 18px;
+}
+
+.catalog-campaign-type-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: flex-start;
+  min-width: 86px;
+  color: var(--color-ink);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.69rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.catalog-campaign-type-row-label .catalog-campaign-kind-badge {
+  min-width: 42px;
+  justify-content: center;
+}
+
+.catalog-campaign-type-metric-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 76px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--campaign-type-color);
+  color: #ffffff;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.69rem;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.16);
+}
+
+.catalog-campaign-type-empty {
+  color: var(--color-muted);
+}
+
 .catalog-campaign-card {
   position: relative;
   display: grid;
