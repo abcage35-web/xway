@@ -1509,7 +1509,7 @@ type ProductDailySpendSummary = ReturnType<typeof buildProductDailySpendSummary>
 
 interface ProductOverviewErrorSummary {
   id: string;
-  kind: "budget" | "limit" | "conflict" | "schedule" | "paused";
+  kind: "budget" | "limit" | "conflict" | "schedule_setup" | "schedule" | "paused";
   title: string;
   value: string;
   meta: string;
@@ -1530,6 +1530,7 @@ interface ProductOverviewYesterdayIssue {
 }
 
 type ProductOverviewDowntimeKind = "schedule" | "paused";
+type ProductOverviewScheduleSetupKind = "schedule_setup";
 
 function parseStatusClockToMinutes(value: string | null | undefined, endOfDay = false) {
   if (!value) {
@@ -1572,6 +1573,64 @@ function shiftIsoDateString(value: string | null | undefined, deltaDays: number)
   return date.toISOString().slice(0, 10);
 }
 
+function enumerateIsoDays(start: string, end: string) {
+  const startDate = new Date(`${start}T00:00:00`);
+  const endDate = new Date(`${end}T00:00:00`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || startDate > endDate) {
+    return [];
+  }
+  const days: string[] = [];
+  const cursor = new Date(startDate);
+  while (cursor <= endDate) {
+    days.push(toIsoDateValue(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+}
+
+function hasUnconfiguredCampaignSchedule(campaign: CampaignSummary) {
+  const statusCode = String(campaign.status_xway || campaign.status || "").trim().toUpperCase();
+  const displayStatus =
+    statusCode === "ACTIVE"
+      ? "active"
+      : statusCode === "PAUSED"
+        ? "paused"
+        : statusCode === "FROZEN"
+          ? "freeze"
+          : resolveCampaignDisplayStatus(campaign).key;
+  if (displayStatus !== "active" && displayStatus !== "paused") {
+    return false;
+  }
+  const schedule = campaign.schedule_config;
+  if (!schedule) {
+    return false;
+  }
+  const activeSlots = toNumber(schedule.active_slots);
+  return !schedule.schedule_active || (activeSlots !== null && activeSlots >= 168);
+}
+
+function buildFullDayCampaignStatusDay(campaign: CampaignSummary, day: string): CampaignOverviewStatusDay {
+  const statusCode = String(campaign.status_xway || campaign.status || "").trim().toUpperCase();
+  const displayStatus = resolveCampaignDisplayStatus(campaign);
+  const key = statusCode === "PAUSED" || displayStatus.key === "paused" ? "paused" : "active";
+  const label = statusCode === "ACTIVE" ? "Активна" : statusCode === "PAUSED" ? "Приостановлена" : displayStatus.label;
+  return {
+    day,
+    label: formatDailySeriesLabel(day, 0),
+    entries: [
+      {
+        key,
+        label,
+        startTime: "00:00",
+        endTime: null,
+        reasons: [],
+        reasonKinds: [],
+        issueKinds: [],
+      },
+    ],
+  };
+}
+
 function resolveOverviewIssueRecommendation(kind: ProductOverviewErrorSummary["kind"]) {
   if (kind === "budget") {
     return "Проверьте бюджет РК: увеличьте его или перераспределите трафик на более эффективные часы и кампании.";
@@ -1581,6 +1640,9 @@ function resolveOverviewIssueRecommendation(kind: ProductOverviewErrorSummary["k
   }
   if (kind === "schedule") {
     return "Проверьте расписание показов и расширьте активные часы, если спрос смещён в недоступные интервалы.";
+  }
+  if (kind === "schedule_setup") {
+    return "Настройте расписание показов: включите функцию расписания и оставьте только нужные часы вместо круглосуточного показа.";
   }
   if (kind === "paused") {
     return "Проверьте ручные остановки и правило автостопа по остатку или оборачиваемости.";
@@ -1727,12 +1789,66 @@ function buildProductOverviewErrorSummaries(
       days: Map<string, OverviewIssueDayAccumulator>;
     }
   >();
+  const scheduleSetupAggregated = new Map<
+    ProductOverviewScheduleSetupKind,
+    {
+      kind: ProductOverviewScheduleSetupKind;
+      title: string;
+      hours: number;
+      incidents: number;
+      campaignNames: Set<string>;
+      days: Map<string, OverviewIssueDayAccumulator>;
+    }
+  >();
 
   product.campaigns.forEach((campaign) => {
     const statusDays = buildCampaignStatusDays(campaign, activeRange.start, activeRange.end).filter(
       (day) => day.day >= activeRange.start && day.day <= activeRange.end,
     );
     const statusDayByDay = new Map(statusDays.map((day) => [day.day, day]));
+    if (hasUnconfiguredCampaignSchedule(campaign)) {
+      const current = scheduleSetupAggregated.get("schedule_setup") || {
+        kind: "schedule_setup",
+        title: "Не настроено время показа",
+        hours: 0,
+        incidents: 0,
+        campaignNames: new Set<string>(),
+        days: new Map<string, OverviewIssueDayAccumulator>(),
+      };
+      const campaignLabel = formatCampaignLimiterName(campaign);
+      current.campaignNames.add(campaignLabel);
+      enumerateIsoDays(activeRange.start, activeRange.end).forEach((day) => {
+        current.hours += 24;
+        current.incidents += 1;
+        const aggregatedDay =
+          current.days.get(day) ||
+          (() => {
+            const nextDay: OverviewIssueDayAccumulator = {
+              day,
+              label: formatDailySeriesLabel(day, 0),
+              hours: 0,
+              incidents: 0,
+              estimatedGapTotal: 0,
+              hasEstimatedGap: false,
+              campaignNames: new Set<string>(),
+              slotCounts: createOverviewIssueSlotCounts(),
+            };
+            current.days.set(day, nextDay);
+            return nextDay;
+          })();
+        const hadCampaignAlready = aggregatedDay.campaignNames.has(campaignLabel);
+        aggregatedDay.hours += 24;
+        aggregatedDay.incidents += 1;
+        aggregatedDay.campaignNames.add(campaignLabel);
+        if (!hadCampaignAlready) {
+          accumulateOverviewIssueSlotCounts(
+            aggregatedDay.slotCounts,
+            statusDayByDay.get(day) ?? buildFullDayCampaignStatusDay(campaign, day),
+          );
+        }
+      });
+      scheduleSetupAggregated.set("schedule_setup", current);
+    }
     buildCampaignIssueSummaries(campaign, statusDays).forEach((summary) => {
       const current = aggregated.get(summary.kind) || {
         kind: summary.kind,
@@ -1867,6 +1983,28 @@ function buildProductOverviewErrorSummaries(
           .map(buildOverviewIssueBreakdownDay),
       };
     });
+  const scheduleSetupItems: ProductOverviewErrorSummary[] = (["schedule_setup"] as const)
+    .map((kind) => scheduleSetupAggregated.get(kind))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .map((item) => {
+      const campaignNames = [...item.campaignNames];
+      const campaignPreview =
+        campaignNames.length > 2
+          ? `${campaignNames.slice(0, 2).join(" · ")} · +${campaignNames.length - 2}`
+          : campaignNames.join(" · ");
+      return {
+        id: `overview-error-${item.kind}`,
+        kind: item.kind,
+        title: item.title,
+        value: `${formatNumber(item.hours, 1)} ч`,
+        meta: `${formatIssueCampaignCount(item.campaignNames.size)} · расписание 168 ч`,
+        note: campaignPreview || null,
+        recommendation: resolveOverviewIssueRecommendation(item.kind),
+        days: [...item.days.values()]
+          .sort((left, right) => right.day.localeCompare(left.day))
+          .map(buildOverviewIssueBreakdownDay),
+      };
+    });
   const downtimeItems: ProductOverviewErrorSummary[] = (["schedule", "paused"] as const)
     .map((kind) => downtimeAggregated.get(kind))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -1907,7 +2045,7 @@ function buildProductOverviewErrorSummaries(
     });
   }
 
-  return [...issueItems, ...downtimeItems];
+  return [...issueItems, ...scheduleSetupItems, ...downtimeItems];
 }
 
 function resolveUsageTone(percent: number | null | undefined) {
@@ -4330,8 +4468,13 @@ function ProductOverviewIssuesCard({
           kind: item.kind,
           title: item.title,
           value: `${formatNumber(day.hours, 1)} ч`,
-          meta: formatIssueStopCountLabel(day.incidents),
-          note: day.estimatedGap !== null ? `≈ не хватило ${formatMoney(Math.round(day.estimatedGap), true)}` : day.note ?? null,
+          meta: item.kind === "schedule_setup" ? (day.note ?? formatIssueCampaignCount(day.incidents)) : formatIssueStopCountLabel(day.incidents),
+          note:
+            item.kind === "schedule_setup"
+              ? null
+              : day.estimatedGap !== null
+                ? `≈ не хватило ${formatMoney(Math.round(day.estimatedGap), true)}`
+                : day.note ?? null,
           recommendation: item.recommendation,
           day,
         };
@@ -4376,7 +4519,7 @@ function ProductOverviewIssuesCard({
           ))}
         </div>
       ) : (
-        <div className="product-overview-issue-empty">В выбранном окне нет простоев, бюджетных ошибок, лимитных остановок и конфликтов лимитов.</div>
+        <div className="product-overview-issue-empty">В выбранном окне нет простоев, бюджетных ошибок, лимитных остановок, ненастроенного времени показа и конфликтов лимитов.</div>
       )}
       <div className="product-overview-yesterday">
         <div className="product-overview-yesterday-head">

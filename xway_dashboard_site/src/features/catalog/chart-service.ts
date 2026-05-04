@@ -34,6 +34,27 @@ function catalogChartTypeOrders(value: unknown): Record<string, number> {
   }, {});
 }
 
+function catalogChartTypeMetrics(value: unknown): NonNullable<CatalogChartResponse["rows"][number]["metrics_by_campaign_type"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.entries(value).reduce<NonNullable<CatalogChartResponse["rows"][number]["metrics_by_campaign_type"]>>((result, [key, rawMetrics]) => {
+    const metrics = rawMetrics && typeof rawMetrics === "object" && !Array.isArray(rawMetrics) ? (rawMetrics as Record<string, unknown>) : {};
+    const normalized = {
+      views: toNumber(metrics.views as string | number | null | undefined) ?? 0,
+      clicks: toNumber(metrics.clicks as string | number | null | undefined) ?? 0,
+      atbs: toNumber(metrics.atbs as string | number | null | undefined) ?? 0,
+      orders: toNumber(metrics.orders as string | number | null | undefined) ?? 0,
+      spend: toNumber(metrics.spend as string | number | null | undefined) ?? 0,
+      revenue: toNumber(metrics.revenue as string | number | null | undefined) ?? 0,
+    };
+    if (Object.values(normalized).some((numeric) => numeric > 0)) {
+      result[key] = normalized;
+    }
+    return result;
+  }, {});
+}
+
 function addCatalogChartTypeOrders(
   target: CatalogChartResponse["rows"][number],
   source: unknown,
@@ -42,6 +63,25 @@ function addCatalogChartTypeOrders(
   target.orders_by_campaign_type = target.orders_by_campaign_type || {};
   Object.entries(sourceValues).forEach(([key, value]) => {
     target.orders_by_campaign_type![key] = (target.orders_by_campaign_type![key] ?? 0) + value;
+  });
+}
+
+function addCatalogChartTypeMetrics(
+  target: { metrics_by_campaign_type?: CatalogChartResponse["rows"][number]["metrics_by_campaign_type"] },
+  source: unknown,
+) {
+  const sourceValues = catalogChartTypeMetrics(source);
+  target.metrics_by_campaign_type = target.metrics_by_campaign_type || {};
+  Object.entries(sourceValues).forEach(([key, metrics]) => {
+    const bucket = target.metrics_by_campaign_type![key] || {};
+    target.metrics_by_campaign_type![key] = {
+      views: (toNumber(bucket.views) ?? 0) + (toNumber(metrics.views) ?? 0),
+      clicks: (toNumber(bucket.clicks) ?? 0) + (toNumber(metrics.clicks) ?? 0),
+      atbs: (toNumber(bucket.atbs) ?? 0) + (toNumber(metrics.atbs) ?? 0),
+      orders: (toNumber(bucket.orders) ?? 0) + (toNumber(metrics.orders) ?? 0),
+      spend: (toNumber(bucket.spend) ?? 0) + (toNumber(metrics.spend) ?? 0),
+      revenue: (toNumber(bucket.revenue) ?? 0) + (toNumber(metrics.revenue) ?? 0),
+    };
   });
 }
 
@@ -76,6 +116,7 @@ function finalizeCatalogChartRow(row: CatalogChartResponse["rows"][number]) {
     ordered_sum_total: orderedSumTotal,
     spent_sku_count: spentSkuCount,
     orders_by_campaign_type: catalogChartTypeOrders(row.orders_by_campaign_type),
+    metrics_by_campaign_type: catalogChartTypeMetrics(row.metrics_by_campaign_type),
     ctr: catalogChartRate(clicks, views),
     cr1: catalogChartRate(atbs, clicks),
     cr2: catalogChartRate(orders, atbs),
@@ -101,6 +142,7 @@ function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogCha
       accumulator.rel_shks += toNumber(row.rel_shks) ?? 0;
       accumulator.rel_atbs += toNumber(row.rel_atbs) ?? 0;
       accumulator.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
+      addCatalogChartTypeMetrics(accumulator, row.metrics_by_campaign_type);
       return accumulator;
     },
     {
@@ -116,11 +158,13 @@ function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogCha
       rel_shks: 0,
       rel_atbs: 0,
       ordered_sum_total: 0,
+      metrics_by_campaign_type: {},
     },
   );
 
   return {
     ...totals,
+    metrics_by_campaign_type: catalogChartTypeMetrics(totals.metrics_by_campaign_type),
     ctr: catalogChartRate(totals.clicks, totals.views),
     cr1: catalogChartRate(totals.atbs, totals.clicks),
     cr2: catalogChartRate(totals.orders, totals.atbs),
@@ -156,6 +200,7 @@ export function mergeCatalogChartResponses(
       ordered_sum_total: 0,
       spent_sku_count: 0,
       orders_by_campaign_type: {},
+      metrics_by_campaign_type: {},
       ctr: null,
       cr1: null,
       cr2: null,
@@ -187,6 +232,7 @@ export function mergeCatalogChartResponses(
       target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
       target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
       addCatalogChartTypeOrders(target, row.orders_by_campaign_type);
+      addCatalogChartTypeMetrics(target, row.metrics_by_campaign_type);
     });
   });
 
@@ -262,6 +308,7 @@ export function aggregateCatalogChartResponse(
         ordered_sum_total: 0,
         spent_sku_count: 0,
         orders_by_campaign_type: {},
+        metrics_by_campaign_type: {},
         ctr: null,
         cr1: null,
         cr2: null,
@@ -301,6 +348,7 @@ export function aggregateCatalogChartResponse(
       target.rel_atbs += toNumber(row.rel_atbs) ?? 0;
       target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
       addCatalogChartTypeOrders(target, row.orders_by_campaign_type);
+      addCatalogChartTypeMetrics(target, row.metrics_by_campaign_type);
       if (expenseSum > 0) {
         target.spent_sku_count += 1;
       }

@@ -198,7 +198,7 @@ function dailyTotals(rows) {
   };
 }
 
-function normalizeSchedule(schedulePayload) {
+export function normalizeSchedule(schedulePayload) {
   const payload = schedulePayload || {};
   const rawSchedule = payload.schedule || {};
   let activeSlots = 0;

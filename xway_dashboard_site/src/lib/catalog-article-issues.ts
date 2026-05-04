@@ -2,7 +2,7 @@ import { buildCampaignIssueSummaries, type CampaignOverviewStatusDay, type Campa
 import { toNumber } from "./format";
 import type { CampaignPauseHistoryEntry, CampaignSummary, ProductSummary } from "./types";
 
-export type CatalogArticleIssueKind = "budget" | "limit" | "turnover";
+export type CatalogArticleIssueKind = "budget" | "limit" | "schedule_setup" | "turnover";
 export type CatalogArticleIssueCampaignId = number | string;
 
 export interface CatalogArticleIssueSummary {

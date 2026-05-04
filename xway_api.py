@@ -2113,6 +2113,36 @@ def _clone_catalog_chart_campaign_type_orders(value: Any) -> Dict[str, float]:
     return result
 
 
+def _create_catalog_chart_campaign_type_metrics() -> Dict[str, float]:
+    return {
+        "views": 0.0,
+        "clicks": 0.0,
+        "atbs": 0.0,
+        "orders": 0.0,
+        "spend": 0.0,
+        "revenue": 0.0,
+    }
+
+
+def _clone_catalog_chart_campaign_type_metrics(value: Any) -> Dict[str, Dict[str, float]]:
+    if not isinstance(value, dict):
+        return {}
+    result: Dict[str, Dict[str, float]] = {}
+    for type_key, raw_metrics in value.items():
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        normalized = {
+            "views": _catalog_chart_number(metrics.get("views")),
+            "clicks": _catalog_chart_number(metrics.get("clicks")),
+            "atbs": _catalog_chart_number(metrics.get("atbs")),
+            "orders": _catalog_chart_number(metrics.get("orders")),
+            "spend": _catalog_chart_number(metrics.get("spend")),
+            "revenue": _catalog_chart_number(metrics.get("revenue")),
+        }
+        if any(metric_value > 0 for metric_value in normalized.values()):
+            result[str(type_key)] = normalized
+    return result
+
+
 def _add_catalog_chart_campaign_type_order(target: Dict[str, Any], type_key: str, value: Any) -> None:
     numeric = _catalog_chart_number(value)
     if not type_key or numeric <= 0:
@@ -2129,6 +2159,38 @@ def _add_catalog_chart_campaign_type_orders(target: Dict[str, Any], source: Any)
         return
     for type_key, value in source.items():
         _add_catalog_chart_campaign_type_order(target, str(type_key), value)
+
+
+def _add_catalog_chart_campaign_type_metrics(target: Dict[str, Any], type_key: str, metrics: Dict[str, Any]) -> None:
+    if not type_key:
+        return
+    normalized = {
+        "views": _catalog_chart_number(metrics.get("views")),
+        "clicks": _catalog_chart_number(metrics.get("clicks")),
+        "atbs": _catalog_chart_number(metrics.get("atbs")),
+        "orders": _catalog_chart_number(metrics.get("orders")),
+        "spend": _catalog_chart_number(metrics.get("spend")),
+        "revenue": _catalog_chart_number(metrics.get("revenue")),
+    }
+    if not any(metric_value > 0 for metric_value in normalized.values()):
+        return
+    bucket = target.setdefault("metrics_by_campaign_type", {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        target["metrics_by_campaign_type"] = bucket
+    type_bucket = bucket.get(type_key)
+    if not isinstance(type_bucket, dict):
+        type_bucket = _create_catalog_chart_campaign_type_metrics()
+    for key, value in normalized.items():
+        type_bucket[key] = _catalog_chart_number(type_bucket.get(key)) + value
+    bucket[type_key] = type_bucket
+
+
+def _add_catalog_chart_campaign_type_metrics_map(target: Dict[str, Any], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    for type_key, metrics in source.items():
+        _add_catalog_chart_campaign_type_metrics(target, str(type_key), metrics if isinstance(metrics, dict) else {})
 
 
 def _is_catalog_campaign_row(source: Dict[str, Any]) -> bool:
@@ -3366,6 +3428,7 @@ def _create_catalog_chart_row(day: str) -> Dict[str, Any]:
         "ordered_sum_total": 0.0,
         "spent_sku_count": 0,
         "orders_by_campaign_type": {},
+        "metrics_by_campaign_type": {},
     }
 
 
@@ -3384,6 +3447,7 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
     ordered_sum_total = _catalog_chart_number(row.get("ordered_sum_total"))
     spent_sku_count = int(row.get("spent_sku_count") or 0)
     orders_by_campaign_type = _clone_catalog_chart_campaign_type_orders(row.get("orders_by_campaign_type"))
+    metrics_by_campaign_type = _clone_catalog_chart_campaign_type_metrics(row.get("metrics_by_campaign_type"))
     return {
         **row,
         "views": views,
@@ -3400,6 +3464,7 @@ def _finalize_catalog_chart_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "ordered_sum_total": ordered_sum_total,
         "spent_sku_count": spent_sku_count,
         "orders_by_campaign_type": orders_by_campaign_type,
+        "metrics_by_campaign_type": metrics_by_campaign_type,
         "ctr": _catalog_chart_rate(clicks, views),
         "cr1": _catalog_chart_rate(atbs, clicks),
         "cr2": _catalog_chart_rate(orders, atbs),
@@ -3425,6 +3490,7 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "rel_atbs": 0.0,
         "ordered_sum_total": 0.0,
         "orders_by_campaign_type": {},
+        "metrics_by_campaign_type": {},
     }
     for row in rows:
         totals["views"] += _catalog_chart_number(row.get("views"))
@@ -3440,9 +3506,11 @@ def _catalog_chart_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         totals["rel_atbs"] += _catalog_chart_number(row.get("rel_atbs"))
         totals["ordered_sum_total"] += _catalog_chart_number(row.get("ordered_sum_total"))
         _add_catalog_chart_campaign_type_orders(totals, row.get("orders_by_campaign_type"))
+        _add_catalog_chart_campaign_type_metrics_map(totals, row.get("metrics_by_campaign_type"))
     return {
         **totals,
         "orders_by_campaign_type": _clone_catalog_chart_campaign_type_orders(totals.get("orders_by_campaign_type")),
+        "metrics_by_campaign_type": _clone_catalog_chart_campaign_type_metrics(totals.get("metrics_by_campaign_type")),
         "ctr": _catalog_chart_rate(totals["clicks"], totals["views"]),
         "cr1": _catalog_chart_rate(totals["atbs"], totals["clicks"]),
         "cr2": _catalog_chart_rate(totals["orders"], totals["atbs"]),
@@ -3633,8 +3701,37 @@ def _build_campaign_issue_summaries(campaign: Dict[str, Any], status_days: List[
                 day_entry["hours"] += duration_hours
                 day_entry["incidents"] += 1
 
+    if _is_campaign_schedule_setup_issue(campaign):
+        for day_payload in status_days:
+            if not day_payload.get("day"):
+                continue
+            current = summaries.setdefault(
+                "schedule_setup",
+                {
+                    "kind": "schedule_setup",
+                    "label": "Не настроено время показа",
+                    "hours": 0.0,
+                    "incidents": 0,
+                    "days": [],
+                },
+            )
+            current["hours"] += 24
+            current["incidents"] += 1
+            day_entry = next((item for item in current["days"] if item["day"] == day_payload["day"]), None)
+            if day_entry is None:
+                day_entry = {
+                    "day": day_payload["day"],
+                    "label": day_payload["label"],
+                    "hours": 0.0,
+                    "incidents": 0,
+                    "estimatedGap": None,
+                }
+                current["days"].append(day_entry)
+            day_entry["hours"] += 24
+            day_entry["incidents"] += 1
+
     result: List[Dict[str, Any]] = []
-    for kind in ("budget", "limit"):
+    for kind in ("budget", "limit", "schedule_setup"):
         summary = summaries.get(kind)
         if not summary:
             continue
@@ -3644,7 +3741,9 @@ def _build_campaign_issue_summaries(campaign: Dict[str, Any], status_days: List[
             active_hours = max(24 - total_stopped_hours, 0)
             daily_expense = daily_expense_by_day.get(day_entry["day"])
             estimated_gap = None
-            if daily_expense is not None and daily_expense > 0 and active_hours > 0:
+            if kind == "schedule_setup":
+                estimated_gap = None
+            elif daily_expense is not None and daily_expense > 0 and active_hours > 0:
                 estimated_gap = (daily_expense / active_hours) * day_entry["hours"]
             elif average_hourly_spend_fallback > 0:
                 estimated_gap = average_hourly_spend_fallback * day_entry["hours"]
@@ -3727,6 +3826,17 @@ def _issue_campaign_display_status(status_code: Optional[str]) -> str:
     if normalized == "PAUSED" or re.search(r"приост|pause|paused|stop|неактив", normalized_lower):
         return "paused"
     return "muted"
+
+
+def _is_campaign_schedule_setup_issue(campaign: Dict[str, Any]) -> bool:
+    display_status = _issue_campaign_display_status(_issue_campaign_status_code(campaign))
+    if display_status not in {"active", "paused"}:
+        return False
+    schedule = campaign.get("schedule_config")
+    if not schedule:
+        return False
+    active_slots = _issue_number(schedule.get("active_slots"))
+    return not bool(schedule.get("schedule_active")) or (active_slots is not None and active_slots >= 168)
 
 
 def _collect_issue_campaign_day_metrics(campaign: Dict[str, Any], day: str) -> Dict[str, float]:
@@ -3842,7 +3952,7 @@ def _aggregate_catalog_issue_summaries(
                 current["campaign_labels"].append(campaign_label)
 
     result: List[Dict[str, Any]] = []
-    for kind in ("budget", "limit"):
+    for kind in ("budget", "limit", "schedule_setup"):
         item = aggregated.get(kind)
         if not item:
             continue
@@ -3910,6 +4020,10 @@ def _collect_single_catalog_issue(
             ),
             {},
         )
+        schedule_payload, schedule_error = _safe_call(
+            lambda: campaign_api.campaign_schedule(shop_id, product_id, int(campaign_id)),
+            {},
+        )
         return {
             "id": campaign_id,
             "name": campaign.get("name"),
@@ -3924,6 +4038,7 @@ def _collect_single_catalog_issue(
             "min_cpm_recom": campaign.get("min_cpm_recom"),
             "mp_recom_bid": campaign.get("mp_recom_bid"),
             "daily_exact": (daily_exact_payload or {}).get(str(campaign_id)) or [],
+            "schedule_config": None if schedule_error else _normalize_schedule(schedule_payload or {}),
             "status_logs": {
                 "pause_history": _normalize_status_pause_history(pause_payload or {}),
             },
@@ -3984,6 +4099,7 @@ def collect_catalog_chart(
     product_refs: Iterable[str],
     start: Optional[str] = None,
     end: Optional[str] = None,
+    include_campaign_types: bool = False,
 ) -> Dict[str, Any]:
     base_api = XwayApi(storage_state_path, start=start, end=end)
     range_payload = base_api.range
@@ -4003,25 +4119,30 @@ def collect_catalog_chart(
             product_daily_rows = api.product_stats_by_day(shop_id, product_id)
             campaign_daily_exact: Dict[str, List[Dict[str, Any]]] = {}
             campaign_type_by_id: Dict[str, str] = {}
-            try:
-                stata = api.product_stata(shop_id, product_id) or {}
-                campaign_rows = stata.get("campaign_wb") or []
-                campaign_ids = [campaign.get("id") for campaign in campaign_rows if campaign.get("id") is not None]
-                campaign_type_by_id = {
-                    str(campaign.get("id")): _catalog_chart_campaign_type_for_row(campaign)
-                    for campaign in campaign_rows
-                    if campaign.get("id") is not None
-                }
-                campaign_daily_exact = api.campaign_daily_exact(
-                    shop_id,
-                    product_id,
-                    campaign_ids,
-                    range_payload["current_start"],
-                    range_payload["current_end"],
-                )
-            except Exception:
-                campaign_daily_exact = {}
-                campaign_type_by_id = {}
+            if include_campaign_types:
+                try:
+                    stata = api.product_stata(shop_id, product_id) or {}
+                    campaign_rows = stata.get("campaign_wb") or []
+                    campaign_ids = [campaign.get("id") for campaign in campaign_rows if campaign.get("id") is not None]
+                    campaign_type_by_id = {
+                        str(campaign.get("id")): _catalog_chart_campaign_type_for_row(campaign)
+                        for campaign in campaign_rows
+                        if campaign.get("id") is not None
+                    }
+                    campaign_daily_exact = (
+                        api.campaign_daily_exact(
+                            shop_id,
+                            product_id,
+                            campaign_ids,
+                            range_payload["current_start"],
+                            range_payload["current_end"],
+                        )
+                        if campaign_ids
+                        else {}
+                    )
+                except Exception:
+                    campaign_daily_exact = {}
+                    campaign_type_by_id = {}
             return ref, product_daily_rows, campaign_daily_exact, campaign_type_by_id, None
         except Exception as exc:
             return ref, None, {}, {}, str(exc)
@@ -4089,6 +4210,16 @@ def collect_catalog_chart(
                     orders = _catalog_chart_number(campaign_row.get("orders"))
                     _add_catalog_chart_campaign_type_order(target, type_key, orders)
                     _add_catalog_chart_campaign_type_order(product_target, type_key, orders)
+                    type_metrics = {
+                        "views": campaign_row.get("views"),
+                        "clicks": campaign_row.get("clicks"),
+                        "atbs": campaign_row.get("atbs"),
+                        "orders": campaign_row.get("orders"),
+                        "spend": campaign_row.get("expense_sum"),
+                        "revenue": campaign_row.get("sum_price"),
+                    }
+                    _add_catalog_chart_campaign_type_metrics(target, type_key, type_metrics)
+                    _add_catalog_chart_campaign_type_metrics(product_target, type_key, type_metrics)
             chart_product_rows.append(
                 {
                     "product_ref": ref,

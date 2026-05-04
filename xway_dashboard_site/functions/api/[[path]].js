@@ -108,6 +108,7 @@ async function handleNativeRequest(context, pathname) {
         productRefs,
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
+        includeCampaignTypes: requestUrl.searchParams.get("include_campaign_types") === "1",
       }),
     );
   }

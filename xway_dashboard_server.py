@@ -81,6 +81,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "product_refs": product_refs,
             "start": query.get("start", [None])[0] or None,
             "end": query.get("end", [None])[0] or None,
+            "include_campaign_types": query.get("include_campaign_types", ["0"])[0] == "1",
         }
 
     def _is_spa_route(self, path: str) -> bool:
@@ -195,6 +196,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     params["product_refs"],
                     start=params["start"],
                     end=params["end"],
+                    include_campaign_types=params["include_campaign_types"],
                 )
             except Exception as exc:
                 self._write_json(

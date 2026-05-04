@@ -171,6 +171,12 @@
   color: var(--amber);
 }
 
+.catalog-issue-filter-chip.is-schedule_setup.is-active {
+  border-color: rgba(20, 166, 161, 0.26);
+  background: rgba(20, 166, 161, 0.1);
+  color: #0f8f8a;
+}
+
 .catalog-issue-filter-chip.is-turnover.is-active {
   border-color: rgba(75, 123, 255, 0.24);
   background: var(--blue-soft);
@@ -322,6 +328,12 @@
   color: var(--amber);
 }
 
+.catalog-issue-inline-badge.is-schedule_setup {
+  border-color: rgba(20, 166, 161, 0.22);
+  background: rgba(20, 166, 161, 0.09);
+  color: #0f8f8a;
+}
+
 .catalog-issue-inline-badge.is-turnover {
   border-color: rgba(75, 123, 255, 0.22);
   background: var(--blue-soft);
@@ -458,6 +470,10 @@
   border-left-color: var(--amber);
 }
 
+.catalog-issue-card.is-schedule_setup {
+  border-left-color: #14a6a1;
+}
+
 .catalog-issue-card.is-turnover {
   border-left-color: var(--blue);
 }
@@ -542,6 +558,11 @@
   color: var(--amber);
 }
 
+.catalog-issue-kind-dot.is-schedule_setup,
+.catalog-issue-metric-chip.is-schedule_setup {
+  color: #14a6a1;
+}
+
 .catalog-issue-kind-dot.is-turnover,
 .catalog-issue-metric-chip.is-turnover {
   color: var(--blue);
@@ -555,6 +576,11 @@
 .catalog-issue-metric-chip.is-limit {
   border-color: rgba(192, 139, 18, 0.2);
   background: rgba(192, 139, 18, 0.07);
+}
+
+.catalog-issue-metric-chip.is-schedule_setup {
+  border-color: rgba(20, 166, 161, 0.2);
+  background: rgba(20, 166, 161, 0.07);
 }
 
 .catalog-issue-metric-chip.is-turnover {
@@ -596,6 +622,12 @@
   color: var(--amber);
 }
 
+.catalog-issue-pill.is-schedule_setup {
+  border-color: rgba(20, 166, 161, 0.24);
+  background: rgba(20, 166, 161, 0.1);
+  color: #0f8f8a;
+}
+
 .catalog-issue-pill.is-turnover {
   border-color: rgba(75, 123, 255, 0.22);
   background: rgba(75, 123, 255, 0.09);
@@ -608,6 +640,10 @@
 
 .catalog-issue-pill.is-primary.is-limit {
   background: rgba(192, 139, 18, 0.16);
+}
+
+.catalog-issue-pill.is-primary.is-schedule_setup {
+  background: rgba(20, 166, 161, 0.15);
 }
 
 .catalog-issue-pill.is-primary.is-turnover {
@@ -929,6 +965,95 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.catalog-article-campaign-type-matrix {
+  max-width: 100%;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.catalog-article-campaign-type-grid {
+  display: grid;
+  min-width: 760px;
+}
+
+.catalog-article-campaign-type-head,
+.catalog-article-campaign-type-label,
+.catalog-article-campaign-type-cell {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  padding: 8px 10px;
+}
+
+.catalog-article-campaign-type-head {
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.catalog-article-campaign-type-head.is-type,
+.catalog-article-campaign-type-label {
+  border-left: 0;
+}
+
+.catalog-article-campaign-type-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--surface) 84%, var(--surface-soft));
+}
+
+.catalog-article-campaign-type-label span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  padding: 0 8px;
+  color: white;
+  font-size: 0.63rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.catalog-article-campaign-type-label strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-article-campaign-type-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.catalog-article-campaign-type-cell span {
+  display: inline-flex;
+  width: 100%;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0 7px;
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 8px 16px rgba(31, 23, 53, 0.08);
 }
 
 .catalog-article-analytics-scroll {

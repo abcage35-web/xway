@@ -1223,6 +1223,11 @@ html[data-theme="dark"] .metric-card-sparkline-tooltip {
   background: rgba(245, 241, 255, 0.9);
 }
 
+.product-overview-issue-card.is-schedule_setup {
+  border-color: rgba(20, 166, 161, 0.2);
+  background: rgba(236, 250, 249, 0.9);
+}
+
 .product-overview-issue-card.is-paused {
   border-color: rgba(118, 128, 156, 0.2);
   background: rgba(244, 246, 251, 0.92);
@@ -4002,6 +4007,7 @@ html[data-theme="dark"] .product-overview-issue-card.is-budget,
 html[data-theme="dark"] .product-overview-issue-card.is-limit,
 html[data-theme="dark"] .product-overview-issue-card.is-conflict,
 html[data-theme="dark"] .product-overview-issue-card.is-freeze,
+html[data-theme="dark"] .product-overview-issue-card.is-schedule_setup,
 html[data-theme="dark"] .product-overview-issue-card.is-schedule,
 html[data-theme="dark"] .product-overview-issue-card.is-paused {
   border-color: var(--line);
@@ -4016,6 +4022,10 @@ html[data-theme="dark"] .product-overview-issue-card.is-conflict {
 html[data-theme="dark"] .product-overview-issue-card.is-limit,
 html[data-theme="dark"] .product-overview-issue-card.is-schedule {
   border-color: rgba(139, 100, 246, 0.24);
+}
+
+html[data-theme="dark"] .product-overview-issue-card.is-schedule_setup {
+  border-color: rgba(20, 166, 161, 0.28);
 }
 
 html[data-theme="dark"] .product-overview-issue-card.is-freeze {

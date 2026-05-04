@@ -10,7 +10,7 @@ type CatalogTooltipSeriesKey = CatalogSeriesKey | CatalogDrrSeriesKey;
 type ChartMode = "combined" | "split";
 type SplitPanelKey = "views" | "clicks" | "atbs" | "orders" | "crf";
 type CrfRenderMode = "line" | "bar";
-type OrdersDisplayMode = "all" | "campaign-types";
+export type OrdersDisplayMode = "all" | "campaign-types";
 type LegendItem = {
   key: CatalogSeriesKey;
   label: string;
@@ -935,6 +935,10 @@ export function CatalogSelectionChart({
   rangeLabel,
   windowDays,
   onRetryErrors,
+  ordersDisplayMode,
+  onChangeOrdersDisplayMode,
+  orderTypeLoading = false,
+  orderTypeError = null,
 }: {
   rows: CatalogChartRow[];
   totals: CatalogChartTotals | null;
@@ -949,6 +953,10 @@ export function CatalogSelectionChart({
   rangeLabel: string;
   windowDays: number;
   onRetryErrors?: () => void;
+  ordersDisplayMode?: OrdersDisplayMode;
+  onChangeOrdersDisplayMode?: (nextMode: OrdersDisplayMode) => void;
+  orderTypeLoading?: boolean;
+  orderTypeError?: string | null;
 }) {
   const [chartMode, setChartMode] = useState<ChartMode>("combined");
   const [hiddenSeries, setHiddenSeries] = useState<CatalogSeriesKey[]>(DEFAULT_HIDDEN_SERIES);
@@ -957,7 +965,9 @@ export function CatalogSelectionChart({
   );
   const [hiddenDrrSeries, setHiddenDrrSeries] = useState<CatalogDrrSeriesKey[]>([]);
   const [crfRenderMode, setCrfRenderMode] = useState<CrfRenderMode>("line");
-  const [ordersDisplayMode, setOrdersDisplayMode] = useState<OrdersDisplayMode>("all");
+  const [internalOrdersDisplayMode, setInternalOrdersDisplayMode] = useState<OrdersDisplayMode>("all");
+  const resolvedOrdersDisplayMode = ordersDisplayMode ?? internalOrdersDisplayMode;
+  const setResolvedOrdersDisplayMode = onChangeOrdersDisplayMode ?? setInternalOrdersDisplayMode;
   const loadingTargetCount = loadTargetCount ?? selectionCount;
 
   const activeSeries = CATALOG_SERIES.filter((series) => !hiddenSeries.includes(series.key));
@@ -1043,6 +1053,16 @@ export function CatalogSelectionChart({
                   <RefreshCw className={cn("size-3.5", isLoading && "animate-spin")} />
                 </button>
               ) : null}
+            </span>
+          ) : null}
+          {orderTypeLoading ? (
+            <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5 text-xs">
+              <LoaderCircle className="size-4 animate-spin text-brand-200" />
+              Р“СЂСѓР·РёРј Р Рљ
+            </span>
+          ) : orderTypeError ? (
+            <span className="inline-flex rounded-full bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+              Р Рљ РЅРµ РґРѕРіСЂСѓР¶РµРЅС‹
             </span>
           ) : null}
         </div>
@@ -1169,8 +1189,8 @@ export function CatalogSelectionChart({
                   rateKey={config.rateKey}
                   hiddenKeys={splitHiddenSeries[config.panel]}
                   onToggleKey={(key) => toggleSplitPanelKey(config.panel, key)}
-                  ordersDisplayMode={ordersDisplayMode}
-                  onChangeOrdersDisplayMode={setOrdersDisplayMode}
+                  ordersDisplayMode={resolvedOrdersDisplayMode}
+                  onChangeOrdersDisplayMode={setResolvedOrdersDisplayMode}
                   orderCampaignTypeSeries={visibleOrderTypeSeries}
                 />
               ))}

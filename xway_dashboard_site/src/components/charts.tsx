@@ -87,21 +87,12 @@ type OverviewTooltipMetricConfig = {
   color: string;
   formatter: (value: ChartTooltipScalarValue) => string;
 };
-type CampaignTypeContributionMetricKey = "views" | "clicks" | "atbs" | "orders" | "spend" | "revenue";
-type CampaignTypeContributionTableMetricKey = "spend" | "views" | "clicks" | "orders" | "ctr" | "cr" | "drr";
+type CampaignTypeContributionMetricKey = "views" | "clicks" | "atbs" | "orders" | "spend";
 type CampaignTypeContributionType = {
   key: string;
   label: string;
   color: string;
   order: number;
-};
-type CampaignTypeContributionTypeTotals = {
-  views: number;
-  clicks: number;
-  atbs: number;
-  orders: number;
-  spend: number;
-  revenue: number;
 };
 type CampaignTypeContributionRow = {
   day: string;
@@ -110,27 +101,17 @@ type CampaignTypeContributionRow = {
   [key: string]: string | number;
 };
 
-const EMPTY_CAMPAIGN_TYPE_TOTALS: CampaignTypeContributionTypeTotals = {
-  views: 0,
-  clicks: 0,
-  atbs: 0,
-  orders: 0,
-  spend: 0,
-  revenue: 0,
-};
-const CAMPAIGN_TYPE_CONTRIBUTION_TABLE_METRICS: Array<{
-  key: CampaignTypeContributionTableMetricKey;
+const CAMPAIGN_TYPE_CONTRIBUTION_METRICS: Array<{
+  key: CampaignTypeContributionMetricKey;
   label: string;
-  getValue: (totals: CampaignTypeContributionTypeTotals) => number | null;
+  tooltipLabel: string;
   formatter: (value: ChartTooltipScalarValue) => string;
 }> = [
-  { key: "spend", label: "Расход", getValue: (totals) => totals.spend, formatter: (value) => formatMoney(value, true) },
-  { key: "views", label: "Показы", getValue: (totals) => totals.views, formatter: (value) => formatCompactNumber(value) },
-  { key: "clicks", label: "Клики", getValue: (totals) => totals.clicks, formatter: (value) => formatNumber(value) },
-  { key: "orders", label: "Заказы", getValue: (totals) => totals.orders, formatter: (value) => formatNumber(value) },
-  { key: "ctr", label: "CTR", getValue: (totals) => computeRate(totals.clicks, totals.views), formatter: (value) => formatPercent(value) },
-  { key: "cr", label: "CR", getValue: (totals) => computeRate(totals.orders, totals.clicks), formatter: (value) => formatPercent(value) },
-  { key: "drr", label: "ДРР", getValue: (totals) => computeDrr(totals.spend, totals.revenue), formatter: (value) => formatPercent(value) },
+  { key: "views", label: "Показы", tooltipLabel: "Показы", formatter: (value) => formatNumber(value) },
+  { key: "clicks", label: "Клики", tooltipLabel: "Клики", formatter: (value) => formatNumber(value) },
+  { key: "atbs", label: "Корзины", tooltipLabel: "Корзины", formatter: (value) => formatNumber(value) },
+  { key: "orders", label: "Заказы", tooltipLabel: "Заказы", formatter: (value) => formatNumber(value) },
+  { key: "spend", label: "Расход", tooltipLabel: "Расход", formatter: (value) => formatMoney(value, true) },
 ] as const;
 
 function chartTooltipFormatter(
@@ -2007,6 +1988,7 @@ export function ProductOverviewCharts({
   const [hiddenStockSeries, setHiddenStockSeries] = useState<string[]>([]);
   const [hiddenEfficiencySeries, setHiddenEfficiencySeries] = useState<string[]>([]);
   const [hiddenClusterSeries, setHiddenClusterSeries] = useState<string[]>([]);
+  const [campaignTypeContributionMetric, setCampaignTypeContributionMetric] = useState<CampaignTypeContributionMetricKey>("views");
   const activeWindowProductKeyRef = useRef<string | null>(null);
   const activeWindow = controlledActiveWindow ?? internalActiveWindow;
   const setActiveWindow = onActiveWindowChange ?? setInternalActiveWindow;
@@ -2039,6 +2021,7 @@ export function ProductOverviewCharts({
     setHiddenStockSeries([]);
     setHiddenEfficiencySeries([]);
     setHiddenClusterSeries([]);
+    setCampaignTypeContributionMetric("views");
   }, [product.article]);
 
   const visibleDailyRows = sliceByWindow(sortDailyRows(product.daily_stats), activeWindow);
@@ -2079,7 +2062,6 @@ export function ProductOverviewCharts({
       atbs: new Map<string, Record<string, number>>(),
       orders: new Map<string, Record<string, number>>(),
       spend: new Map<string, Record<string, number>>(),
-      revenue: new Map<string, Record<string, number>>(),
     } satisfies Record<CampaignTypeContributionMetricKey, Map<string, Record<string, number>>>;
 
     dayRows.forEach((row) => {
@@ -2100,8 +2082,7 @@ export function ProductOverviewCharts({
         const atbsBucket = metricMaps.atbs.get(row.day);
         const ordersBucket = metricMaps.orders.get(row.day);
         const spendBucket = metricMaps.spend.get(row.day);
-        const revenueBucket = metricMaps.revenue.get(row.day);
-        if (!viewsBucket || !clicksBucket || !atbsBucket || !ordersBucket || !spendBucket || !revenueBucket) {
+        if (!viewsBucket || !clicksBucket || !atbsBucket || !ordersBucket || !spendBucket) {
           return;
         }
         viewsBucket[type.key] = (viewsBucket[type.key] ?? 0) + (toNumber(row.views) ?? 0);
@@ -2109,7 +2090,6 @@ export function ProductOverviewCharts({
         atbsBucket[type.key] = (atbsBucket[type.key] ?? 0) + (toNumber(row.atbs) ?? 0);
         ordersBucket[type.key] = (ordersBucket[type.key] ?? 0) + (toNumber(row.orders) ?? 0);
         spendBucket[type.key] = (spendBucket[type.key] ?? 0) + (toNumber(row.expense_sum) ?? 0);
-        revenueBucket[type.key] = (revenueBucket[type.key] ?? 0) + (toNumber(row.sum_price) ?? 0);
       });
     });
 
@@ -2145,19 +2125,8 @@ export function ProductOverviewCharts({
       },
       {} as Record<CampaignTypeContributionMetricKey, Record<string, number>>,
     );
-    const totalsByType = types.reduce<Record<string, CampaignTypeContributionTypeTotals>>((acc, type) => {
-      acc[type.key] = {
-        views: totalsByMetric.views[type.key] ?? 0,
-        clicks: totalsByMetric.clicks[type.key] ?? 0,
-        atbs: totalsByMetric.atbs[type.key] ?? 0,
-        orders: totalsByMetric.orders[type.key] ?? 0,
-        spend: totalsByMetric.spend[type.key] ?? 0,
-        revenue: totalsByMetric.revenue[type.key] ?? 0,
-      };
-      return acc;
-    }, {});
 
-    return { types, rowsByMetric, totalsByMetric, totalsByType };
+    return { types, rowsByMetric, totalsByMetric };
   }, [product.campaigns, visibleDailyRows]);
   const efficiencyRows = visibleDailyRows.map((row) => {
     const clicks = toNumber(row.clicks);
@@ -2238,15 +2207,15 @@ export function ProductOverviewCharts({
     { key: "atbs", label: "Корзины с РК", color: "#14a6a1", formatter: (value) => formatNumber(value) },
     { key: "ordersAds", label: "Заказы с РК", color: "#4ba66f", formatter: (value) => formatNumber(value) },
   ];
-  const campaignTypeContributionTableMetrics = CAMPAIGN_TYPE_CONTRIBUTION_TABLE_METRICS.map((metric) => {
-    const maxValue = Math.max(
-      0,
-      ...campaignTypeContribution.types.map((type) =>
-        metric.getValue(campaignTypeContribution.totalsByType[type.key] ?? EMPTY_CAMPAIGN_TYPE_TOTALS) ?? 0,
-      ),
-    );
-    return { ...metric, maxValue };
-  });
+  const activeCampaignTypeMetricConfig =
+    CAMPAIGN_TYPE_CONTRIBUTION_METRICS.find((item) => item.key === campaignTypeContributionMetric) ??
+    CAMPAIGN_TYPE_CONTRIBUTION_METRICS[0]!;
+  const campaignTypeContributionRows = campaignTypeContribution.rowsByMetric[campaignTypeContributionMetric] ?? [];
+  const campaignTypeContributionTotals = campaignTypeContribution.totalsByMetric[campaignTypeContributionMetric] ?? {};
+  const campaignTypeContributionGrandTotal = campaignTypeContribution.types.reduce(
+    (sum, type) => sum + (campaignTypeContributionTotals[type.key] ?? 0),
+    0,
+  );
   const stockTooltipConfigs: OverviewTooltipMetricConfig[] = [
     { key: "avgStock", label: "Средний остаток", color: "#2ea36f", formatter: (value) => `${formatNumber(value)} шт` },
   ];
@@ -2374,61 +2343,84 @@ export function ProductOverviewCharts({
           <div>
             <h4 className="font-display font-semibold text-[var(--color-ink)]">Вклад типов РК</h4>
           </div>
-          <ChartWindowSwitch activeWindow={activeWindow} onChange={setActiveWindow} />
-        </div>
-        <div className={cn("trend-chart", chartHeightClass, "overflow-x-auto")}>
-          {campaignTypeContribution.types.length ? (
-            <div
-              className="grid min-w-[760px] overflow-hidden rounded-[14px] border border-[var(--color-line)] bg-[var(--color-surface)]"
-              style={{ gridTemplateColumns: `minmax(130px,1.15fr) repeat(${campaignTypeContributionTableMetrics.length}, minmax(92px,1fr))` }}
-            >
-              <div className="border-b border-[var(--color-line)] bg-[var(--color-surface-strong)] px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-[var(--color-ink)]">
-                Тип РК
-              </div>
-              {campaignTypeContributionTableMetrics.map((metric) => (
-                <div
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="chart-window-switch">
+              {CAMPAIGN_TYPE_CONTRIBUTION_METRICS.map((metric) => (
+                <button
                   key={metric.key}
-                  className="border-b border-[var(--color-line)] bg-[var(--color-surface-strong)] px-3 py-2 text-center text-[10px] font-black uppercase tracking-[0.18em] text-[var(--color-ink)]"
+                  type="button"
+                  onClick={() => setCampaignTypeContributionMetric(metric.key)}
+                  className={metric.key === campaignTypeContributionMetric ? "chart-window-chip is-active" : "chart-window-chip"}
                 >
                   {metric.label}
-                </div>
+                </button>
               ))}
-              {campaignTypeContribution.types.map((type) => {
-                const typeTotals = campaignTypeContribution.totalsByType[type.key] ?? EMPTY_CAMPAIGN_TYPE_TOTALS;
-                return (
-                  <div key={type.key} className="contents">
-                    <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-3 py-2">
-                      <span
-                        className="rounded-full px-2.5 py-1 text-[10px] font-black uppercase leading-none text-white shadow-[0_8px_16px_rgba(31,23,53,0.12)]"
-                        style={{ backgroundColor: type.color }}
-                      >
-                        {type.key === "cpc" ? "CPC" : "CPM"}
-                      </span>
-                      <span className="truncate text-[11px] font-bold text-[var(--color-ink)]">{type.label.replace(/^CPM ·\s*/, "").replace(/^CPC$/, "Клики")}</span>
-                    </div>
-                    {campaignTypeContributionTableMetrics.map((metric) => {
-                      const value = metric.getValue(typeTotals);
-                      const ratio = metric.maxValue > 0 && value !== null ? Math.max(0.18, Math.min(1, value / metric.maxValue)) : 0.18;
-                      return (
-                        <div key={`${type.key}-${metric.key}`} className="border-b border-[var(--color-line)] px-3 py-2">
-                          <div
-                            className="flex h-5 w-full items-center justify-center rounded-[5px] px-2 text-[10px] font-black leading-none text-white shadow-[0_8px_16px_rgba(31,23,53,0.1)]"
-                            style={{ backgroundColor: type.color, opacity: 0.48 + ratio * 0.52 }}
-                            title={`${type.label} · ${metric.label}: ${metric.formatter(value)}`}
-                          >
-                            {metric.formatter(value)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
             </div>
+            <ChartWindowSwitch activeWindow={activeWindow} onChange={setActiveWindow} />
+          </div>
+        </div>
+        <div className={cn("trend-chart", chartHeightClass)}>
+          {campaignTypeContributionRows.length && campaignTypeContribution.types.length ? (
+            <ResponsiveContainer>
+              <ComposedChart
+                data={campaignTypeContributionRows}
+                margin={{ top: 12, right: 10, left: 6, bottom: 8 }}
+                syncId={overviewSyncId}
+                syncMethod="value"
+              >
+                <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={true} horizontal={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={DATE_TICK_PROPS}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={0}
+                  minTickGap={0}
+                  angle={-35}
+                  height={48}
+                  textAnchor="end"
+                />
+                <YAxis hide />
+                <Tooltip
+                  content={(props) => (
+                    <CampaignTypeContributionTooltip
+                      {...props}
+                      metricLabel={activeCampaignTypeMetricConfig.tooltipLabel}
+                      metricFormatter={activeCampaignTypeMetricConfig.formatter}
+                      types={campaignTypeContribution.types}
+                    />
+                  )}
+                />
+                {campaignTypeContribution.types.map((type) => (
+                  <Bar
+                    key={type.key}
+                    dataKey={type.key}
+                    name={type.label}
+                    stackId="campaign-type-contribution"
+                    fill={type.color}
+                    radius={[10, 10, 0, 0]}
+                    barSize={18}
+                  />
+                ))}
+              </ComposedChart>
+            </ResponsiveContainer>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted)]">Нет дневных данных по типам РК.</div>
           )}
         </div>
+        <ChartLegend
+          items={campaignTypeContribution.types.map((type) => {
+            const absolute = campaignTypeContributionTotals[type.key] ?? 0;
+            const share = campaignTypeContributionGrandTotal > 0 ? (absolute / campaignTypeContributionGrandTotal) * 100 : 0;
+            return {
+              key: type.key,
+              label: type.label,
+              value: `${activeCampaignTypeMetricConfig.formatter(absolute)} · ${formatPercent(share)}`,
+              color: type.color,
+              active: true,
+            };
+          })}
+        />
       </div>
 
       <div className="chart-card border-[rgba(20,166,161,0.18)] bg-[linear-gradient(180deg,rgba(235,250,248,0.96),rgba(244,253,251,0.92))]">

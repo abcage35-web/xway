@@ -612,6 +612,10 @@ html[data-theme="dark"] .catalog-issue-card.is-limit {
   border-left-color: rgba(255, 171, 64, 0.78);
 }
 
+html[data-theme="dark"] .catalog-issue-card.is-schedule_setup {
+  border-left-color: rgba(45, 212, 191, 0.78);
+}
+
 html[data-theme="dark"] .catalog-issue-card.is-turnover {
   border-left-color: rgba(92, 157, 255, 0.78);
 }
@@ -639,6 +643,12 @@ html[data-theme="dark"] .catalog-issue-pill.is-limit {
   color: #ffc078;
 }
 
+html[data-theme="dark"] .catalog-issue-pill.is-schedule_setup {
+  border-color: rgba(45, 212, 191, 0.2);
+  background: rgba(45, 212, 191, 0.1);
+  color: #5eead4;
+}
+
 html[data-theme="dark"] .catalog-issue-pill.is-turnover {
   border-color: rgba(92, 157, 255, 0.2);
   background: rgba(92, 157, 255, 0.1);
@@ -653,6 +663,11 @@ html[data-theme="dark"] .catalog-issue-metric-chip.is-budget {
 html[data-theme="dark"] .catalog-issue-metric-chip.is-limit {
   border-color: rgba(255, 171, 64, 0.18);
   background: rgba(255, 171, 64, 0.075);
+}
+
+html[data-theme="dark"] .catalog-issue-metric-chip.is-schedule_setup {
+  border-color: rgba(45, 212, 191, 0.18);
+  background: rgba(45, 212, 191, 0.075);
 }
 
 html[data-theme="dark"] .catalog-issue-metric-chip.is-turnover {
@@ -682,6 +697,12 @@ html[data-theme="dark"] .catalog-issue-inline-badge.is-limit {
   border-color: rgba(255, 171, 64, 0.26);
   background: rgba(255, 171, 64, 0.12);
   color: #ffc078;
+}
+
+html[data-theme="dark"] .catalog-issue-inline-badge.is-schedule_setup {
+  border-color: rgba(45, 212, 191, 0.26);
+  background: rgba(45, 212, 191, 0.12);
+  color: #5eead4;
 }
 
 html[data-theme="dark"] .catalog-issue-inline-badge.is-turnover {
@@ -718,6 +739,25 @@ html[data-theme="dark"] .catalog-article-analytics-settings,
 html[data-theme="dark"] .catalog-article-analytics-settings-row {
   border-color: rgba(255, 255, 255, 0.1);
   background: rgba(244, 240, 255, 0.05);
+}
+
+html[data-theme="dark"] .catalog-article-campaign-type-matrix,
+html[data-theme="dark"] .catalog-article-campaign-type-head,
+html[data-theme="dark"] .catalog-article-campaign-type-label,
+html[data-theme="dark"] .catalog-article-campaign-type-cell {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+html[data-theme="dark"] .catalog-article-campaign-type-matrix {
+  background: rgba(14, 18, 28, 0.74);
+}
+
+html[data-theme="dark"] .catalog-article-campaign-type-head {
+  background: rgba(27, 31, 42, 0.88);
+}
+
+html[data-theme="dark"] .catalog-article-campaign-type-label {
+  background: rgba(21, 24, 33, 0.82);
 }
 
 html[data-theme="dark"] .catalog-article-analytics-settings-button:hover,

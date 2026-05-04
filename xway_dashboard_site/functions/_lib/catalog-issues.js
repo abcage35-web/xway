@@ -1,6 +1,8 @@
-import { normalizeStatusPauseHistory } from "./products.js";
+import { normalizeSchedule, normalizeStatusPauseHistory } from "./products.js";
 import { XwayApiClient } from "./xway-client.js";
 import { mapWithConcurrency, parseCatalogChartProductRefs } from "./utils.js";
+
+const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "schedule_setup"];
 
 function toNumber(value) {
   if (value === null || value === undefined || value === "") {
@@ -292,7 +294,32 @@ function buildCampaignIssueSummaries(campaign, statusDays) {
     });
   });
 
-  return ["budget", "limit"]
+  if (isCampaignScheduleSetupIssue(campaign)) {
+    statusDays.forEach((day) => {
+      if (!day?.day) {
+        return;
+      }
+      const current = summaries.get("schedule_setup") || {
+        kind: "schedule_setup",
+        label: "Не настроено время показа",
+        hours: 0,
+        incidents: 0,
+        days: [],
+      };
+      current.hours += 24;
+      current.incidents += 1;
+      let dayEntry = current.days.find((item) => item.day === day.day);
+      if (!dayEntry) {
+        dayEntry = { day: day.day, label: day.label, hours: 0, incidents: 0, estimatedGap: null };
+        current.days.push(dayEntry);
+      }
+      dayEntry.hours += 24;
+      dayEntry.incidents += 1;
+      summaries.set("schedule_setup", current);
+    });
+  }
+
+  return CATALOG_ISSUE_KIND_ORDER
     .map((kind) => summaries.get(kind))
     .filter(Boolean)
     .map((summary) => {
@@ -302,11 +329,13 @@ function buildCampaignIssueSummaries(campaign, statusDays) {
           const activeHours = Math.max(24 - totalStoppedHours, 0);
           const dailyExpense = dailyExpenseByDay.get(dayEntry.day) ?? null;
           const estimatedGap =
-            dailyExpense !== null && dailyExpense > 0 && activeHours > 0
-              ? (dailyExpense / activeHours) * dayEntry.hours
-              : averageHourlySpendFallback > 0
-                ? averageHourlySpendFallback * dayEntry.hours
-                : null;
+            summary.kind === "schedule_setup"
+              ? null
+              : dailyExpense !== null && dailyExpense > 0 && activeHours > 0
+                ? (dailyExpense / activeHours) * dayEntry.hours
+                : averageHourlySpendFallback > 0
+                  ? averageHourlySpendFallback * dayEntry.hours
+                  : null;
           return { ...dayEntry, estimatedGap };
         })
         .sort((left, right) => left.day.localeCompare(right.day));
@@ -401,16 +430,31 @@ function formatCampaignStatusLabel(statusCode) {
 
 function resolveCampaignDisplayStatus(statusCode) {
   const normalized = String(statusCode || "").trim().toUpperCase();
-  if (normalized === "ACTIVE") {
+  const normalizedLower = normalized.toLowerCase();
+  if (normalized === "ACTIVE" || /актив/.test(normalizedLower)) {
     return "active";
   }
-  if (normalized === "FROZEN") {
+  if (normalized === "FROZEN" || /заморож|freeze|frozen/.test(normalizedLower)) {
     return "freeze";
   }
-  if (normalized === "PAUSED") {
+  if (normalized === "PAUSED" || /приост|pause|paused|stop|неактив/.test(normalizedLower)) {
     return "paused";
   }
   return "muted";
+}
+
+function isCampaignScheduleSetupIssue(campaign) {
+  const statusCode = normalizeCampaignStatusCode(campaign);
+  const displayStatus = resolveCampaignDisplayStatus(statusCode);
+  if (displayStatus !== "active" && displayStatus !== "paused") {
+    return false;
+  }
+  if (!campaign?.schedule_config) {
+    return false;
+  }
+  const schedule = campaign?.schedule_config || {};
+  const activeSlots = toNumber(schedule.active_slots);
+  return !schedule.schedule_active || (activeSlots !== null && activeSlots >= 168);
 }
 
 function collectCampaignDayMetrics(campaign, day) {
@@ -528,7 +572,7 @@ function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday)
     }
   }
 
-  return ["budget", "limit"]
+  return CATALOG_ISSUE_KIND_ORDER
     .map((kind) => aggregated.get(kind))
     .filter(Boolean)
     .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, spend, ...item }) => {
@@ -589,6 +633,7 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
         () => client.campaignStatusPauseHistoryFull(shopId, productId, Number(campaignId), { initialLimit: 120, targetStart: client.range.current_start }),
         {},
       );
+      const [schedulePayload, scheduleError] = await safeCall(() => client.campaignSchedule(shopId, productId, Number(campaignId)), {});
       return {
         id: campaignId,
         name: campaign?.name ?? null,
@@ -603,6 +648,7 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
         min_cpm_recom: campaign?.min_cpm_recom ?? null,
         mp_recom_bid: campaign?.mp_recom_bid ?? null,
         daily_exact: dailyExactPayload?.[String(campaignId)] || [],
+        schedule_config: scheduleError ? null : normalizeSchedule(schedulePayload || {}),
         status_logs: {
           pause_history: normalizeStatusPauseHistory(pausePayload || {}),
         },

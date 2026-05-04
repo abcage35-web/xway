@@ -570,6 +570,17 @@ export interface CatalogChartRow {
   ordered_sum_total: number;
   spent_sku_count: number;
   orders_by_campaign_type?: Record<string, number>;
+  metrics_by_campaign_type?: Record<
+    string,
+    {
+      views?: number;
+      clicks?: number;
+      atbs?: number;
+      orders?: number;
+      spend?: number;
+      revenue?: number;
+    }
+  >;
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
@@ -592,6 +603,7 @@ export interface CatalogChartTotals {
   rel_shks: number;
   rel_atbs: number;
   ordered_sum_total: number;
+  metrics_by_campaign_type?: CatalogChartRow["metrics_by_campaign_type"];
   ctr: number | null;
   cr1: number | null;
   cr2: number | null;
@@ -607,7 +619,7 @@ export interface CatalogChartProductRows {
 }
 
 export interface CatalogIssuesIssue {
-  kind: "budget" | "limit";
+  kind: "budget" | "limit" | "schedule_setup";
   title: string;
   hours: number;
   incidents: number;

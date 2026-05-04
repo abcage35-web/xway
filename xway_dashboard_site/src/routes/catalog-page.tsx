@@ -15,7 +15,7 @@ import {
   type CatalogChartCacheEntry,
   type CatalogChartProgressState,
 } from "../features/catalog/chart-service";
-import { CatalogSelectionChart } from "../components/catalog-selection-chart";
+import { CatalogSelectionChart, type OrdersDisplayMode } from "../components/catalog-selection-chart";
 import { SearchableMultiSelect, SearchableSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
 import { MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
 
@@ -72,7 +72,7 @@ const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
 const CATALOG_LOW_CR_CLICKS_THRESHOLD_DEFAULT = 20;
 const CATALOG_LOW_CR_PERCENT_THRESHOLD_DEFAULT = 2;
 const CATALOG_SLOW_TURNOVER_DAYS_DEFAULT = 30;
-const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "turnover"] as const;
+const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "schedule_setup", "turnover"] as const;
 const CATALOG_SUMMARY_METRIC_KEYS = [
   "spend",
   "views",
@@ -94,7 +94,7 @@ const CATALOG_SUMMARY_METRIC_KEYS = [
 ] as const;
 
 type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
-type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "turnover">, boolean>;
+type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "schedule_setup" | "turnover">, boolean>;
 type CatalogSummaryMetricKey = (typeof CATALOG_SUMMARY_METRIC_KEYS)[number];
 type CatalogSummarySparkline = {
   points: number[];
@@ -223,6 +223,7 @@ interface CatalogIssueTargetMeta {
 const DEFAULT_CATALOG_ISSUE_VISIBILITY: CatalogIssueVisibilityState = {
   budget: true,
   limit: true,
+  schedule_setup: true,
   turnover: true,
 };
 
@@ -504,6 +505,9 @@ function resolveCatalogIssueKindLabel(kind: CatalogIssueKind) {
   if (kind === "limit") {
     return "Израсходован лимит";
   }
+  if (kind === "schedule_setup") {
+    return "Не настроено время показа";
+  }
   return "Низкая оборачиваемость";
 }
 
@@ -513,6 +517,9 @@ function resolveCatalogIssueKindCaption(kind: CatalogIssueKind) {
   }
   if (kind === "limit") {
     return "Остановки из-за дневного лимита";
+  }
+  if (kind === "schedule_setup") {
+    return "Расписание показов выключено или открыто на все 168 часов";
   }
   return "Активная реклама при низкой оборачиваемости";
 }
@@ -530,6 +537,13 @@ function resolveCatalogIssueKindTone(kind: CatalogIssueKind) {
       shell: "is-limit",
       badge: "is-limit is-primary",
       metric: "is-limit",
+    };
+  }
+  if (kind === "schedule_setup") {
+    return {
+      shell: "is-schedule_setup",
+      badge: "is-schedule_setup is-primary",
+      metric: "is-schedule_setup",
     };
   }
   return {
@@ -630,6 +644,9 @@ function resolveCatalogIssueKindShortLabel(kind: CatalogIssueKind) {
   }
   if (kind === "limit") {
     return "Лимит";
+  }
+  if (kind === "schedule_setup") {
+    return "Время";
   }
   return "Оборач.";
 }
@@ -1415,6 +1432,7 @@ function readCatalogIssueSettings(): CatalogIssueSettingsState {
       visibleKinds: {
         budget: parsed.visibleKinds?.budget ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.budget,
         limit: parsed.visibleKinds?.limit ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.limit,
+        schedule_setup: parsed.visibleKinds?.schedule_setup ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.schedule_setup,
         turnover: parsed.visibleKinds?.turnover ?? DEFAULT_CATALOG_ISSUE_VISIBILITY.turnover,
       },
     };
@@ -2036,6 +2054,15 @@ function chunkItems<T>(items: T[], size: number) {
   return chunks;
 }
 
+function catalogChartHasCampaignTypeData(response: CatalogChartResponse | null) {
+  if (!response) {
+    return false;
+  }
+  const hasTypeValues = (row: CatalogChartResponse["rows"][number]) =>
+    Object.values(row.orders_by_campaign_type || {}).some((value) => (toNumber(value) ?? 0) > 0);
+  return response.rows.some(hasTypeValues) || (response.product_rows || []).some((product) => product.rows.some(hasTypeValues));
+}
+
 function formatIssueIncidents(count: number) {
   const abs = Math.abs(count) % 100;
   const last = abs % 10;
@@ -2127,7 +2154,7 @@ function applyCatalogIssueDowntimeThreshold(
   issue: CatalogArticleYesterdayIssues["issues"][number],
   downtimeThresholdHours: number,
 ): CatalogArticleYesterdayIssues["issues"][number] | null {
-  if (issue.kind === "turnover") {
+  if (issue.kind === "turnover" || issue.kind === "schedule_setup") {
     return issue;
   }
   if (!Number.isFinite(downtimeThresholdHours) || downtimeThresholdHours <= 0) {
@@ -2456,6 +2483,10 @@ export function CatalogPage() {
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartProgress, setChartProgress] = useState<CatalogChartProgressState | null>(null);
+  const [chartOrdersDisplayMode, setChartOrdersDisplayMode] = useState<OrdersDisplayMode>("all");
+  const [chartCampaignTypesLoading, setChartCampaignTypesLoading] = useState(false);
+  const [chartCampaignTypesError, setChartCampaignTypesError] = useState<string | null>(null);
+  const [chartCampaignTypesLoadedKey, setChartCampaignTypesLoadedKey] = useState<string | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
   const [articleIssuesCopyState, setArticleIssuesCopyState] = useState<"idle" | "copied" | "error">("idle");
@@ -2473,6 +2504,7 @@ export function CatalogPage() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const chartFetchAbortRef = useRef<AbortController | null>(null);
+  const chartCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
@@ -2811,6 +2843,7 @@ export function CatalogPage() {
         productRefs: [ref],
         start: payload.range.current_start,
         end: payload.range.current_end,
+        includeCampaignTypes: true,
       });
       const productRows = response.product_rows?.find((item) => item.product_ref === ref)?.rows ?? response.rows;
       setArticleAnalyticsByRef((current) => ({
@@ -2843,6 +2876,7 @@ export function CatalogPage() {
   useEffect(() => {
     return () => {
       chartFetchAbortRef.current?.abort();
+      chartCampaignTypesAbortRef.current?.abort();
       articleIssuesAbortRef.current?.abort();
       if (articleIssuesCopyResetRef.current !== null) {
         window.clearTimeout(articleIssuesCopyResetRef.current);
@@ -2888,6 +2922,10 @@ export function CatalogPage() {
 
   useEffect(() => {
     chartFetchAbortRef.current?.abort();
+    chartCampaignTypesAbortRef.current?.abort();
+    setChartCampaignTypesLoading(false);
+    setChartCampaignTypesError(null);
+    setChartCampaignTypesLoadedKey(null);
     if (chartCollapsed) {
       setChartLoading(false);
       setChartError(null);
@@ -2947,6 +2985,7 @@ export function CatalogPage() {
               productRefs: productChunks[chunkIndex]!,
               start: chartSourceRangeStart,
               end: chartRangeEnd,
+              includeCampaignTypes: false,
               signal: controller.signal,
             });
             if (controller.signal.aborted) {
@@ -2991,6 +3030,83 @@ export function CatalogPage() {
     };
   }, [chartCollapsed, chartRangeEnd, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceSelectionCount]);
 
+  const loadChartCampaignTypes = async () => {
+    if (
+      chartCampaignTypesLoading ||
+      chartLoading ||
+      !chartSourceSelectionCount ||
+      chartCampaignTypesLoadedKey === chartSourceCacheKey ||
+      catalogChartHasCampaignTypeData(chartSourceData)
+    ) {
+      return;
+    }
+
+    chartCampaignTypesAbortRef.current?.abort();
+    const controller = new AbortController();
+    chartCampaignTypesAbortRef.current = controller;
+    setChartCampaignTypesLoading(true);
+    setChartCampaignTypesError(null);
+
+    try {
+      let nextResponse: CatalogChartResponse | null = null;
+      const productChunks = chunkItems(chartSourceProductRefs, 8);
+      for (const chunkRefs of productChunks) {
+        const chunkResponse = await fetchCatalogChart({
+          productRefs: chunkRefs,
+          start: chartSourceRangeStart,
+          end: chartRangeEnd,
+          includeCampaignTypes: true,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) {
+          return;
+        }
+        nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, chartSourceSelectionCount);
+      }
+
+      if (!controller.signal.aborted && nextResponse) {
+        setChartCampaignTypesLoadedKey(chartSourceCacheKey);
+        setChartSourceData(nextResponse);
+        setChartProgress((current) =>
+          current?.cacheKey === chartSourceCacheKey
+            ? {
+                ...current,
+                loadedProductsCount: nextResponse.loaded_products_count,
+                errorCount: nextResponse.errors.length,
+              }
+            : current,
+        );
+        chartCacheRef.current.set(chartSourceCacheKey, {
+          response: nextResponse,
+          productRefsKey: chartSourceProductRefsKey,
+          rangeStart: chartSourceRangeStart,
+          rangeEnd: chartRangeEnd,
+        });
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setChartCampaignTypesError(error instanceof Error ? error.message : "Не удалось догрузить детализацию РК.");
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setChartCampaignTypesLoading(false);
+      }
+    }
+  };
+
+  const handleChartOrdersDisplayModeChange = (nextMode: OrdersDisplayMode) => {
+    setChartOrdersDisplayMode(nextMode);
+    if (nextMode === "campaign-types") {
+      void loadChartCampaignTypes();
+    }
+  };
+
+  useEffect(() => {
+    if (chartOrdersDisplayMode === "campaign-types" && !chartLoading && chartSourceData && !catalogChartHasCampaignTypeData(chartSourceData)) {
+      void loadChartCampaignTypes();
+    }
+  });
+
   const retryChartErrors = async () => {
     if (!chartSourceData?.errors.length || chartLoading) {
       return;
@@ -3025,6 +3141,7 @@ export function CatalogPage() {
           productRefs: chunkRefs,
           start: chartSourceRangeStart,
           end: chartRangeEnd,
+          includeCampaignTypes: false,
           signal: controller.signal,
         });
         if (controller.signal.aborted) {
@@ -3804,6 +3921,10 @@ export function CatalogPage() {
               rangeLabel={chartRangeLabel}
               windowDays={chartWindow}
               onRetryErrors={chartSourceData?.errors.length ? retryChartErrors : undefined}
+              ordersDisplayMode={chartOrdersDisplayMode}
+              onChangeOrdersDisplayMode={handleChartOrdersDisplayModeChange}
+              orderTypeLoading={chartCampaignTypesLoading}
+              orderTypeError={chartCampaignTypesError}
             />
           ) : (
             <div className="text-sm text-[var(--color-muted)]">

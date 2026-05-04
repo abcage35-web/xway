@@ -79,6 +79,7 @@ export async function fetchCatalogChart(options: {
   productRefs: string[];
   start?: string | null;
   end?: string | null;
+  includeCampaignTypes?: boolean;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/catalog-chart", window.location.origin);
@@ -86,6 +87,9 @@ export async function fetchCatalogChart(options: {
     url.searchParams.set("products", options.productRefs.join(","));
   }
   appendRange(url.searchParams, options.start, options.end);
+  if (options.includeCampaignTypes) {
+    url.searchParams.set("include_campaign_types", "1");
+  }
   return requestJson<CatalogChartResponse>(url.toString(), options.signal);
 }
 
