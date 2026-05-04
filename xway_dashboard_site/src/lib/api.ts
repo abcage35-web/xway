@@ -68,10 +68,14 @@ export async function fetchCatalog(options: {
   start?: string | null;
   end?: string | null;
   signal?: AbortSignal;
+  forceRefresh?: boolean;
 }) {
   const url = new URL("/api/catalog", buildBaseUrl(options.request));
   url.searchParams.set("mode", "compact");
   appendRange(url.searchParams, options.start, options.end);
+  if (options.forceRefresh) {
+    url.searchParams.set("refresh", "1");
+  }
   return requestJson<CatalogResponse>(url.toString(), options.signal ?? options.request?.signal);
 }
 

@@ -270,7 +270,7 @@ function statusPauseHistoryReachedStart(payload, start) {
 }
 
 export class XwayApiClient {
-  constructor(env, { start = null, end = null } = {}) {
+  constructor(env, { start = null, end = null, forceRefresh = false } = {}) {
     const storageState = parseStorageState(env);
     if (!storageState) {
       throw new Error("Native handlers require XWAY_STORAGE_STATE_JSON, XWAY_STORAGE_STATE_BASE64, XWAY_COOKIE_HEADER, or XWAY_SESSIONID.");
@@ -282,6 +282,7 @@ export class XwayApiClient {
     this.csrfToken = String(env.XWAY_CSRF_TOKEN || env.XWAY_CSRFTOKEN || "").trim() || csrfTokenFromState(storageState);
     this.baseOrigin = "https://am.xway.ru";
     this.cacheNamespace = sanitizeOrigin(env.CF_PAGES_URL || env.API_ORIGIN || "xway");
+    this.forceRefresh = Boolean(forceRefresh);
   }
 
   static canUseNative(env) {
@@ -345,7 +346,7 @@ export class XwayApiClient {
 
   async listShops() {
     const cacheKey = `${this.cacheNamespace}:shops`;
-    const cached = getCached(cacheStore.shopList, cacheKey, SHOP_LIST_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.shopList, cacheKey, SHOP_LIST_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -356,7 +357,7 @@ export class XwayApiClient {
 
   async shopDetails(shopId) {
     const cacheKey = `${this.cacheNamespace}:shop-details:${shopId}`;
-    const cached = getCached(cacheStore.shopDetails, cacheKey, SHOP_DETAILS_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.shopDetails, cacheKey, SHOP_DETAILS_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -369,7 +370,7 @@ export class XwayApiClient {
 
   async shopListing(shopId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:shop-listing:${shopId}:${start}:${end}`;
-    const cached = getCached(cacheStore.shopListing, cacheKey, SHOP_LISTING_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.shopListing, cacheKey, SHOP_LISTING_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }

@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, ExternalLink, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData, useNavigate, useRevalidator } from "react-router";
+import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
@@ -101,6 +101,13 @@ const CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY = "xway-catalog-quick-view-setting
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
+const CATALOG_CHART_FETCH_CHUNK_SIZE = 6;
+const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
+const CATALOG_CHART_MAX_RETRY_PASSES = 6;
+const CATALOG_CHART_CHUNK_DELAY_MS = 650;
+const CATALOG_CHART_RETRY_DELAY_MS = 1600;
+const CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE = 4;
+const CATALOG_CAMPAIGN_TYPE_MAX_ATTEMPTS = 5;
 const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
 const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
 const CATALOG_LOW_CR_CLICKS_THRESHOLD_DEFAULT = 20;
@@ -2277,6 +2284,44 @@ function chunkItems<T>(items: T[], size: number) {
   return chunks;
 }
 
+function catalogChartErrorRefs(response: CatalogChartResponse | null, availableRefs?: Set<string>) {
+  if (!response?.errors.length) {
+    return [];
+  }
+  return [
+    ...new Set(
+      response.errors
+        .map((error) => error.product)
+        .filter((ref) => !availableRefs || availableRefs.has(ref)),
+    ),
+  ];
+}
+
+function catalogChartLoadedProductRefs(response: CatalogChartResponse) {
+  return new Set((response.product_rows || []).map((product) => product.product_ref));
+}
+
+async function waitForCatalogRetry(ms: number, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+
+    const handleAbort = () => {
+      window.clearTimeout(timeoutId);
+      signal.removeEventListener("abort", handleAbort);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
 async function fetchCatalogCampaignTypeTotalsForRefs({
   productRefs,
   start,
@@ -2289,37 +2334,61 @@ async function fetchCatalogCampaignTypeTotalsForRefs({
   signal?: AbortSignal;
 }) {
   const totalsByRef: Record<string, CatalogCampaignTypeTotalsByKey> = {};
-  const failedRefs: string[] = [];
+  let pendingRefs = [...new Set(productRefs)];
 
-  for (const chunkRefs of chunkItems(productRefs, 8)) {
-    try {
-      const response = await fetchCatalogChart({
-        productRefs: chunkRefs,
-        start,
-        end,
-        includeCampaignTypes: true,
-        signal,
-      });
-      if (signal?.aborted) {
-        return { totalsByRef, failedRefs };
-      }
+  for (let attempt = 0; attempt < CATALOG_CAMPAIGN_TYPE_MAX_ATTEMPTS && pendingRefs.length; attempt += 1) {
+    const failedRefs = new Set<string>();
+    const chunks = chunkItems(pendingRefs, CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE);
 
-      if (response.product_rows?.length) {
-        response.product_rows.forEach((product) => {
-          totalsByRef[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+      const chunkRefs = chunks[chunkIndex]!;
+      try {
+        const response = await fetchCatalogChart({
+          productRefs: chunkRefs,
+          start,
+          end,
+          includeCampaignTypes: true,
+          signal,
         });
-      } else if (chunkRefs.length === 1) {
-        totalsByRef[chunkRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
+        if (signal?.aborted) {
+          return { totalsByRef, failedRefs: [...failedRefs] };
+        }
+
+        const loadedRefs = catalogChartLoadedProductRefs(response);
+        if (response.product_rows?.length) {
+          response.product_rows.forEach((product) => {
+            totalsByRef[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
+          });
+        } else if (chunkRefs.length === 1) {
+          loadedRefs.add(chunkRefs[0]!);
+          totalsByRef[chunkRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
+        }
+
+        catalogChartErrorRefs(response).forEach((ref) => failedRefs.add(ref));
+        chunkRefs.forEach((ref) => {
+          if (!loadedRefs.has(ref) && !totalsByRef[ref]) {
+            failedRefs.add(ref);
+          }
+        });
+      } catch {
+        if (signal?.aborted) {
+          return { totalsByRef, failedRefs: [...failedRefs] };
+        }
+        chunkRefs.forEach((ref) => failedRefs.add(ref));
       }
-    } catch {
-      if (signal?.aborted) {
-        return { totalsByRef, failedRefs };
+
+      if (signal && chunkIndex < chunks.length - 1) {
+        await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, signal);
       }
-      failedRefs.push(...chunkRefs);
+    }
+
+    pendingRefs = [...failedRefs].filter((ref) => !totalsByRef[ref]);
+    if (signal && pendingRefs.length && attempt < CATALOG_CAMPAIGN_TYPE_MAX_ATTEMPTS - 1) {
+      await waitForCatalogRetry(CATALOG_CHART_RETRY_DELAY_MS, signal);
     }
   }
 
-  return { totalsByRef, failedRefs };
+  return { totalsByRef, failedRefs: pendingRefs };
 }
 
 function catalogChartHasCampaignTypeData(response: CatalogChartResponse | null) {
@@ -2734,7 +2803,6 @@ function sumCatalogShopArticleField(shops: CatalogShop[], field: keyof Pick<Cata
 export function CatalogPage() {
   const { payload: loaderPayload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
-  const revalidator = useRevalidator();
   const [query, setQuery] = useState("");
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
   const [selectedIssueShopIds, setSelectedIssueShopIds] = useState<string[]>([]);
@@ -2760,6 +2828,8 @@ export function CatalogPage() {
   const [chartCampaignTypesError, setChartCampaignTypesError] = useState<string | null>(null);
   const [chartCampaignTypesLoadedKey, setChartCampaignTypesLoadedKey] = useState<string | null>(null);
   const [catalogArticleOverridesByRef, setCatalogArticleOverridesByRef] = useState<Record<string, CatalogArticle>>({});
+  const [catalogPayloadOverride, setCatalogPayloadOverride] = useState<CatalogResponse | null>(null);
+  const [turnoverPayloadOverride, setTurnoverPayloadOverride] = useState<CatalogResponse | null>(null);
   const [catalogRowCampaignTypesByRef, setCatalogRowCampaignTypesByRef] = useState<Record<string, CatalogCampaignTypeTotalsByKey>>({});
   const [catalogRowCampaignTypesRefreshToken, setCatalogRowCampaignTypesRefreshToken] = useState(0);
   const [turnoverOrdersOverridesByRef, setTurnoverOrdersOverridesByRef] = useState<Record<string, number | string | null | undefined>>({});
@@ -2785,14 +2855,15 @@ export function CatalogPage() {
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const chartCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRowCampaignTypesAbortRef = useRef<AbortController | null>(null);
+  const chartAutoRetrySignatureRef = useRef<string | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
   const payload = useMemo(
-    () => applyCatalogArticleOverrides(loaderPayload, catalogArticleOverridesByRef),
-    [catalogArticleOverridesByRef, loaderPayload],
+    () => applyCatalogArticleOverrides(catalogPayloadOverride ?? loaderPayload, catalogArticleOverridesByRef),
+    [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
   );
-  const catalogRefreshing = refreshingAllCatalog || revalidator.state !== "idle";
+  const catalogRefreshing = refreshingAllCatalog;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2803,14 +2874,10 @@ export function CatalogPage() {
 
   useEffect(() => {
     setCatalogArticleOverridesByRef({});
+    setCatalogPayloadOverride(null);
+    setTurnoverPayloadOverride(null);
     setTurnoverOrdersOverridesByRef({});
   }, [loaderPayload]);
-
-  useEffect(() => {
-    if (revalidator.state === "idle") {
-      setRefreshingAllCatalog(false);
-    }
-  }, [revalidator.state]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2840,7 +2907,7 @@ export function CatalogPage() {
   const categoryOptions = buildCategoryOptions(payload);
   const skuOptions = buildSkuOptions(payload);
   const turnoverOrdersByRef = new Map<string, number | string | null | undefined>(
-    (turnoverPayload?.shops || []).flatMap((shop) =>
+    ((turnoverPayloadOverride ?? turnoverPayload)?.shops || []).flatMap((shop) =>
       shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
     ),
   );
@@ -3262,6 +3329,7 @@ export function CatalogPage() {
     setChartCampaignTypesLoading(false);
     setChartCampaignTypesError(null);
     setChartCampaignTypesLoadedKey(null);
+    chartAutoRetrySignatureRef.current = null;
     if (chartCollapsed) {
       setChartLoading(false);
       setChartError(null);
@@ -3303,7 +3371,7 @@ export function CatalogPage() {
       setChartLoading(true);
       setChartError(null);
       setChartSourceData(null);
-      const productChunks = chunkItems(chartSourceProductRefs, 24);
+      const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CHART_FETCH_CHUNK_SIZE);
       setChartProgress({
         cacheKey: chartSourceCacheKey,
         selectionCount: chartSourceSelectionCount,
@@ -3337,6 +3405,9 @@ export function CatalogPage() {
               loadedChunkCount: chunkIndex + 1,
               errorCount: nextResponse.errors.length,
             });
+            if (chunkIndex < productChunks.length - 1) {
+              await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
+            }
           }
 
           if (nextResponse) {
@@ -3385,8 +3456,9 @@ export function CatalogPage() {
 
     try {
       let nextResponse: CatalogChartResponse | null = null;
-      const productChunks = chunkItems(chartSourceProductRefs, 8);
-      for (const chunkRefs of productChunks) {
+      const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE);
+      for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
+        const chunkRefs = productChunks[chunkIndex]!;
         const chunkResponse = await fetchCatalogChart({
           productRefs: chunkRefs,
           start: chartSourceRangeStart,
@@ -3398,6 +3470,9 @@ export function CatalogPage() {
           return;
         }
         nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, chartSourceSelectionCount);
+        if (chunkIndex < productChunks.length - 1) {
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
+        }
       }
 
       if (!controller.signal.aborted && nextResponse) {
@@ -3443,13 +3518,13 @@ export function CatalogPage() {
     }
   });
 
-  const retryChartErrors = async () => {
+  const retryChartErrors = async (maxPasses = CATALOG_CHART_MAX_RETRY_PASSES) => {
     if (!chartSourceData?.errors.length || chartLoading) {
       return;
     }
 
     const availableRefs = new Set(chartSourceProductRefs);
-    const failedRefs = [...new Set(chartSourceData.errors.map((error) => error.product).filter((ref) => availableRefs.has(ref)))];
+    let failedRefs = catalogChartErrorRefs(chartSourceData, availableRefs);
     if (!failedRefs.length) {
       return;
     }
@@ -3457,42 +3532,61 @@ export function CatalogPage() {
     chartFetchAbortRef.current?.abort();
     const controller = new AbortController();
     chartFetchAbortRef.current = controller;
-    const productChunks = chunkItems(failedRefs, 24);
     setChartLoading(true);
     setChartError(null);
-    setChartProgress({
-      cacheKey: chartSourceCacheKey,
-      selectionCount: chartSourceSelectionCount,
-      loadedProductsCount: chartSourceData.loaded_products_count,
-      chunkCount: productChunks.length,
-      loadedChunkCount: 0,
-      errorCount: chartSourceData.errors.length,
-    });
 
     try {
       let nextResponse = chartSourceData;
-      for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
-        const chunkRefs = productChunks[chunkIndex]!;
-        const chunkResponse = await fetchCatalogChart({
-          productRefs: chunkRefs,
-          start: chartSourceRangeStart,
-          end: chartRangeEnd,
-          includeCampaignTypes: false,
-          signal: controller.signal,
-        });
-        if (controller.signal.aborted) {
-          return;
-        }
-        nextResponse = mergeCatalogChartRetryResponse(nextResponse, chunkResponse, chartSourceSelectionCount, chunkRefs);
-        setChartSourceData(nextResponse);
+      for (let passIndex = 0; passIndex < maxPasses && failedRefs.length; passIndex += 1) {
+        const productChunks = chunkItems(failedRefs, CATALOG_CHART_RETRY_CHUNK_SIZE);
         setChartProgress({
           cacheKey: chartSourceCacheKey,
           selectionCount: chartSourceSelectionCount,
           loadedProductsCount: nextResponse.loaded_products_count,
           chunkCount: productChunks.length,
-          loadedChunkCount: chunkIndex + 1,
+          loadedChunkCount: 0,
           errorCount: nextResponse.errors.length,
         });
+
+        for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
+          const chunkRefs = productChunks[chunkIndex]!;
+          try {
+            const chunkResponse = await fetchCatalogChart({
+              productRefs: chunkRefs,
+              start: chartSourceRangeStart,
+              end: chartRangeEnd,
+              includeCampaignTypes: false,
+              signal: controller.signal,
+            });
+            if (controller.signal.aborted) {
+              return;
+            }
+            nextResponse = mergeCatalogChartRetryResponse(nextResponse, chunkResponse, chartSourceSelectionCount, chunkRefs);
+            setChartSourceData(nextResponse);
+          } catch (error) {
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+
+          setChartProgress({
+            cacheKey: chartSourceCacheKey,
+            selectionCount: chartSourceSelectionCount,
+            loadedProductsCount: nextResponse.loaded_products_count,
+            chunkCount: productChunks.length,
+            loadedChunkCount: chunkIndex + 1,
+            errorCount: nextResponse.errors.length,
+          });
+
+          if (chunkIndex < productChunks.length - 1) {
+            await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
+          }
+        }
+
+        failedRefs = catalogChartErrorRefs(nextResponse, availableRefs);
+        if (failedRefs.length && passIndex < maxPasses - 1) {
+          await waitForCatalogRetry(CATALOG_CHART_RETRY_DELAY_MS, controller.signal);
+        }
       }
 
       chartCacheRef.current.set(chartSourceCacheKey, {
@@ -3511,6 +3605,29 @@ export function CatalogPage() {
       }
     }
   };
+
+  useEffect(() => {
+    if (chartCollapsed || chartLoading || !chartSourceData?.errors.length) {
+      return undefined;
+    }
+
+    const failedRefs = catalogChartErrorRefs(chartSourceData, new Set(chartSourceProductRefs));
+    if (!failedRefs.length) {
+      return undefined;
+    }
+
+    const signature = `${chartSourceCacheKey}|${failedRefs.join(",")}`;
+    if (chartAutoRetrySignatureRef.current === signature) {
+      return undefined;
+    }
+    chartAutoRetrySignatureRef.current = signature;
+
+    const timer = window.setTimeout(() => {
+      void retryChartErrors(CATALOG_CHART_MAX_RETRY_PASSES);
+    }, CATALOG_CHART_RETRY_DELAY_MS);
+
+    return () => window.clearTimeout(timer);
+  });
 
   const ctr = visibleTotals.views > 0 ? (visibleTotals.clicks / visibleTotals.views) * 100 : 0;
   const cr = visibleTotals.clicks > 0 ? (visibleTotals.orders / visibleTotals.clicks) * 100 : 0;
@@ -3962,7 +4079,7 @@ export function CatalogPage() {
     }
   };
 
-  const handleRefreshAllCatalog = () => {
+  const handleRefreshAllCatalog = async () => {
     setCatalogRefreshError(null);
     setRefreshingAllCatalog(true);
     chartCacheRef.current.clear();
@@ -3979,7 +4096,30 @@ export function CatalogPage() {
     setChartCampaignTypesLoadedKey(null);
     setChartCampaignTypesError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
-    revalidator.revalidate();
+    try {
+      const nextPayload = await fetchCatalog({
+        start: loaderPayload.range.current_start,
+        end: loaderPayload.range.current_end,
+        forceRefresh: true,
+      });
+      setCatalogPayloadOverride(nextPayload);
+
+      const turnoverEnd = nextPayload.range.current_end;
+      const turnoverStart = shiftIsoDate(turnoverEnd, -2);
+      try {
+        const nextTurnoverPayload =
+          nextPayload.range.current_start === turnoverStart && nextPayload.range.current_end === turnoverEnd
+            ? nextPayload
+            : await fetchCatalog({ start: turnoverStart, end: turnoverEnd, forceRefresh: true });
+        setTurnoverPayloadOverride(nextTurnoverPayload);
+      } catch {
+        setTurnoverPayloadOverride(null);
+      }
+    } catch (error) {
+      setCatalogRefreshError(await readApiErrorMessage(error));
+    } finally {
+      setRefreshingAllCatalog(false);
+    }
   };
 
   const handleRefreshArticle = async (productRef: string) => {
@@ -3994,6 +4134,7 @@ export function CatalogPage() {
       const currentCatalog = await fetchCatalog({
         start: payload.range.current_start,
         end: payload.range.current_end,
+        forceRefresh: true,
       });
       const nextArticle = findCatalogArticleByRef(currentCatalog, productRef);
       if (!nextArticle) {
@@ -4004,7 +4145,7 @@ export function CatalogPage() {
       const turnoverEnd = payload.range.current_end;
       const turnoverStart = shiftIsoDate(turnoverEnd, -2);
       try {
-        const turnoverCatalog = await fetchCatalog({ start: turnoverStart, end: turnoverEnd });
+        const turnoverCatalog = await fetchCatalog({ start: turnoverStart, end: turnoverEnd, forceRefresh: true });
         const turnoverArticle = findCatalogArticleByRef(turnoverCatalog, productRef);
         if (turnoverArticle) {
           setTurnoverOrdersOverridesByRef((current) => ({ ...current, [productRef]: turnoverArticle.ordered_report }));

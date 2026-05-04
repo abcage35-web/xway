@@ -567,9 +567,11 @@ class XwayApi:
         storage_state_path: str,
         start: Optional[str] = None,
         end: Optional[str] = None,
+        force_refresh: bool = False,
     ):
         self.storage_state_path = storage_state_path
         self.session = load_session(storage_state_path)
+        self.force_refresh = force_refresh
         self._shop_list_cache: Optional[List[Dict[str, Any]]] = None
         self._shop_listing_cache: Dict[int, Dict[str, Any]] = {}
         self._shop_details_cache: Dict[int, Dict[str, Any]] = {}
@@ -605,7 +607,7 @@ class XwayApi:
         return self._request_json("GET", url, referer=referer, **kwargs)
 
     def list_shops(self) -> List[Dict[str, Any]]:
-        cached = _get_cached_shop_list(self.storage_state_path)
+        cached = None if self.force_refresh else _get_cached_shop_list(self.storage_state_path)
         if cached is not None:
             self._shop_list_cache = cached
         if self._shop_list_cache is None:
@@ -622,10 +624,10 @@ class XwayApi:
         return self._shop_details_cache[shop_id]
 
     def shop_listing(self, shop_id: int) -> Dict[str, Any]:
-        if shop_id in self._shop_listing_cache:
+        if not self.force_refresh and shop_id in self._shop_listing_cache:
             return self._shop_listing_cache[shop_id]
 
-        cached = _get_cached_shop_listing(self.storage_state_path, self.range["current_start"], self.range["current_end"], shop_id)
+        cached = None if self.force_refresh else _get_cached_shop_listing(self.storage_state_path, self.range["current_start"], self.range["current_end"], shop_id)
         if cached is not None:
             self._shop_listing_cache[shop_id] = cached
             return cached
@@ -3163,9 +3165,10 @@ def _collect_shop_catalog(
     start: str,
     end: str,
     include_extended: bool = False,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     shop_id = int(shop["id"])
-    api = XwayApi(storage_state_path, start=start, end=end)
+    api = XwayApi(storage_state_path, start=start, end=end, force_refresh=force_refresh)
     listing, listing_error = _safe_call(
         lambda sid=shop_id: api.shop_listing(sid),
         {"list_wo": {}, "list_stat": {}},
@@ -3319,13 +3322,14 @@ def collect_catalog(
     start: Optional[str] = None,
     end: Optional[str] = None,
     mode: str = "compact",
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     normalized_mode = "full" if str(mode).lower() == "full" else "compact"
     include_extended = normalized_mode == "full"
-    api = XwayApi(storage_state_path, start=start, end=end)
+    api = XwayApi(storage_state_path, start=start, end=end, force_refresh=force_refresh)
     range_payload = api.range
     cache_key = _catalog_cache_key(storage_state_path, range_payload, normalized_mode)
-    cached = _get_cached_catalog(cache_key)
+    cached = None if force_refresh else _get_cached_catalog(cache_key)
     if cached is not None:
         return cached
 
@@ -3341,6 +3345,7 @@ def collect_catalog(
                 range_payload["current_start"],
                 range_payload["current_end"],
                 include_extended=include_extended,
+                force_refresh=force_refresh,
             )
             for shop in shops
         ]

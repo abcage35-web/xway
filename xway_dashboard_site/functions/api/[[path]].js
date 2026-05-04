@@ -94,6 +94,7 @@ async function handleNativeRequest(context, pathname) {
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
         mode: searchParamsValue(requestUrl, "mode") || "compact",
+        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
       }),
     );
   }

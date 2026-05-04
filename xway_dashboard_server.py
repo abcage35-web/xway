@@ -172,8 +172,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             query = parse_qs(parsed.query)
             _, start, end, _, _ = self._request_params()
             catalog_mode = (query.get("mode", ["compact"])[0] or "compact").strip().lower()
+            force_refresh = query.get("refresh", ["0"])[0] == "1" or query.get("force_refresh", ["0"])[0] == "1"
             try:
-                payload = collect_catalog(STORAGE_STATE, start=start, end=end, mode=catalog_mode)
+                payload = collect_catalog(STORAGE_STATE, start=start, end=end, mode=catalog_mode, force_refresh=force_refresh)
             except Exception as exc:
                 self._write_json(
                     {

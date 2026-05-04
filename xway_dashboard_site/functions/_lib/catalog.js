@@ -752,10 +752,10 @@ async function collectShopCatalog(shop, client, includeExtended) {
   return shopPayload;
 }
 
-export async function collectCatalog(env, { start = null, end = null, mode = "compact" } = {}) {
+export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false } = {}) {
   const normalizedMode = String(mode || "").toLowerCase() === "full" ? "full" : "compact";
   const includeExtended = normalizedMode === "full";
-  const client = new XwayApiClient(env, { start, end });
+  const client = new XwayApiClient(env, { start, end, forceRefresh });
   const shops = await client.listShops();
   const catalogShops = await mapWithConcurrency(shops, 4, (shop) => collectShopCatalog(shop, client, includeExtended));
 
