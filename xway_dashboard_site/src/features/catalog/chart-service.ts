@@ -175,6 +175,85 @@ function buildCatalogChartTotals(rows: CatalogChartResponse["rows"]): CatalogCha
   };
 }
 
+function createEmptyCatalogChartMergeRow(row: CatalogChartResponse["rows"][number]): CatalogChartResponse["rows"][number] {
+  return {
+    ...row,
+    views: 0,
+    clicks: 0,
+    atbs: 0,
+    orders: 0,
+    ordered_total: 0,
+    avg_stock: 0,
+    expense_sum: 0,
+    sum_price: 0,
+    rel_sum_price: 0,
+    rel_shks: 0,
+    rel_atbs: 0,
+    ordered_sum_total: 0,
+    spent_sku_count: 0,
+    orders_by_campaign_type: {},
+    metrics_by_campaign_type: {},
+    ctr: null,
+    cr1: null,
+    cr2: null,
+    crf: null,
+    cr_total: null,
+    drr_total: null,
+    drr_ads: null,
+  };
+}
+
+function addCatalogChartSourceRow(target: CatalogChartResponse["rows"][number], row: CatalogChartResponse["rows"][number]) {
+  target.views += toNumber(row.views) ?? 0;
+  target.clicks += toNumber(row.clicks) ?? 0;
+  target.atbs += toNumber(row.atbs) ?? 0;
+  target.orders += toNumber(row.orders) ?? 0;
+  target.ordered_total += toNumber(row.ordered_total) ?? 0;
+  target.avg_stock += toNumber(row.avg_stock) ?? 0;
+  target.expense_sum += toNumber(row.expense_sum) ?? 0;
+  target.sum_price += toNumber(row.sum_price) ?? 0;
+  target.rel_sum_price += toNumber(row.rel_sum_price) ?? 0;
+  target.rel_shks += toNumber(row.rel_shks) ?? 0;
+  target.rel_atbs += toNumber(row.rel_atbs) ?? 0;
+  target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
+  target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
+  addCatalogChartTypeOrders(target, row.orders_by_campaign_type);
+  addCatalogChartTypeMetrics(target, row.metrics_by_campaign_type);
+}
+
+function rebuildCatalogChartResponseFromProductRows(
+  response: CatalogChartResponse,
+  productRows: NonNullable<CatalogChartResponse["product_rows"]>,
+  selectionCount: number,
+): CatalogChartResponse {
+  const uniqueProductRows = [...new Map(productRows.map((product) => [product.product_ref, product])).values()];
+  const rowsByDay = new Map(response.rows.map((row) => [row.day, createEmptyCatalogChartMergeRow(row)]));
+
+  uniqueProductRows.forEach((product) => {
+    product.rows.forEach((row) => {
+      const target = rowsByDay.get(row.day);
+      if (!target) {
+        rowsByDay.set(row.day, finalizeCatalogChartRow(row));
+        return;
+      }
+      addCatalogChartSourceRow(target, row);
+    });
+  });
+
+  const rows = [...rowsByDay.values()]
+    .map((row) => finalizeCatalogChartRow(row))
+    .sort((left, right) => left.day.localeCompare(right.day));
+
+  return {
+    ...response,
+    selection_count: selectionCount,
+    loaded_products_count: uniqueProductRows.length,
+    rows,
+    product_rows: uniqueProductRows,
+    totals: buildCatalogChartTotals(rows),
+  };
+}
+
 export function mergeCatalogChartResponses(
   current: CatalogChartResponse | null,
   incoming: CatalogChartResponse,
@@ -184,31 +263,7 @@ export function mergeCatalogChartResponses(
   const seedRows = current?.rows.length ? current.rows : incoming.rows;
 
   seedRows.forEach((row) => {
-    rowsByDay.set(row.day, {
-      ...row,
-      views: 0,
-      clicks: 0,
-      atbs: 0,
-      orders: 0,
-      ordered_total: 0,
-      avg_stock: 0,
-      expense_sum: 0,
-      sum_price: 0,
-      rel_sum_price: 0,
-      rel_shks: 0,
-      rel_atbs: 0,
-      ordered_sum_total: 0,
-      spent_sku_count: 0,
-      orders_by_campaign_type: {},
-      metrics_by_campaign_type: {},
-      ctr: null,
-      cr1: null,
-      cr2: null,
-      crf: null,
-      cr_total: null,
-      drr_total: null,
-      drr_ads: null,
-    });
+    rowsByDay.set(row.day, createEmptyCatalogChartMergeRow(row));
   });
 
   [current?.rows ?? [], incoming.rows].forEach((sourceRows) => {
@@ -218,21 +273,7 @@ export function mergeCatalogChartResponses(
         rowsByDay.set(row.day, finalizeCatalogChartRow(row));
         return;
       }
-      target.views += toNumber(row.views) ?? 0;
-      target.clicks += toNumber(row.clicks) ?? 0;
-      target.atbs += toNumber(row.atbs) ?? 0;
-      target.orders += toNumber(row.orders) ?? 0;
-      target.ordered_total += toNumber(row.ordered_total) ?? 0;
-      target.avg_stock += toNumber(row.avg_stock) ?? 0;
-      target.expense_sum += toNumber(row.expense_sum) ?? 0;
-      target.sum_price += toNumber(row.sum_price) ?? 0;
-      target.rel_sum_price += toNumber(row.rel_sum_price) ?? 0;
-      target.rel_shks += toNumber(row.rel_shks) ?? 0;
-      target.rel_atbs += toNumber(row.rel_atbs) ?? 0;
-      target.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
-      target.spent_sku_count += toNumber(row.spent_sku_count) ?? 0;
-      addCatalogChartTypeOrders(target, row.orders_by_campaign_type);
-      addCatalogChartTypeMetrics(target, row.metrics_by_campaign_type);
+      addCatalogChartSourceRow(target, row);
     });
   });
 
@@ -261,7 +302,14 @@ export function mergeCatalogChartRetryResponse(
   retriedRefs: string[],
 ): CatalogChartResponse {
   const retried = new Set(retriedRefs);
-  const merged = mergeCatalogChartResponses(current, incoming, selectionCount);
+  const currentWithoutRetried = current.product_rows?.length
+    ? rebuildCatalogChartResponseFromProductRows(
+        current,
+        current.product_rows.filter((product) => !retried.has(product.product_ref)),
+        selectionCount,
+      )
+    : current;
+  const merged = mergeCatalogChartResponses(currentWithoutRetried, incoming, selectionCount);
   return {
     ...merged,
     errors: [

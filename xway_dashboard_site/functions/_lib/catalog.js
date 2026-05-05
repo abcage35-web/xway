@@ -286,6 +286,22 @@ function addCatalogChartCampaignTypeMetricsMap(target, source) {
   }
 }
 
+function buildCatalogCampaignTypeTotalsFromCampaigns(campaigns) {
+  const target = { metrics_by_campaign_type: {} };
+  for (const campaign of campaigns || []) {
+    const stat = campaign?.stat || {};
+    addCatalogChartCampaignTypeMetrics(target, catalogChartCampaignTypeForRow(campaign || {}), {
+      views: stat.views,
+      clicks: stat.clicks,
+      atbs: stat.atbs,
+      orders: stat.orders,
+      spend: stat.sum ?? stat.expense_sum,
+      revenue: stat.sum_price ?? stat.revenue,
+    });
+  }
+  return cloneCatalogChartCampaignTypeMetrics(target.metrics_by_campaign_type);
+}
+
 function isCatalogCampaignRow(source) {
   const hasIdentity = ["id", "campaign_id", "external_id", "wb_id"].some((field) => source?.[field] !== null && source?.[field] !== undefined);
   const hasCampaignFields = [
@@ -636,8 +652,14 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
     const campaignData = product.campaigns_data || {};
     const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
     const campaignDetailSource = productId !== null && productId !== undefined ? campaignDetailSources.detailByProductId.get(String(productId)) : null;
+    const hasCampaignSlots = productHasCampaignSlots(product, statItem);
     const stat = statItem.stat || {};
     const spend = statItem.spend || {};
+    const hasPeriodAdStats = [stat.sum, stat.views, stat.clicks, stat.atbs, stat.orders].some((value) => asFloat(value) > 0);
+    const rawCampaignTypeTotals = campaignDetailSource ? buildCatalogCampaignTypeTotalsFromCampaigns(campaignDetailSource.campaign_wb || []) : null;
+    const campaignTypeTotals = campaignDetailSource
+      ? (Object.keys(rawCampaignTypeTotals).length || !hasCampaignSlots || !hasPeriodAdStats ? rawCampaignTypeTotals : null)
+      : (hasCampaignSlots ? null : {});
     const articlePayload = {
       article,
       product_id: productId,
@@ -651,6 +673,7 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
       stock: statItem.stock,
       campaigns_count: statItem.campaigns_count,
       campaign_states: normalizeCatalogCampaignStates(campaignData, [product, statItem, campaignDetailSource]),
+      campaign_type_totals: campaignTypeTotals,
       manual_campaigns_count: campaignData.manual_count,
       expense_sum: stat.sum,
       views: stat.views,

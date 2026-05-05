@@ -107,7 +107,7 @@ const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
 const CATALOG_CHART_CHUNK_DELAY_MS = 650;
 const CATALOG_CHART_RETRY_DELAY_MS = 1600;
-const CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE = 4;
+const CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE = 1;
 const CATALOG_CAMPAIGN_TYPE_MAX_ATTEMPTS = 5;
 const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
 const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
@@ -488,6 +488,26 @@ function createEmptyCatalogCampaignTypeTotalsByKey(): CatalogCampaignTypeTotalsB
   ) as CatalogCampaignTypeTotalsByKey;
 }
 
+function normalizeCatalogCampaignTypeTotals(raw: CatalogArticle["campaign_type_totals"]): CatalogCampaignTypeTotalsByKey | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+
+  const totals = createEmptyCatalogCampaignTypeTotalsByKey();
+  CATALOG_CAMPAIGN_TYPE_ROWS.forEach((type) => {
+    const source = raw[type.key] || {};
+    totals[type.key] = {
+      views: toNumber(source.views) ?? 0,
+      clicks: toNumber(source.clicks) ?? 0,
+      atbs: toNumber(source.atbs) ?? 0,
+      orders: toNumber(source.orders) ?? 0,
+      spend: toNumber(source.spend) ?? 0,
+      revenue: toNumber(source.revenue) ?? 0,
+    };
+  });
+  return totals;
+}
+
 function buildCatalogCampaignTypeTotals(rows: CatalogChartResponse["rows"]): CatalogCampaignTypeTotalsByKey {
   const totals = createEmptyCatalogCampaignTypeTotalsByKey();
 
@@ -506,6 +526,15 @@ function buildCatalogCampaignTypeTotals(rows: CatalogChartResponse["rows"]): Cat
   });
 
   return totals;
+}
+
+function resolveCatalogCampaignTypeTotalsForArticle(
+  article: CatalogArticle,
+  productRef: string,
+  totalsByRef: Record<string, CatalogCampaignTypeTotalsByKey>,
+  chartData: CatalogChartResponse | null,
+) {
+  return normalizeCatalogCampaignTypeTotals(article.campaign_type_totals) ?? resolveCatalogCampaignTypeTotalsForRef(productRef, totalsByRef, chartData);
 }
 
 function resolveCatalogCampaignTypeTotalsForRef(
@@ -2951,20 +2980,26 @@ export function CatalogPage() {
     () => applyCatalogArticleOverrides(catalogPayloadOverride ?? loaderPayload, catalogArticleOverridesByRef),
     [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
   );
-  const catalogArticleMetaByRef = useMemo(() => {
-    const next = new Map<string, { article: string; name: string; label: string }>();
+  const catalogArticleByRef = useMemo(() => {
+    const next = new Map<string, CatalogArticle>();
     payload.shops.forEach((shop) => {
       shop.articles.forEach((article) => {
-        const ref = `${shop.id}:${article.product_id}`;
-        next.set(ref, {
-          article: article.article,
-          name: article.name,
-          label: `${article.article} · ${article.name}`,
-        });
+        next.set(`${shop.id}:${article.product_id}`, article);
       });
     });
     return next;
   }, [payload]);
+  const catalogArticleMetaByRef = useMemo(() => {
+    const next = new Map<string, { article: string; name: string; label: string }>();
+    catalogArticleByRef.forEach((article, ref) => {
+      next.set(ref, {
+        article: article.article,
+        name: article.name,
+        label: `${article.article} · ${article.name}`,
+      });
+    });
+    return next;
+  }, [catalogArticleByRef]);
   const catalogRefreshing = refreshingAllCatalog || refreshingShopIds.length > 0;
   const abortCatalogRefresh = () => {
     catalogRefreshAbortRef.current?.abort();
@@ -3341,9 +3376,11 @@ export function CatalogPage() {
         : null,
     [chartSourceData, chartProductRefsKey, chartRangeStart, chartRangeEnd],
   );
+  const catalogRowCampaignTypeFallbackRefs = chartProductRefs.filter((ref) => !catalogArticleByRef.get(ref)?.campaign_type_totals);
+  const catalogRowCampaignTypeFallbackRefsKey = catalogRowCampaignTypeFallbackRefs.join(",");
   const catalogRowCampaignTypesRangeStart = payload.range.current_start;
   const catalogRowCampaignTypesRangeEnd = payload.range.current_end;
-  const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${chartProductRefsKey}|${catalogRowCampaignTypesRefreshToken}`;
+  const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${catalogRowCampaignTypeFallbackRefsKey}|${catalogRowCampaignTypesRefreshToken}`;
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
   const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
@@ -3523,7 +3560,7 @@ export function CatalogPage() {
 
   useEffect(() => {
     catalogRowCampaignTypesAbortRef.current?.abort();
-    if (catalogRefreshing || !chartProductRefs.length) {
+    if (catalogRefreshing || !catalogRowCampaignTypeFallbackRefs.length) {
       setCatalogRowCampaignTypesByRef({});
       return;
     }
@@ -3535,7 +3572,7 @@ export function CatalogPage() {
     const timer = window.setTimeout(() => {
       (async () => {
         const result = await fetchCatalogCampaignTypeTotalsForRefs({
-          productRefs: chartProductRefs,
+          productRefs: catalogRowCampaignTypeFallbackRefs,
           start: catalogRowCampaignTypesRangeStart,
           end: catalogRowCampaignTypesRangeEnd,
           signal: controller.signal,
@@ -3553,7 +3590,7 @@ export function CatalogPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [catalogRefreshing, catalogRowCampaignTypesKey, catalogRowCampaignTypesRangeStart, catalogRowCampaignTypesRangeEnd, chartProductRefsKey]);
+  }, [catalogRefreshing, catalogRowCampaignTypesKey, catalogRowCampaignTypesRangeStart, catalogRowCampaignTypesRangeEnd, catalogRowCampaignTypeFallbackRefsKey]);
 
   useEffect(() => {
     chartFetchAbortRef.current?.abort();
@@ -5552,7 +5589,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
@@ -5569,7 +5607,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
@@ -5586,7 +5625,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
@@ -5603,7 +5643,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
@@ -5620,7 +5661,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
@@ -5637,7 +5679,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
@@ -5654,7 +5697,8 @@ export function CatalogPage() {
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => (
                           <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForRef(
+                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                              article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,

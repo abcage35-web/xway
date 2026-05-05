@@ -2210,6 +2210,27 @@ def _add_catalog_chart_campaign_type_metrics_map(target: Dict[str, Any], source:
         _add_catalog_chart_campaign_type_metrics(target, str(type_key), metrics if isinstance(metrics, dict) else {})
 
 
+def _build_catalog_campaign_type_totals_from_campaigns(campaigns: Any) -> Dict[str, Dict[str, float]]:
+    target: Dict[str, Any] = {"metrics_by_campaign_type": {}}
+    for campaign in (campaigns if isinstance(campaigns, list) else []):
+        if not isinstance(campaign, dict):
+            continue
+        stat = campaign.get("stat") if isinstance(campaign.get("stat"), dict) else {}
+        _add_catalog_chart_campaign_type_metrics(
+            target,
+            _catalog_chart_campaign_type_for_row(campaign),
+            {
+                "views": stat.get("views"),
+                "clicks": stat.get("clicks"),
+                "atbs": stat.get("atbs"),
+                "orders": stat.get("orders"),
+                "spend": stat.get("sum", stat.get("expense_sum")),
+                "revenue": stat.get("sum_price", stat.get("revenue")),
+            },
+        )
+    return _clone_catalog_chart_campaign_type_metrics(target.get("metrics_by_campaign_type"))
+
+
 def _is_catalog_campaign_row(source: Dict[str, Any]) -> bool:
     has_identity = any(source.get(field) is not None for field in ("id", "campaign_id", "external_id", "wb_id"))
     has_campaign_fields = any(
@@ -3228,8 +3249,22 @@ def _collect_shop_catalog(
         campaign_data = product.get("campaigns_data") or {}
         stat_item = stat_map.get(str(product_id), {}) if product_id is not None else {}
         campaign_detail_source = campaign_detail_sources.get(str(product_id)) if product_id is not None else None
+        has_campaign_slots = _catalog_product_has_campaign_slots(product, stat_item)
         stat = stat_item.get("stat") or {}
         spend = stat_item.get("spend") or {}
+        has_period_ad_stats = any(
+            _as_float(stat.get(metric)) > 0
+            for metric in ("sum", "views", "clicks", "atbs", "orders")
+        )
+        raw_campaign_type_totals = (
+            _build_catalog_campaign_type_totals_from_campaigns((campaign_detail_source or {}).get("campaign_wb") or [])
+            if campaign_detail_source is not None
+            else None
+        )
+        if campaign_detail_source is not None:
+            campaign_type_totals = raw_campaign_type_totals if (raw_campaign_type_totals or not has_campaign_slots or not has_period_ad_stats) else None
+        else:
+            campaign_type_totals = None if has_campaign_slots else {}
         article_payload = {
             "article": article,
             "product_id": product_id,
@@ -3243,6 +3278,7 @@ def _collect_shop_catalog(
             "stock": stat_item.get("stock"),
             "campaigns_count": stat_item.get("campaigns_count"),
             "campaign_states": _normalize_catalog_campaign_states(campaign_data, [product, stat_item, campaign_detail_source]),
+            "campaign_type_totals": campaign_type_totals,
             "manual_campaigns_count": campaign_data.get("manual_count"),
             "expense_sum": stat.get("sum"),
             "views": stat.get("views"),

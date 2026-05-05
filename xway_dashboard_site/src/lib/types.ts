@@ -481,6 +481,15 @@ export interface ProductsResponse {
   requested_articles: string[];
 }
 
+export interface CatalogArticleCampaignTypeMetrics {
+  views?: number | string | null;
+  clicks?: number | string | null;
+  atbs?: number | string | null;
+  orders?: number | string | null;
+  spend?: number | string | null;
+  revenue?: number | string | null;
+}
+
 export interface CatalogArticle {
   article: string;
   product_id: number;
@@ -494,6 +503,7 @@ export interface CatalogArticle {
   stock: number | null;
   campaigns_count: number | null;
   campaign_states: CatalogCampaignState[];
+  campaign_type_totals?: Record<string, CatalogArticleCampaignTypeMetrics> | null;
   manual_campaigns_count: number | null;
   expense_sum: number | null;
   views: number | null;
