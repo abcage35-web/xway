@@ -9,6 +9,9 @@ const PRODUCT_INFO_CACHE_TTL_MS = 180000;
 const PRODUCT_DYNAMICS_CACHE_TTL_MS = 180000;
 const PRODUCT_STOCKS_RULE_CACHE_TTL_MS = 180000;
 const PRODUCT_DAILY_STATS_CHUNK_DAYS = 30;
+const XWAY_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+const XWAY_REQUEST_MAX_ATTEMPTS = 3;
+const XWAY_REQUEST_RETRY_DELAY_MS = 900;
 
 const cacheStore = {
   shopList: new Map(),
@@ -35,6 +38,20 @@ function getCached(map, key, ttlMs) {
 
 function setCached(map, key, value) {
   map.set(key, { createdAt: Date.now(), value: cloneValue(value) });
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function normalizeXwayErrorText(status, text, statusText) {
+  const rawText = String(text || statusText || "").replace(/\s+/g, " ").trim();
+  if (status === 503 || /503 Service Temporarily Unavailable|temporarily unavailable/i.test(rawText)) {
+    return "XWAY временно недоступен (503).";
+  }
+  return rawText || `HTTP ${status}`;
 }
 
 function decodeBase64(value) {
@@ -328,20 +345,28 @@ export class XwayApiClient {
       headers.set("content-type", "application/json; charset=utf-8");
       requestBody = JSON.stringify(json);
     }
-    const response = await fetch(url.toString(), {
-      method,
-      headers,
-      body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : requestBody,
-      redirect: "follow",
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`XWAY request failed (${response.status}): ${text || response.statusText}`);
+    for (let attempt = 0; attempt < XWAY_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+      const response = await fetch(url.toString(), {
+        method,
+        headers,
+        body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : requestBody,
+        redirect: "follow",
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        const message = normalizeXwayErrorText(response.status, text, response.statusText);
+        if (XWAY_RETRYABLE_STATUSES.has(response.status) && attempt < XWAY_REQUEST_MAX_ATTEMPTS - 1) {
+          await wait(XWAY_REQUEST_RETRY_DELAY_MS * (attempt + 1));
+          continue;
+        }
+        throw new Error(`XWAY request failed (${response.status}): ${message}`);
+      }
+      if (response.status === 204) {
+        return null;
+      }
+      return response.json();
     }
-    if (response.status === 204) {
-      return null;
-    }
-    return response.json();
+    throw new Error("XWAY request failed: retry attempts exhausted");
   }
 
   async listShops() {

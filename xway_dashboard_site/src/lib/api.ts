@@ -142,7 +142,7 @@ export async function fetchCatalog(options: {
   if (options.forceRefresh) {
     url.searchParams.set("refresh", "1");
   }
-  return requestJson<CatalogResponse>(url.toString(), options.signal ?? options.request?.signal);
+  return requestJson<CatalogResponse>(url.toString(), options.signal ?? options.request?.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
 }
 
 export async function fetchCatalogChart(options: {
@@ -160,7 +160,7 @@ export async function fetchCatalogChart(options: {
   if (options.includeCampaignTypes) {
     url.searchParams.set("include_campaign_types", "1");
   }
-  return requestJson<CatalogChartResponse>(url.toString(), options.signal);
+  return requestJson<CatalogChartResponse>(url.toString(), options.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
 }
 
 export async function fetchCatalogIssues(options: {
@@ -174,7 +174,7 @@ export async function fetchCatalogIssues(options: {
     url.searchParams.set("products", options.productRefs.join(","));
   }
   appendRange(url.searchParams, options.start, options.end);
-  return requestJson<CatalogIssuesResponse>(url.toString(), options.signal);
+  return requestJson<CatalogIssuesResponse>(url.toString(), options.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
 }
 
 export async function fetchClusterDetail(options: {

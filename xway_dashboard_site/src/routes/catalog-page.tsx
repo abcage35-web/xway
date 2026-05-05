@@ -2742,23 +2742,23 @@ async function copyTextToClipboard(text: string) {
   }
 }
 
-async function readApiErrorMessage(error: unknown) {
-  const normalizeMessage = (message: string) => {
-    const text = String(message || "").trim();
-    if (!text) {
-      return "Не удалось собрать ошибки по артикулам.";
-    }
-    const hasHtml = /<!doctype html>|<html[\s>]|<head[\s>]|<body[\s>]/i.test(text);
-    const statusMatch = text.match(/\b(5\d{2}|4\d{2})\b/);
-    if (hasHtml && statusMatch?.[1] === "503") {
-      return "XWAY временно недоступен (503).";
-    }
-    if (hasHtml && statusMatch?.[1]) {
-      return `Ошибка API (${statusMatch[1]}).`;
-    }
-    return text;
-  };
+function normalizeApiErrorMessage(message: string) {
+  const text = String(message || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "Не удалось собрать ошибки по артикулам.";
+  }
+  const hasHtml = /<!doctype html>|<html[\s>]|<head[\s>]|<body[\s>]/i.test(text);
+  const statusMatch = text.match(/\b(5\d{2}|4\d{2})\b/);
+  if ((hasHtml || /temporarily unavailable|XWAY request failed \(503\)/i.test(text)) && statusMatch?.[1] === "503") {
+    return "XWAY временно недоступен (503).";
+  }
+  if (hasHtml && statusMatch?.[1]) {
+    return `Ошибка API (${statusMatch[1]}).`;
+  }
+  return text;
+}
 
+async function readApiErrorMessage(error: unknown) {
   if (error instanceof Response) {
     if (error.bodyUsed) {
       return error.statusText ? `Ошибка API (${error.status}): ${error.statusText}` : `Ошибка API (${error.status})`;
@@ -2769,13 +2769,13 @@ async function readApiErrorMessage(error: unknown) {
     }
     try {
       const parsed = JSON.parse(text) as { error?: string };
-      return normalizeMessage(parsed.error || text);
+      return normalizeApiErrorMessage(parsed.error || text);
     } catch {
-      return normalizeMessage(text);
+      return normalizeApiErrorMessage(text);
     }
   }
   if (error instanceof Error) {
-    return normalizeMessage(error.message);
+    return normalizeApiErrorMessage(error.message);
   }
   return "Не удалось собрать ошибки по артикулам.";
 }
@@ -4500,7 +4500,7 @@ export function CatalogPage() {
           },
         });
         mergeChartResponseForRefs(chartResponse, refs, options.progress);
-        const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, item.error]));
+        const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
         const loadedChartRefs = new Set((chartResponse.product_rows || []).map((item) => item.product_ref));
         if (!loadedChartRefs.size && refs.length === 1 && !chartErrorsByRef.has(refs[0]!)) {
           loadedChartRefs.add(refs[0]!);
