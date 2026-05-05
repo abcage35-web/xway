@@ -101,8 +101,8 @@ const CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY = "xway-catalog-quick-view-setting
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
-const CATALOG_CHART_FETCH_CHUNK_SIZE = 48;
-const CATALOG_REFRESH_FETCH_CHUNK_SIZE = 48;
+const CATALOG_CHART_FETCH_CHUNK_SIZE = 24;
+const CATALOG_REFRESH_FETCH_CHUNK_SIZE = 24;
 const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
 const CATALOG_CHART_CHUNK_DELAY_MS = 650;
@@ -2360,6 +2360,24 @@ function catalogChartLoadedProductRefs(response: CatalogChartResponse) {
   return new Set((response.product_rows || []).map((product) => product.product_ref));
 }
 
+function isWorkerSubrequestLimitMessage(message: string) {
+  return /too many subrequests/i.test(message);
+}
+
+function catalogChartWorkerSubrequestLimitRefs(response: CatalogChartResponse | null, availableRefs?: Set<string>) {
+  if (!response?.errors.length) {
+    return [];
+  }
+  return [
+    ...new Set(
+      response.errors
+        .filter((error) => isWorkerSubrequestLimitMessage(error.error))
+        .map((error) => error.product)
+        .filter((ref) => !availableRefs || availableRefs.has(ref)),
+    ),
+  ];
+}
+
 async function waitForCatalogRetry(ms: number, signal: AbortSignal) {
   if (signal.aborted) {
     return Promise.reject(new DOMException("Aborted", "AbortError"));
@@ -2785,7 +2803,7 @@ function waitForCatalogIssuesRetry(ms: number, signal: AbortSignal) {
 
 async function isWorkerSubrequestLimitError(error: unknown) {
   const message = await readApiErrorMessage(error);
-  return /too many subrequests/i.test(message);
+  return isWorkerSubrequestLimitMessage(message);
 }
 
 function filterShops(
@@ -2987,6 +3005,91 @@ export function CatalogPage() {
   const openCatalogRefreshLogs = (productRef: string) => {
     setSelectedCatalogRefreshLogRef(productRef);
     setCatalogRefreshPanelOpen(true);
+  };
+  const fetchCatalogChartWorkerSafe = async ({
+    productRefs,
+    start: chartStart,
+    end: chartEnd,
+    includeCampaignTypes = false,
+    signal,
+    selectionCount,
+    chunkSize,
+    onWorkerLimit,
+  }: {
+    productRefs: string[];
+    start?: string | null;
+    end?: string | null;
+    includeCampaignTypes?: boolean;
+    signal?: AbortSignal;
+    selectionCount?: number;
+    chunkSize?: number;
+    onWorkerLimit?: (refs: string[]) => void;
+  }) => {
+    const refs = [...new Set(productRefs)];
+    const safeSelectionCount = selectionCount ?? refs.length;
+    const safeChunkSize = Math.max(1, chunkSize ?? (includeCampaignTypes ? CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE : CATALOG_CHART_FETCH_CHUNK_SIZE));
+
+    const fetchChunk = async (chunkRefs: string[]): Promise<CatalogChartResponse> => {
+      let response: CatalogChartResponse;
+      try {
+        response = await fetchCatalogChart({
+          productRefs: chunkRefs,
+          start: chartStart,
+          end: chartEnd,
+          includeCampaignTypes,
+          signal,
+        });
+      } catch (error) {
+        if (chunkRefs.length <= 1 || !(await isWorkerSubrequestLimitError(error))) {
+          throw error;
+        }
+        onWorkerLimit?.(chunkRefs);
+        const retryChunkSize = Math.max(1, Math.ceil(chunkRefs.length / 2));
+        let splitResponse: CatalogChartResponse | null = null;
+        for (const retryRefs of chunkItems(chunkRefs, retryChunkSize)) {
+          const retryResponse = await fetchChunk(retryRefs);
+          splitResponse = mergeCatalogChartResponses(splitResponse, retryResponse, safeSelectionCount);
+        }
+        if (!splitResponse) {
+          throw error;
+        }
+        return splitResponse;
+      }
+      if (signal?.aborted) {
+        return response;
+      }
+
+      const limitRefs = catalogChartWorkerSubrequestLimitRefs(response, new Set(chunkRefs));
+      if (!limitRefs.length || limitRefs.length === 1) {
+        return response;
+      }
+
+      onWorkerLimit?.(limitRefs);
+      const retryChunkSize = Math.max(1, Math.ceil(limitRefs.length / 2));
+      let nextResponse = response;
+      for (const retryRefs of chunkItems(limitRefs, retryChunkSize)) {
+        const retryResponse = await fetchChunk(retryRefs);
+        if (signal?.aborted) {
+          return nextResponse;
+        }
+        nextResponse = mergeCatalogChartRetryResponse(nextResponse, retryResponse, safeSelectionCount, retryRefs);
+      }
+      return nextResponse;
+    };
+
+    let nextResponse: CatalogChartResponse | null = null;
+    for (const chunkRefs of chunkItems(refs, safeChunkSize)) {
+      const chunkResponse = await fetchChunk(chunkRefs);
+      if (signal?.aborted) {
+        return chunkResponse;
+      }
+      nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, safeSelectionCount);
+    }
+
+    if (!nextResponse) {
+      throw new Error("Нет товаров для загрузки графика.");
+    }
+    return nextResponse;
   };
 
   useEffect(() => {
@@ -3336,11 +3439,12 @@ export function CatalogPage() {
       [ref]: { loading: true, error: null, rows: null },
     }));
     try {
-      const response = await fetchCatalogChart({
+      const response = await fetchCatalogChartWorkerSafe({
         productRefs: [ref],
         start: payload.range.current_start,
         end: payload.range.current_end,
         includeCampaignTypes: true,
+        selectionCount: 1,
       });
       const productRows = response.product_rows?.find((item) => item.product_ref === ref)?.rows ?? response.rows;
       setArticleAnalyticsByRef((current) => ({
@@ -3516,12 +3620,14 @@ export function CatalogPage() {
         try {
           let nextResponse: CatalogChartResponse | null = null;
           for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
-            const chunkResponse = await fetchCatalogChart({
+            const chunkResponse = await fetchCatalogChartWorkerSafe({
               productRefs: productChunks[chunkIndex]!,
               start: chartSourceRangeStart,
               end: chartRangeEnd,
               includeCampaignTypes: false,
               signal: controller.signal,
+              selectionCount: chartSourceSelectionCount,
+              chunkSize: CATALOG_CHART_FETCH_CHUNK_SIZE,
             });
             if (controller.signal.aborted) {
               return;
@@ -3590,12 +3696,14 @@ export function CatalogPage() {
       const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE);
       for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
         const chunkRefs = productChunks[chunkIndex]!;
-        const chunkResponse = await fetchCatalogChart({
+        const chunkResponse = await fetchCatalogChartWorkerSafe({
           productRefs: chunkRefs,
           start: chartSourceRangeStart,
           end: chartRangeEnd,
           includeCampaignTypes: true,
           signal: controller.signal,
+          selectionCount: chartSourceSelectionCount,
+          chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
         });
         if (controller.signal.aborted) {
           return;
@@ -3682,12 +3790,14 @@ export function CatalogPage() {
         for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
           const chunkRefs = productChunks[chunkIndex]!;
           try {
-            const chunkResponse = await fetchCatalogChart({
+            const chunkResponse = await fetchCatalogChartWorkerSafe({
               productRefs: chunkRefs,
               start: chartSourceRangeStart,
               end: chartRangeEnd,
               includeCampaignTypes: false,
               signal: controller.signal,
+              selectionCount: chartSourceSelectionCount,
+              chunkSize: CATALOG_CHART_RETRY_CHUNK_SIZE,
             });
             if (controller.signal.aborted) {
               return;
@@ -4371,12 +4481,23 @@ export function CatalogPage() {
 
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: график и метрики РК`, activityRef);
       try {
-        const chartResponse = await fetchCatalogChart({
+        const chartResponse = await fetchCatalogChartWorkerSafe({
           productRefs: refs,
           start: chartSourceRangeStart,
           end: chartRangeEnd,
           includeCampaignTypes: true,
           signal: options.signal,
+          selectionCount: chartSourceSelectionCount,
+          chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
+          onWorkerLimit: (limitRefs) => {
+            appendCatalogRefreshLogs({
+              status: "warning",
+              scope,
+              step: "Р“СЂР°С„РёРє Рё Р Рљ",
+              message: "РЈРјРµРЅСЊС€Р°РµРј С‡Р°РЅРє РёР·-Р·Р° Р»РёРјРёС‚Р° Worker",
+              detail: `Cloudflare РІРµСЂРЅСѓР» Too many subrequests РґР»СЏ ${formatNumber(limitRefs.length)} С‚РѕРІР°СЂРѕРІ.`,
+            });
+          },
         });
         mergeChartResponseForRefs(chartResponse, refs, options.progress);
         const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, item.error]));
