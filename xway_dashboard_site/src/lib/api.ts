@@ -1,6 +1,8 @@
 import type { CatalogChartResponse, CatalogIssuesResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
+import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
+const API_RESPONSE_CACHE_VERSION = "v1";
 
 function buildBaseUrl(request?: Request) {
   if (request) {
@@ -34,6 +36,146 @@ function waitForRequestRetry(ms: number, signal?: AbortSignal) {
     };
     signal?.addEventListener("abort", handleAbort, { once: true });
   });
+}
+
+function createAbortError() {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function normalizeCacheUrl(input: URL) {
+  const url = new URL(input.toString());
+  url.searchParams.delete("refresh");
+
+  const articles = url.searchParams.get("articles");
+  if (articles) {
+    url.searchParams.set("articles", articles.split(",").filter(Boolean).sort().join(","));
+  }
+
+  const products = url.searchParams.get("products");
+  if (products) {
+    url.searchParams.set("products", products.split(",").filter(Boolean).sort().join(","));
+  }
+
+  const params = [...url.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+    const keyResult = leftKey.localeCompare(rightKey);
+    return keyResult || leftValue.localeCompare(rightValue);
+  });
+  url.search = "";
+  params.forEach(([key, value]) => url.searchParams.append(key, value));
+  return url.toString();
+}
+
+function apiResponseCacheKey(namespace: string, url: URL) {
+  return `${API_RESPONSE_CACHE_VERSION}:${namespace}:${normalizeCacheUrl(url)}`;
+}
+
+function sumCatalogArticles(shops: CatalogResponse["shops"]) {
+  return shops.reduce(
+    (totals, shop) => {
+      shop.articles.forEach((article) => {
+        totals.expense_sum += Number(article.expense_sum || 0);
+        totals.orders += Number(article.orders || 0);
+        totals.atbs += Number(article.atbs || 0);
+        totals.clicks += Number(article.clicks || 0);
+        totals.views += Number(article.views || 0);
+      });
+      return totals;
+    },
+    {
+      expense_sum: 0,
+      orders: 0,
+      atbs: 0,
+      clicks: 0,
+      views: 0,
+    },
+  );
+}
+
+async function mergeCatalogProductResponseIntoFullCache(url: URL, productResponse: CatalogResponse) {
+  const fullUrl = new URL(url.toString());
+  fullUrl.searchParams.delete("products");
+  fullUrl.searchParams.delete("refresh");
+  const fullCacheKey = apiResponseCacheKey("catalog", fullUrl);
+  const cachedFullResponse = await readPersistentApiCache<CatalogResponse>(fullCacheKey);
+  if (!cachedFullResponse) {
+    return;
+  }
+
+  const replacementShopById = new Map(productResponse.shops.map((shop) => [String(shop.id), shop]));
+  const replacementArticleByRef = new Map(
+    productResponse.shops.flatMap((shop) => shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article] as const)),
+  );
+  let changed = false;
+
+  const shops = cachedFullResponse.shops.map((shop) => {
+    const replacementShop = replacementShopById.get(String(shop.id));
+    let shopChanged = false;
+    const articles = shop.articles.map((article) => {
+      const replacement = replacementArticleByRef.get(`${shop.id}:${article.product_id}`);
+      if (!replacement) {
+        return article;
+      }
+      changed = true;
+      shopChanged = true;
+      return replacement;
+    });
+    if (!replacementShop) {
+      return shopChanged ? { ...shop, articles } : shop;
+    }
+    const { articles: _replacementArticles, listing_meta: _replacementListingMeta, ...shopPatch } = replacementShop;
+    return {
+      ...shop,
+      ...shopPatch,
+      listing_meta: shop.listing_meta,
+      articles,
+    };
+  });
+
+  if (!changed) {
+    return;
+  }
+
+  await writePersistentApiCache<CatalogResponse>(fullCacheKey, {
+    ...cachedFullResponse,
+    generated_at: productResponse.generated_at,
+    total_shops: shops.length,
+    total_articles: shops.reduce((total, shop) => total + shop.articles.length, 0),
+    totals: sumCatalogArticles(shops),
+    shops,
+  });
+}
+
+async function requestCachedJson<T>(
+  url: URL,
+  signal: AbortSignal | undefined,
+  requestOptions: { retry503?: boolean; maxAttempts?: number; retryDelayMs?: number },
+  cacheOptions: {
+    namespace: string;
+    bypassRead?: boolean;
+    shouldWrite?: (response: T) => boolean;
+    afterWrite?: (response: T) => Promise<void> | void;
+  },
+): Promise<T> {
+  const cacheKey = apiResponseCacheKey(cacheOptions.namespace, url);
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+
+  if (!cacheOptions.bypassRead) {
+    const cached = await readPersistentApiCache<T>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const response = await requestJson<T>(url.toString(), signal, requestOptions);
+  if (cacheOptions.shouldWrite?.(response) ?? true) {
+    await writePersistentApiCache(cacheKey, response);
+    await cacheOptions.afterWrite?.(response);
+  }
+  return response;
 }
 
 async function requestJson<T>(
@@ -142,7 +284,16 @@ export async function fetchCatalog(options: {
   if (options.forceRefresh) {
     url.searchParams.set("refresh", "1");
   }
-  return requestJson<CatalogResponse>(url.toString(), options.signal ?? options.request?.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
+  return requestCachedJson<CatalogResponse>(
+    url,
+    options.signal ?? options.request?.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "catalog",
+      bypassRead: options.forceRefresh,
+      afterWrite: options.productRefs?.length ? (response) => mergeCatalogProductResponseIntoFullCache(url, response) : undefined,
+    },
+  );
 }
 
 export async function fetchCatalogChart(options: {
@@ -150,6 +301,7 @@ export async function fetchCatalogChart(options: {
   start?: string | null;
   end?: string | null;
   includeCampaignTypes?: boolean;
+  forceRefresh?: boolean;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/catalog-chart", window.location.origin);
@@ -160,13 +312,23 @@ export async function fetchCatalogChart(options: {
   if (options.includeCampaignTypes) {
     url.searchParams.set("include_campaign_types", "1");
   }
-  return requestJson<CatalogChartResponse>(url.toString(), options.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
+  return requestCachedJson<CatalogChartResponse>(
+    url,
+    options.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "catalog-chart",
+      bypassRead: options.forceRefresh,
+      shouldWrite: (response) => !response.errors.length,
+    },
+  );
 }
 
 export async function fetchCatalogIssues(options: {
   productRefs: string[];
   start?: string | null;
   end?: string | null;
+  forceRefresh?: boolean;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/catalog-issues", window.location.origin);
@@ -174,7 +336,15 @@ export async function fetchCatalogIssues(options: {
     url.searchParams.set("products", options.productRefs.join(","));
   }
   appendRange(url.searchParams, options.start, options.end);
-  return requestJson<CatalogIssuesResponse>(url.toString(), options.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
+  return requestCachedJson<CatalogIssuesResponse>(
+    url,
+    options.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "catalog-issues",
+      bypassRead: options.forceRefresh,
+    },
+  );
 }
 
 export async function fetchClusterDetail(options: {

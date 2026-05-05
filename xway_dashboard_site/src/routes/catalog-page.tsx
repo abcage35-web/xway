@@ -5,6 +5,7 @@ import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
+import { readPersistentApiCache, writePersistentApiCache } from "../lib/persistent-api-cache";
 import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesRow, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogArticleAnalyticsPanel, formatCatalogShortDate, type CatalogArticleAnalyticsState } from "../features/catalog/article-analytics-panel";
 import {
@@ -94,8 +95,10 @@ const CATALOG_CAMPAIGN_SLOT_META: Record<CatalogCampaignSlotKind, { headline: st
 const CATALOG_FILTER_TOOLBAR_COLLAPSED_STORAGE_KEY = "xway-catalog-filter-toolbar-collapsed";
 const CATALOG_FILTER_TOOLBAR_DETAILS_EXPANDED_STORAGE_KEY = "xway-catalog-filter-toolbar-details-expanded";
 const CATALOG_ISSUES_CACHE_STORAGE_KEY = "xway-catalog-issues-cache-v4";
+const CATALOG_CHART_SOURCE_CACHE_STORAGE_PREFIX = "xway-catalog-chart-source-cache-v1";
 const CATALOG_ISSUES_SETTINGS_STORAGE_KEY = "xway-catalog-issues-settings-v1";
 const CATALOG_SUMMARY_METRICS_SETTINGS_STORAGE_KEY = "xway-catalog-summary-metrics-settings-v1";
+const CATALOG_SUMMARY_METRICS_SETTINGS_VERSION = 2;
 const CATALOG_QUICK_VIEW_STORAGE_KEY = "xway-catalog-quick-view-v1";
 const CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY = "xway-catalog-quick-view-settings-v1";
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
@@ -246,7 +249,7 @@ const DEFAULT_CATALOG_SUMMARY_METRIC_SETTINGS: CatalogSummaryMetricSettings = {
   cr1: { visible: false, compact: false },
   cr2: { visible: false, compact: false },
   revenue: { visible: false, compact: true },
-  drr: { visible: false, compact: false },
+  drr: { visible: true, compact: false },
   shops: { visible: false, compact: true },
   articles: { visible: false, compact: true },
 };
@@ -554,6 +557,22 @@ function resolveCatalogCampaignTypeTotalsForRef(
   return buildCatalogCampaignTypeTotals(productRows);
 }
 
+function catalogCampaignTypeHasMetrics(totals: CatalogCampaignTypeTotals | null | undefined) {
+  if (!totals) {
+    return false;
+  }
+  return ["views", "clicks", "atbs", "orders", "spend", "revenue"].some((field) => {
+    const value = totals[field as keyof CatalogCampaignTypeTotals];
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
+  });
+}
+
+function resolveVisibleCatalogCampaignTypeRows(article: CatalogArticle, totalsByType: CatalogCampaignTypeTotalsByKey | null | undefined) {
+  const hasCpcSlot = article.campaign_states.some((state) => state.key === "cpc");
+  const hasCpcMetrics = catalogCampaignTypeHasMetrics(totalsByType?.cpc);
+  return CATALOG_CAMPAIGN_TYPE_ROWS.filter((type) => type.key !== "cpc" || hasCpcSlot || hasCpcMetrics);
+}
+
 function resolveCatalogCampaignTypeMetricValue(totals: CatalogCampaignTypeTotals, metric: CatalogCampaignTypeMetricKey) {
   if (metric === "ctr") {
     return totals.views > 0 ? (totals.clicks / totals.views) * 100 : null;
@@ -580,11 +599,11 @@ function formatCatalogCampaignTypeMetricValue(metric: CatalogCampaignTypeMetricK
   return formatNumber(value);
 }
 
-function CatalogCampaignTypeRowsLegend() {
+function CatalogCampaignTypeRowsLegend({ visibleTypes }: { visibleTypes: typeof CATALOG_CAMPAIGN_TYPE_ROWS }) {
   return (
     <div className="catalog-campaign-type-row-list">
       <div className="catalog-campaign-type-total-label">—</div>
-      {CATALOG_CAMPAIGN_TYPE_ROWS.map((type) => (
+      {visibleTypes.map((type) => (
         <div key={type.key} className="catalog-campaign-type-row-label">
           <span className={cn("catalog-campaign-kind-badge", `is-${type.tone}`)}>{type.badge}</span>
           <strong>{type.label}</strong>
@@ -596,10 +615,12 @@ function CatalogCampaignTypeRowsLegend() {
 
 function CatalogCampaignTypeMetricStack({
   totalsByType,
+  visibleTypes,
   metric,
   fallback,
 }: {
   totalsByType: CatalogCampaignTypeTotalsByKey | null | undefined;
+  visibleTypes: typeof CATALOG_CAMPAIGN_TYPE_ROWS;
   metric: CatalogCampaignTypeMetricKey;
   fallback: ReactNode;
 }) {
@@ -608,7 +629,7 @@ function CatalogCampaignTypeMetricStack({
   return (
     <div className="catalog-campaign-type-metric-stack">
       <span className="catalog-campaign-type-total-value">{fallback}</span>
-      {CATALOG_CAMPAIGN_TYPE_ROWS.map((type) => {
+      {visibleTypes.map((type) => {
         const value = resolveCatalogCampaignTypeMetricValue(resolvedTotals[type.key], metric);
         const formatted = formatCatalogCampaignTypeMetricValue(metric, value);
         return (
@@ -1780,11 +1801,17 @@ function readCatalogSummaryMetricSettings(): CatalogSummaryMetricSettings {
     if (!raw) {
       return defaults;
     }
-    const parsed = JSON.parse(raw) as Partial<Record<CatalogSummaryMetricKey, Partial<CatalogSummaryMetricSetting>>>;
+    const parsed = JSON.parse(raw) as Partial<Record<CatalogSummaryMetricKey, Partial<CatalogSummaryMetricSetting>>> & { __version?: number };
+    const shouldApplyNewDrrDefault = Number(parsed.__version ?? 1) < CATALOG_SUMMARY_METRICS_SETTINGS_VERSION;
     return CATALOG_SUMMARY_METRIC_KEYS.reduce((settings, key) => {
       const defaultSetting = DEFAULT_CATALOG_SUMMARY_METRIC_SETTINGS[key];
       settings[key] = {
-        visible: typeof parsed[key]?.visible === "boolean" ? Boolean(parsed[key]?.visible) : defaultSetting.visible,
+        visible:
+          key === "drr" && shouldApplyNewDrrDefault
+            ? true
+            : typeof parsed[key]?.visible === "boolean"
+              ? Boolean(parsed[key]?.visible)
+              : defaultSetting.visible,
         compact: typeof parsed[key]?.compact === "boolean" ? Boolean(parsed[key]?.compact) : defaultSetting.compact,
       };
       return settings;
@@ -1870,6 +1897,35 @@ function writeCatalogIssuesCache(day: string, rowsByRef: Record<string, CatalogI
   } catch {
     // Ignore storage quota and privacy-mode failures.
   }
+}
+
+function catalogChartSourcePersistentCacheKey(cacheKey: string) {
+  return `${CATALOG_CHART_SOURCE_CACHE_STORAGE_PREFIX}:${cacheKey}`;
+}
+
+function isCompleteCatalogChartResponse(response: CatalogChartResponse | null | undefined) {
+  if (!response) {
+    return false;
+  }
+  return response.loaded_products_count >= response.selection_count && !response.errors.length;
+}
+
+function isCompleteCatalogChartCacheEntry(entry: CatalogChartCacheEntry | null | undefined): entry is CatalogChartCacheEntry {
+  if (!entry) {
+    return false;
+  }
+  return isCompleteCatalogChartResponse(entry.response);
+}
+
+function readCatalogChartSourceCache(cacheKey: string) {
+  return readPersistentApiCache<CatalogChartCacheEntry>(catalogChartSourcePersistentCacheKey(cacheKey));
+}
+
+function writeCatalogChartSourceCache(cacheKey: string, entry: CatalogChartCacheEntry) {
+  if (!isCompleteCatalogChartCacheEntry(entry)) {
+    return;
+  }
+  void writePersistentApiCache(catalogChartSourcePersistentCacheKey(cacheKey), entry);
 }
 
 function parseNumericFilterValue(value: string) {
@@ -2185,6 +2241,7 @@ function summarizeCatalogArticles(articles: CatalogArticle[]) {
       totals.clicks += toNumber(article.clicks) ?? 0;
       totals.orders += toNumber(article.orders) ?? 0;
       totals.expense_sum += toNumber(article.expense_sum) ?? 0;
+      totals.sum_price += toNumber(article.sum_price) ?? 0;
       return totals;
     },
     {
@@ -2192,6 +2249,7 @@ function summarizeCatalogArticles(articles: CatalogArticle[]) {
       clicks: 0,
       orders: 0,
       expense_sum: 0,
+      sum_price: 0,
     },
   );
 }
@@ -2972,10 +3030,13 @@ export function CatalogPage() {
   const catalogRowCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRefreshAbortRef = useRef<AbortController | null>(null);
   const chartAutoRetrySignatureRef = useRef<string | null>(null);
-  const catalogAutoRefreshKeyRef = useRef<string | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
+  const rememberCatalogChartCacheEntry = (cacheKey: string, entry: CatalogChartCacheEntry) => {
+    chartCacheRef.current.set(cacheKey, entry);
+    writeCatalogChartSourceCache(cacheKey, entry);
+  };
   const payload = useMemo(
     () => applyCatalogArticleOverrides(catalogPayloadOverride ?? loaderPayload, catalogArticleOverridesByRef),
     [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
@@ -3046,6 +3107,7 @@ export function CatalogPage() {
     start: chartStart,
     end: chartEnd,
     includeCampaignTypes = false,
+    forceRefresh = false,
     signal,
     selectionCount,
     chunkSize,
@@ -3055,6 +3117,7 @@ export function CatalogPage() {
     start?: string | null;
     end?: string | null;
     includeCampaignTypes?: boolean;
+    forceRefresh?: boolean;
     signal?: AbortSignal;
     selectionCount?: number;
     chunkSize?: number;
@@ -3072,6 +3135,7 @@ export function CatalogPage() {
           start: chartStart,
           end: chartEnd,
           includeCampaignTypes,
+          forceRefresh,
           signal,
         });
       } catch (error) {
@@ -3537,7 +3601,10 @@ export function CatalogPage() {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(CATALOG_SUMMARY_METRICS_SETTINGS_STORAGE_KEY, JSON.stringify(summaryMetricSettings));
+    window.localStorage.setItem(
+      CATALOG_SUMMARY_METRICS_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ __version: CATALOG_SUMMARY_METRICS_SETTINGS_VERSION, ...summaryMetricSettings }),
+    );
   }, [summaryMetricSettings]);
 
   useEffect(() => {
@@ -3637,23 +3704,58 @@ export function CatalogPage() {
     const controller = new AbortController();
     chartFetchAbortRef.current = controller;
     const timer = window.setTimeout(() => {
-      if (controller.signal.aborted) {
-        return;
-      }
-      setChartLoading(true);
-      setChartError(null);
-      setChartSourceData(null);
-      const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CHART_FETCH_CHUNK_SIZE);
-      setChartProgress({
-        cacheKey: chartSourceCacheKey,
-        selectionCount: chartSourceSelectionCount,
-        loadedProductsCount: 0,
-        chunkCount: productChunks.length,
-        loadedChunkCount: 0,
-        errorCount: 0,
-      });
+      void (async () => {
+        if (controller.signal.aborted) {
+          return;
+        }
 
-      (async () => {
+        const persistedEntry = await readCatalogChartSourceCache(chartSourceCacheKey);
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (
+          isCompleteCatalogChartCacheEntry(persistedEntry) &&
+          persistedEntry.productRefsKey === chartSourceProductRefsKey &&
+          persistedEntry.rangeStart <= chartSourceRangeStart &&
+          persistedEntry.rangeEnd === chartRangeEnd
+        ) {
+          const persistedResponse =
+            persistedEntry.rangeStart === chartSourceRangeStart
+              ? persistedEntry.response
+              : aggregateCatalogChartResponse(persistedEntry.response, chartSourceProductRefs, chartSourceRangeStart, chartRangeEnd);
+          rememberCatalogChartCacheEntry(chartSourceCacheKey, {
+            response: persistedResponse,
+            productRefsKey: chartSourceProductRefsKey,
+            rangeStart: chartSourceRangeStart,
+            rangeEnd: chartRangeEnd,
+          });
+          setChartLoading(false);
+          setChartError(null);
+          setChartSourceData(persistedResponse);
+          setChartProgress({
+            cacheKey: chartSourceCacheKey,
+            selectionCount: persistedResponse.selection_count,
+            loadedProductsCount: persistedResponse.loaded_products_count,
+            chunkCount: 0,
+            loadedChunkCount: 0,
+            errorCount: persistedResponse.errors.length,
+          });
+          return;
+        }
+
+        setChartLoading(true);
+        setChartError(null);
+        setChartSourceData(null);
+        const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CHART_FETCH_CHUNK_SIZE);
+        setChartProgress({
+          cacheKey: chartSourceCacheKey,
+          selectionCount: chartSourceSelectionCount,
+          loadedProductsCount: 0,
+          chunkCount: productChunks.length,
+          loadedChunkCount: 0,
+          errorCount: 0,
+        });
+
         try {
           let nextResponse: CatalogChartResponse | null = null;
           for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
@@ -3685,7 +3787,7 @@ export function CatalogPage() {
           }
 
           if (nextResponse) {
-            chartCacheRef.current.set(chartSourceCacheKey, {
+            rememberCatalogChartCacheEntry(chartSourceCacheKey, {
               response: nextResponse,
               productRefsKey: chartSourceProductRefsKey,
               rangeStart: chartSourceRangeStart,
@@ -3763,7 +3865,7 @@ export function CatalogPage() {
               }
             : current,
         );
-        chartCacheRef.current.set(chartSourceCacheKey, {
+        rememberCatalogChartCacheEntry(chartSourceCacheKey, {
           response: nextResponse,
           productRefsKey: chartSourceProductRefsKey,
           rangeStart: chartSourceRangeStart,
@@ -3832,6 +3934,7 @@ export function CatalogPage() {
               start: chartSourceRangeStart,
               end: chartRangeEnd,
               includeCampaignTypes: false,
+              forceRefresh: true,
               signal: controller.signal,
               selectionCount: chartSourceSelectionCount,
               chunkSize: CATALOG_CHART_RETRY_CHUNK_SIZE,
@@ -3867,7 +3970,7 @@ export function CatalogPage() {
         }
       }
 
-      chartCacheRef.current.set(chartSourceCacheKey, {
+      rememberCatalogChartCacheEntry(chartSourceCacheKey, {
         response: nextResponse,
         productRefsKey: chartSourceProductRefsKey,
         rangeStart: chartSourceRangeStart,
@@ -3927,20 +4030,32 @@ export function CatalogPage() {
   };
   const revenue = sumCatalogArticleField(visibleShops, "sum_price");
   const compareRevenue = comparePayload ? sumCatalogArticleField(compareVisibleShops, "sum_price") : null;
+  const catalogChartRows = chartData?.rows ?? [];
+  const chartSparklineRows = catalogChartRows.slice(-7);
+  const previousChartSparklineRows = catalogChartRows.slice(-14, -7);
+  const chartRowsRate = (rows: CatalogChartResponse["rows"]) =>
+    catalogChartRate(
+      rows.reduce((total, row) => total + (toNumber(row.expense_sum) ?? 0), 0),
+      rows.reduce((total, row) => total + (toNumber(row.sum_price) ?? 0), 0),
+    );
   const cpm = summaryCost(visibleTotals.expense_sum, visibleTotals.views, 1000);
   const cpc = summaryCost(visibleTotals.expense_sum, visibleTotals.clicks);
   const atbCost = summaryCost(visibleTotals.expense_sum, visibleTotals.atbs);
   const cpo = summaryCost(visibleTotals.expense_sum, visibleTotals.orders);
   const cr1 = catalogChartRate(visibleTotals.atbs, visibleTotals.clicks);
   const cr2 = catalogChartRate(visibleTotals.orders, visibleTotals.atbs);
-  const drr = catalogChartRate(toNumber(visibleTotals.expense_sum) ?? 0, toNumber(revenue) ?? 0);
+  const drr = chartSparklineRows.length ? chartRowsRate(chartSparklineRows) : catalogChartRate(toNumber(visibleTotals.expense_sum) ?? 0, toNumber(revenue) ?? 0);
   const compareCpm = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.views, 1000);
   const compareCpc = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.clicks);
   const compareAtbCost = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.atbs);
   const compareCpo = summaryCost(compareVisibleTotals?.expense_sum, compareVisibleTotals?.orders);
   const compareCr1 = compareVisibleTotals ? catalogChartRate(compareVisibleTotals.atbs, compareVisibleTotals.clicks) : null;
   const compareCr2 = compareVisibleTotals ? catalogChartRate(compareVisibleTotals.orders, compareVisibleTotals.atbs) : null;
-  const compareDrr = compareVisibleTotals ? catalogChartRate(toNumber(compareVisibleTotals.expense_sum) ?? 0, toNumber(compareRevenue) ?? 0) : null;
+  const compareDrr = previousChartSparklineRows.length
+    ? chartRowsRate(previousChartSparklineRows)
+    : compareVisibleTotals
+      ? catalogChartRate(toNumber(compareVisibleTotals.expense_sum) ?? 0, toNumber(compareRevenue) ?? 0)
+      : null;
   const diffValue = (current: number | string | null | undefined, previous: number | string | null | undefined) => {
     const currentValue = toNumber(current);
     const previousValue = toNumber(previous);
@@ -3997,12 +4112,11 @@ export function CatalogPage() {
     }
     return summaryMetricSettings[key].compact ? formatCompactNumber(value) : formatNumber(value);
   };
-  const chartSparklineRows = (chartData?.rows ?? []).slice(-7);
   const buildSummarySparkline = (
     key: CatalogSummaryMetricKey,
     getValue: (row: CatalogChartResponse["rows"][number]) => number | null | undefined,
   ): CatalogSummarySparkline | undefined => {
-    if (!comparePayload || chartSparklineRows.length < 2) {
+    if (chartSparklineRows.length < 2) {
       return undefined;
     }
     const items = chartSparklineRows
@@ -4142,7 +4256,7 @@ export function CatalogPage() {
     },
     {
       key: "drr",
-      label: "ДРР каталога",
+      label: "ДРР 7 дней",
       value: formatPercent(drr),
       deltaText: renderDeltaText(formatSignedPercent(diffValue(drr, compareDrr))),
       deltaClassName: deltaClassName(diffValue(drr, compareDrr), false),
@@ -4357,12 +4471,24 @@ export function CatalogPage() {
     }
   };
 
-  const mergeChartResponseForRefs = (response: CatalogChartResponse, productRefs: string[], progress?: { chunkCount: number; loadedChunkCount: number }) => {
+  const mergeChartResponseForRefs = async (response: CatalogChartResponse, productRefs: string[], progress?: { chunkCount: number; loadedChunkCount: number }) => {
+    const persistedEntry = await readCatalogChartSourceCache(chartSourceCacheKey);
+    const persistedBase =
+      isCompleteCatalogChartCacheEntry(persistedEntry) &&
+      persistedEntry.productRefsKey === chartSourceProductRefsKey &&
+      persistedEntry.rangeStart <= chartSourceRangeStart &&
+      persistedEntry.rangeEnd === chartRangeEnd
+        ? persistedEntry.rangeStart === chartSourceRangeStart
+          ? persistedEntry.response
+          : aggregateCatalogChartResponse(persistedEntry.response, chartSourceProductRefs, chartSourceRangeStart, chartRangeEnd)
+        : null;
+
     setChartSourceData((current) => {
-      const nextResponse = current
-        ? mergeCatalogChartRetryResponse(current, response, chartSourceSelectionCount, productRefs)
+      const baseResponse = isCompleteCatalogChartResponse(current) ? current : (persistedBase ?? current);
+      const nextResponse = baseResponse
+        ? mergeCatalogChartRetryResponse(baseResponse, response, chartSourceSelectionCount, productRefs)
         : mergeCatalogChartResponses(null, response, chartSourceSelectionCount);
-      chartCacheRef.current.set(chartSourceCacheKey, {
+      rememberCatalogChartCacheEntry(chartSourceCacheKey, {
         response: nextResponse,
         productRefsKey: chartSourceProductRefsKey,
         rangeStart: chartSourceRangeStart,
@@ -4528,6 +4654,7 @@ export function CatalogPage() {
           start: chartSourceRangeStart,
           end: chartRangeEnd,
           includeCampaignTypes: true,
+          forceRefresh: true,
           signal: options.signal,
           selectionCount: chartSourceSelectionCount,
           chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
@@ -4541,7 +4668,7 @@ export function CatalogPage() {
             });
           },
         });
-        mergeChartResponseForRefs(chartResponse, refs, options.progress);
+        await mergeChartResponseForRefs(chartResponse, refs, options.progress);
         const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
         const loadedChartRefs = new Set((chartResponse.product_rows || []).map((item) => item.product_ref));
         if (!loadedChartRefs.size && refs.length === 1 && !chartErrorsByRef.has(refs[0]!)) {
@@ -4603,6 +4730,7 @@ export function CatalogPage() {
             productRefs: refs,
             start: yesterdayIso,
             end: yesterdayIso,
+            forceRefresh: true,
             signal: options.signal,
           });
           const rowByRef = new Map(response.rows.map((row) => [row.product_ref, row]));
@@ -4820,18 +4948,6 @@ export function CatalogPage() {
       setRefreshingShopIds((current) => current.filter((id) => id !== shopId));
     }
   };
-
-  useEffect(() => {
-    if (!chartSourceProductRefs.length || catalogRefreshing) {
-      return;
-    }
-    const refreshKey = `${loaderPayload.range.current_start}|${loaderPayload.range.current_end}|${chartSourceProductRefsKey}`;
-    if (catalogAutoRefreshKeyRef.current === refreshKey) {
-      return;
-    }
-    catalogAutoRefreshKeyRef.current = refreshKey;
-    void handleRefreshAllCatalog();
-  });
 
   const visibleCatalogRefreshLogs = selectedCatalogRefreshLogRef
     ? catalogRefreshLogs.filter((entry) => entry.productRef === selectedCatalogRefreshLogRef)
@@ -5271,6 +5387,13 @@ export function CatalogPage() {
             ? aggregateCatalogChartResponse(chartData, shopProductRefs, chartRangeStart, chartRangeEnd)
             : null;
           const shopSparklineRows = (shopChartData?.rows ?? []).slice(-7);
+          const previousShopSparklineRows = (shopChartData?.rows ?? []).slice(-14, -7);
+          const shopDrr = shopSparklineRows.length ? chartRowsRate(shopSparklineRows) : catalogChartRate(totals.expense_sum, totals.sum_price);
+          const compareShopDrr = previousShopSparklineRows.length
+            ? chartRowsRate(previousShopSparklineRows)
+            : compareShopTotals
+              ? catalogChartRate(compareShopTotals.expense_sum, compareShopTotals.sum_price)
+              : null;
           const buildShopSparkline = (
             key: CatalogSummaryMetricKey,
             getValue: (row: CatalogChartResponse["rows"][number]) => number | null | undefined,
@@ -5334,6 +5457,13 @@ export function CatalogPage() {
               deltaText: renderDeltaText(formatSignedPercent(diffValue(shopCr, compareShopCr))),
               deltaClassName: deltaClassName(diffValue(shopCr, compareShopCr), true),
               sparkline: buildShopSparkline("cr", (row) => row.crf),
+            },
+            {
+              label: "ДРР 7 дней",
+              value: formatPercent(shopDrr),
+              deltaText: renderDeltaText(formatSignedPercent(diffValue(shopDrr, compareShopDrr))),
+              deltaClassName: deltaClassName(diffValue(shopDrr, compareShopDrr), false),
+              sparkline: buildShopSparkline("drr", (row) => row.drr_ads),
             },
             {
               label: "Баланс",
@@ -5580,133 +5710,169 @@ export function CatalogPage() {
                         key: "campaignType",
                         header: <span className="catalog-campaign-type-header">Тип РК</span>,
                         cellClassName: "catalog-campaign-type-cell",
-                        render: () => <CatalogCampaignTypeRowsLegend />,
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return <CatalogCampaignTypeRowsLegend visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)} />;
+                        },
                       },
                       {
                         key: "spend",
                         header: "Расход",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
-                              article,
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                            metric="spend"
-                            fallback={formatMoney(article.expense_sum)}
-                          />
-                        ),
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="spend"
+                              fallback={formatMoney(article.expense_sum)}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "views",
                         header: "Показы",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
-                              article,
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                            metric="views"
-                            fallback={formatCompactNumber(article.views)}
-                          />
-                        ),
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="views"
+                              fallback={formatCompactNumber(article.views)}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "clicks",
                         header: "Клики",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
-                              article,
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                            metric="clicks"
-                            fallback={formatNumber(article.clicks)}
-                          />
-                        ),
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="clicks"
+                              fallback={formatNumber(article.clicks)}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "orders",
                         header: "Заказы",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
-                              article,
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                            metric="orders"
-                            fallback={formatNumber(article.orders)}
-                          />
-                        ),
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="orders"
+                              fallback={formatNumber(article.orders)}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "ctr",
                         header: "CTR",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
-                              article,
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                            metric="ctr"
-                            fallback={formatPercent(article.ctr)}
-                          />
-                        ),
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="ctr"
+                              fallback={formatPercent(article.ctr)}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "cr",
                         header: "CR",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
-                              article,
-                              `${shop.id}:${article.product_id}`,
-                              catalogRowCampaignTypesByRef,
-                              chartData,
-                            )}
-                            metric="cr"
-                            fallback={formatPercent(article.cr)}
-                          />
-                        ),
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="cr"
+                              fallback={formatPercent(article.cr)}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "drr",
                         header: "ДРР",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
-                        render: (article) => (
-                          <CatalogCampaignTypeMetricStack
-                            totalsByType={resolveCatalogCampaignTypeTotalsForArticle(
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
                               article,
                               `${shop.id}:${article.product_id}`,
                               catalogRowCampaignTypesByRef,
                               chartData,
-                            )}
-                            metric="drr"
-                            fallback={formatPercent(resolveCatalogArticleDrr(article))}
-                          />
-                        ),
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="drr"
+                              fallback={formatPercent(resolveCatalogArticleDrr(article))}
+                            />
+                          );
+                        },
                       },
                       {
                         key: "categoryAvgCr",
