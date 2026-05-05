@@ -4449,15 +4449,21 @@ export function CatalogPage() {
           signal: options.signal,
         });
         const turnoverOverrides: Record<string, number | string | null | undefined> = {};
+        const emptyTurnoverRefs: string[] = [];
         refs.forEach((ref) => {
           const turnoverArticle = findCatalogArticleByRef(turnoverCatalog, ref);
           if (turnoverArticle) {
-            turnoverOverrides[ref] = turnoverArticle.ordered_report;
+            turnoverOverrides[ref] = turnoverArticle.ordered_report ?? 0;
+          } else {
+            turnoverOverrides[ref] = 0;
+            emptyTurnoverRefs.push(ref);
           }
         });
-        const loadedRefs = Object.keys(turnoverOverrides);
-        if (loadedRefs.length) {
+        const loadedRefs = refs.filter((ref) => !emptyTurnoverRefs.includes(ref));
+        if (Object.keys(turnoverOverrides).length) {
           setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
+        }
+        if (loadedRefs.length) {
           appendCatalogRefreshLogsForRefs(loadedRefs, {
             status: "success",
             scope,
@@ -4465,14 +4471,13 @@ export function CatalogPage() {
             message: "Загружены заказы за 3 дня",
           });
         }
-        const missingRefs = refs.filter((ref) => !turnoverOverrides.hasOwnProperty(ref));
-        if (missingRefs.length) {
-          appendCatalogRefreshLogsForRefs(missingRefs, {
-            status: "warning",
+        if (emptyTurnoverRefs.length) {
+          appendCatalogRefreshLogsForRefs(emptyTurnoverRefs, {
+            status: "info",
             scope,
             step: "Оборачиваемость",
-            message: "Нет строки в коротком периоде",
-            detail: "Значение оборачиваемости оставлено прежним.",
+            message: "Заказов за 3 дня нет",
+            detail: "Короткий период не вернул строку товара, поэтому значение принято как 0.",
           });
         }
       } catch (error) {
