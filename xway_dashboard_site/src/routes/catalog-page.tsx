@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ExternalLink, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ExternalLink, FileText, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
@@ -333,6 +333,37 @@ interface CatalogIssueCachePayload {
   updatedAt: string;
 }
 
+type CatalogRefreshLogStatus = "success" | "error" | "warning" | "info" | "cancelled";
+type CatalogRefreshLogScope = "catalog" | "shop" | "product";
+
+interface CatalogRefreshLogEntry {
+  id: string;
+  createdAt: string;
+  status: CatalogRefreshLogStatus;
+  scope: CatalogRefreshLogScope;
+  step: string;
+  message: string;
+  detail?: string;
+  productRef?: string;
+  productLabel?: string;
+}
+
+type CatalogRefreshLogInput = Omit<CatalogRefreshLogEntry, "id" | "createdAt">;
+
+interface CatalogRefreshActivity {
+  title: string;
+  detail: string;
+  productRef?: string;
+}
+
+const CATALOG_REFRESH_LOG_STATUS_LABELS: Record<CatalogRefreshLogStatus, string> = {
+  success: "ОК",
+  error: "Ошибка",
+  warning: "Внимание",
+  info: "Инфо",
+  cancelled: "Отмена",
+};
+
 function applyCatalogArticleOverrides(payload: CatalogResponse, overridesByRef: Record<string, CatalogArticle>): CatalogResponse {
   if (!Object.keys(overridesByRef).length) {
     return payload;
@@ -366,6 +397,18 @@ function catalogArticleOverridesFromPayload(payload: CatalogResponse, productRef
     }
   });
   return overrides;
+}
+
+function formatCatalogRefreshLogTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
 }
 
 function mapCatalogIssuesRowToCacheEntry(row: CatalogIssuesRow): CatalogIssueCacheEntry {
@@ -2856,6 +2899,10 @@ export function CatalogPage() {
   const [refreshingAllCatalog, setRefreshingAllCatalog] = useState(false);
   const [refreshingShopIds, setRefreshingShopIds] = useState<string[]>([]);
   const [refreshingArticleRefs, setRefreshingArticleRefs] = useState<string[]>([]);
+  const [catalogRefreshLogs, setCatalogRefreshLogs] = useState<CatalogRefreshLogEntry[]>([]);
+  const [catalogRefreshPanelOpen, setCatalogRefreshPanelOpen] = useState(false);
+  const [selectedCatalogRefreshLogRef, setSelectedCatalogRefreshLogRef] = useState<string | null>(null);
+  const [catalogRefreshActivity, setCatalogRefreshActivity] = useState<CatalogRefreshActivity | null>(null);
   const [catalogRefreshError, setCatalogRefreshError] = useState<string | null>(null);
   const [articleIssuesLoading, setArticleIssuesLoading] = useState(false);
   const [articleIssuesError, setArticleIssuesError] = useState<string | null>(null);
@@ -2886,9 +2933,60 @@ export function CatalogPage() {
     () => applyCatalogArticleOverrides(catalogPayloadOverride ?? loaderPayload, catalogArticleOverridesByRef),
     [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
   );
+  const catalogArticleMetaByRef = useMemo(() => {
+    const next = new Map<string, { article: string; name: string; label: string }>();
+    payload.shops.forEach((shop) => {
+      shop.articles.forEach((article) => {
+        const ref = `${shop.id}:${article.product_id}`;
+        next.set(ref, {
+          article: article.article,
+          name: article.name,
+          label: `${article.article} · ${article.name}`,
+        });
+      });
+    });
+    return next;
+  }, [payload]);
   const catalogRefreshing = refreshingAllCatalog || refreshingShopIds.length > 0;
   const abortCatalogRefresh = () => {
     catalogRefreshAbortRef.current?.abort();
+  };
+  const resolveCatalogRefreshProductLabel = (productRef: string) => catalogArticleMetaByRef.get(productRef)?.label ?? productRef;
+  const appendCatalogRefreshLogs = (entries: CatalogRefreshLogInput | CatalogRefreshLogInput[]) => {
+    const nextEntries = (Array.isArray(entries) ? entries : [entries]).map((entry, index) => ({
+      ...entry,
+      id: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+      createdAt: new Date().toISOString(),
+      productLabel: entry.productRef ? (entry.productLabel ?? resolveCatalogRefreshProductLabel(entry.productRef)) : entry.productLabel,
+    }));
+    setCatalogRefreshLogs((current) => [...current, ...nextEntries].slice(-600));
+    setCatalogRefreshPanelOpen(true);
+  };
+  const appendCatalogRefreshLogsForRefs = (
+    refs: string[],
+    entry: Omit<CatalogRefreshLogInput, "productRef" | "productLabel">,
+    resolveMessage?: (ref: string) => Partial<Pick<CatalogRefreshLogInput, "message" | "detail" | "status">>,
+  ) => {
+    appendCatalogRefreshLogs(
+      refs.map((ref) => ({
+        ...entry,
+        ...(resolveMessage ? resolveMessage(ref) : {}),
+        productRef: ref,
+        productLabel: resolveCatalogRefreshProductLabel(ref),
+      })),
+    );
+  };
+  const setCatalogRefreshStep = (title: string, detail: string, productRef?: string) => {
+    setCatalogRefreshActivity({
+      title,
+      detail,
+      productRef,
+    });
+    setCatalogRefreshPanelOpen(true);
+  };
+  const openCatalogRefreshLogs = (productRef: string) => {
+    setSelectedCatalogRefreshLogRef(productRef);
+    setCatalogRefreshPanelOpen(true);
   };
 
   useEffect(() => {
@@ -4138,6 +4236,9 @@ export function CatalogPage() {
     response.product_rows?.forEach((product) => {
       nextTypeTotals[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
     });
+    if (!Object.keys(nextTypeTotals).length && productRefs.length === 1) {
+      nextTypeTotals[productRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
+    }
     if (Object.keys(nextTypeTotals).length) {
       setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...nextTypeTotals }));
     }
@@ -4145,7 +4246,13 @@ export function CatalogPage() {
 
   const refreshCatalogProductRefs = async (
     productRefs: string[],
-    options: { refreshIssues?: boolean; progress?: { chunkCount: number; loadedChunkCount: number }; signal?: AbortSignal } = {},
+    options: {
+      refreshIssues?: boolean;
+      progress?: { chunkCount: number; loadedChunkCount: number };
+      signal?: AbortSignal;
+      scope?: CatalogRefreshLogScope;
+      scopeLabel?: string;
+    } = {},
   ) => {
     const refs = [...new Set(productRefs)];
     if (!refs.length) {
@@ -4156,22 +4263,73 @@ export function CatalogPage() {
     }
 
     setRefreshingArticleRefs((current) => [...new Set([...current, ...refs])]);
+    const scope = options.scope ?? (refs.length === 1 ? "product" : "catalog");
+    const scopeLabel = options.scopeLabel ?? (refs.length === 1 ? "Обновление товара" : "Обновление товаров");
+    const targetLabel = refs.length === 1 ? resolveCatalogRefreshProductLabel(refs[0]!) : `${formatNumber(refs.length)} товаров`;
+    const activityRef = refs.length === 1 ? refs[0] : undefined;
+    let firstErrorMessage: string | null = null;
+
+    const rememberStepError = (message: string) => {
+      if (!firstErrorMessage) {
+        firstErrorMessage = message;
+      }
+    };
+
+    const logStepError = async (step: string, error: unknown) => {
+      if (isAbortError(error) || options.signal?.aborted) {
+        throw error;
+      }
+      const message = await readApiErrorMessage(error);
+      rememberStepError(message);
+      appendCatalogRefreshLogsForRefs(refs, {
+        status: "error",
+        scope,
+        step,
+        message: "Не загрузилось",
+        detail: message,
+      });
+    };
 
     try {
-      const currentCatalog = await fetchCatalog({
-        productRefs: refs,
-        start: payload.range.current_start,
-        end: payload.range.current_end,
-        forceRefresh: true,
-        signal: options.signal,
-      });
-      const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, refs);
-      if (Object.keys(articleOverrides).length) {
-        setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+      setCatalogRefreshStep(scopeLabel, `${targetLabel}: строка, РК и остаток`, activityRef);
+      try {
+        const currentCatalog = await fetchCatalog({
+          productRefs: refs,
+          start: payload.range.current_start,
+          end: payload.range.current_end,
+          forceRefresh: true,
+          signal: options.signal,
+        });
+        const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, refs);
+        const loadedRefs = Object.keys(articleOverrides);
+        if (loadedRefs.length) {
+          setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+        }
+        if (loadedRefs.length) {
+          appendCatalogRefreshLogsForRefs(loadedRefs, {
+            status: "success",
+            scope,
+            step: "Строка товара",
+            message: "Загружены показатели, РК и остаток",
+          });
+        }
+        const missingRefs = refs.filter((ref) => !articleOverrides[ref]);
+        if (missingRefs.length) {
+          appendCatalogRefreshLogsForRefs(missingRefs, {
+            status: "warning",
+            scope,
+            step: "Строка товара",
+            message: "Товар не найден в ответе каталога",
+            detail: "API ответил без строки этого товара.",
+          });
+        }
+      } catch (error) {
+        await logStepError("Строка товара", error);
       }
 
       const turnoverEnd = payload.range.current_end;
       const turnoverStart = shiftIsoDate(turnoverEnd, -2);
+      setCatalogRefreshStep(scopeLabel, `${targetLabel}: оборачиваемость за 3 дня`, activityRef);
       try {
         const turnoverCatalog = await fetchCatalog({
           productRefs: refs,
@@ -4187,16 +4345,31 @@ export function CatalogPage() {
             turnoverOverrides[ref] = turnoverArticle.ordered_report;
           }
         });
-        if (Object.keys(turnoverOverrides).length) {
+        const loadedRefs = Object.keys(turnoverOverrides);
+        if (loadedRefs.length) {
           setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
+          appendCatalogRefreshLogsForRefs(loadedRefs, {
+            status: "success",
+            scope,
+            step: "Оборачиваемость",
+            message: "Загружены заказы за 3 дня",
+          });
         }
-      } catch {
-        if (options.signal?.aborted) {
-          throw new DOMException("Aborted", "AbortError");
+        const missingRefs = refs.filter((ref) => !turnoverOverrides.hasOwnProperty(ref));
+        if (missingRefs.length) {
+          appendCatalogRefreshLogsForRefs(missingRefs, {
+            status: "warning",
+            scope,
+            step: "Оборачиваемость",
+            message: "Нет строки в коротком периоде",
+            detail: "Значение оборачиваемости оставлено прежним.",
+          });
         }
-        // Turnover is auxiliary; keep existing values if the short-range request fails.
+      } catch (error) {
+        await logStepError("Оборачиваемость", error);
       }
 
+      setCatalogRefreshStep(scopeLabel, `${targetLabel}: график и метрики РК`, activityRef);
       try {
         const chartResponse = await fetchCatalogChart({
           productRefs: refs,
@@ -4206,28 +4379,62 @@ export function CatalogPage() {
           signal: options.signal,
         });
         mergeChartResponseForRefs(chartResponse, refs, options.progress);
-
+        const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, item.error]));
+        const loadedChartRefs = new Set((chartResponse.product_rows || []).map((item) => item.product_ref));
+        if (!loadedChartRefs.size && refs.length === 1 && !chartErrorsByRef.has(refs[0]!)) {
+          loadedChartRefs.add(refs[0]!);
+        }
+        const loadedRefs = refs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+        if (loadedRefs.length) {
+          appendCatalogRefreshLogsForRefs(loadedRefs, {
+            status: "success",
+            scope,
+            step: "График и РК",
+            message: `Загружено дней: ${formatNumber(chartResponse.rows.length)}`,
+            detail: "График и разбивка по типам РК обновлены.",
+          });
+        }
+        const errorRefs = refs.filter((ref) => chartErrorsByRef.has(ref));
+        if (errorRefs.length) {
+          appendCatalogRefreshLogsForRefs(errorRefs, {
+            status: "error",
+            scope,
+            step: "График и РК",
+            message: "Не загрузилось",
+          }, (ref) => ({
+            status: "error",
+            message: "Не загрузилось",
+            detail: chartErrorsByRef.get(ref) || "API вернул ошибку без текста.",
+          }));
+          rememberStepError(chartErrorsByRef.get(errorRefs[0]!) || "Не удалось загрузить график и метрики РК.");
+        }
+        const missingRefs = refs.filter((ref) => !loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+        if (missingRefs.length) {
+          appendCatalogRefreshLogsForRefs(missingRefs, {
+            status: "warning",
+            scope,
+            step: "График и РК",
+            message: "Нет строк графика в ответе",
+            detail: "API ответил без ошибки, но не вернул дневные строки товара.",
+          });
+        }
         const expandedRefs = refs.filter((ref) => expandedAnalyticsRefs.includes(ref));
         if (expandedRefs.length) {
           setArticleAnalyticsByRef((current) => {
             const next = { ...current };
             expandedRefs.forEach((ref) => {
-              const productRows = chartResponse.product_rows?.find((item) => item.product_ref === ref)?.rows ?? null;
+              const productRows = chartResponse.product_rows?.find((item) => item.product_ref === ref)?.rows ?? (refs.length === 1 ? chartResponse.rows : null);
               next[ref] = { loading: false, error: null, rows: productRows ?? current[ref]?.rows ?? null };
             });
             return next;
           });
         }
       } catch (error) {
-        if (isAbortError(error) || options.signal?.aborted) {
-          throw error;
-        }
-        if (refs.length === 1) {
-          setCatalogRefreshError(await readApiErrorMessage(error));
-        }
+        await logStepError("График и РК", error);
       }
 
       if (options.refreshIssues) {
+        setCatalogRefreshStep(scopeLabel, `${targetLabel}: ошибки за вчера`, activityRef);
         try {
           const response = await fetchCatalogIssues({
             productRefs: refs,
@@ -4236,6 +4443,18 @@ export function CatalogPage() {
             signal: options.signal,
           });
           const rowByRef = new Map(response.rows.map((row) => [row.product_ref, row]));
+          appendCatalogRefreshLogsForRefs(refs, {
+            status: "success",
+            scope,
+            step: "Ошибки за вчера",
+            message: "Проверено",
+          }, (ref) => {
+            const issueCount = rowByRef.get(ref)?.issues.length ?? 0;
+            return {
+              status: "success",
+              message: issueCount > 0 ? `Найдено ошибок: ${formatNumber(issueCount)}` : "Ошибок не найдено",
+            };
+          });
           setArticleIssueCacheByRef((current) => {
             const next = { ...current };
             refs.forEach((ref) => {
@@ -4248,12 +4467,13 @@ export function CatalogPage() {
             });
             return next;
           });
-        } catch {
-          if (options.signal?.aborted) {
-            throw new DOMException("Aborted", "AbortError");
-          }
-          // Issue refresh is auxiliary for row/catalog refresh.
+        } catch (error) {
+          await logStepError("Ошибки за вчера", error);
         }
+      }
+
+      if (firstErrorMessage && refs.length === 1) {
+        setCatalogRefreshError(firstErrorMessage);
       }
     } finally {
       setRefreshingArticleRefs((current) => current.filter((ref) => !refs.includes(ref)));
@@ -4309,6 +4529,8 @@ export function CatalogPage() {
         await refreshCatalogProductRefs(productGroups[index]!, {
           refreshIssues: false,
           signal: controller.signal,
+          scope: "catalog",
+          scopeLabel: "Обновление всех товаров",
           progress: { chunkCount: productGroups.length, loadedChunkCount: index + 1 },
         });
         if (index < productGroups.length - 1) {
@@ -4322,6 +4544,19 @@ export function CatalogPage() {
     } finally {
       if (catalogRefreshAbortRef.current === controller) {
         catalogRefreshAbortRef.current = null;
+        if (controller.signal.aborted) {
+          appendCatalogRefreshLogs({
+            status: "cancelled",
+            scope: "catalog",
+            step: "Обновление",
+            message: "Проходка остановлена",
+            detail: "Фоновое обновление было отменено.",
+          });
+        }
+        setCatalogRefreshActivity({
+          title: controller.signal.aborted ? "Обновление отменено" : "Обновление завершено",
+          detail: controller.signal.aborted ? "Проходка по товарам остановлена." : `Обработано чанков: ${formatNumber(productGroups.length)}.`,
+        });
       }
       setRefreshingAllCatalog(false);
     }
@@ -4337,7 +4572,12 @@ export function CatalogPage() {
     catalogRefreshAbortRef.current = controller;
     setCatalogRefreshError(null);
     try {
-      await refreshCatalogProductRefs([productRef], { refreshIssues: true, signal: controller.signal });
+      await refreshCatalogProductRefs([productRef], {
+        refreshIssues: true,
+        signal: controller.signal,
+        scope: "product",
+        scopeLabel: "Обновление товара",
+      });
     } catch (error) {
       if (!isAbortError(error) && !controller.signal.aborted) {
         setCatalogRefreshError(await readApiErrorMessage(error));
@@ -4345,6 +4585,20 @@ export function CatalogPage() {
     } finally {
       if (catalogRefreshAbortRef.current === controller) {
         catalogRefreshAbortRef.current = null;
+        if (controller.signal.aborted) {
+          appendCatalogRefreshLogs({
+            status: "cancelled",
+            scope: "product",
+            step: "Обновление",
+            message: "Обновление товара отменено",
+            productRef,
+          });
+        }
+        setCatalogRefreshActivity({
+          title: controller.signal.aborted ? "Обновление отменено" : "Обновление завершено",
+          detail: `${resolveCatalogRefreshProductLabel(productRef)}.`,
+          productRef,
+        });
       }
     }
   };
@@ -4369,7 +4623,12 @@ export function CatalogPage() {
 
     try {
       for (let index = 0; index < productRefs.length; index += 1) {
-        await refreshCatalogProductRefs([productRefs[index]!], { refreshIssues: true, signal: controller.signal });
+        await refreshCatalogProductRefs([productRefs[index]!], {
+          refreshIssues: true,
+          signal: controller.signal,
+          scope: "shop",
+          scopeLabel: `Обновление кабинета: ${shop.name}`,
+        });
         if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
@@ -4381,6 +4640,19 @@ export function CatalogPage() {
     } finally {
       if (catalogRefreshAbortRef.current === controller) {
         catalogRefreshAbortRef.current = null;
+        if (controller.signal.aborted) {
+          appendCatalogRefreshLogs({
+            status: "cancelled",
+            scope: "shop",
+            step: "Обновление кабинета",
+            message: "Проходка по кабинету остановлена",
+            detail: shop.name,
+          });
+        }
+        setCatalogRefreshActivity({
+          title: controller.signal.aborted ? "Обновление отменено" : "Обновление кабинета завершено",
+          detail: `${shop.name}: ${formatNumber(productRefs.length)} товаров.`,
+        });
       }
       setRefreshingShopIds((current) => current.filter((id) => id !== shopId));
     }
@@ -4397,6 +4669,14 @@ export function CatalogPage() {
     catalogAutoRefreshKeyRef.current = refreshKey;
     void handleRefreshAllCatalog();
   });
+
+  const visibleCatalogRefreshLogs = selectedCatalogRefreshLogRef
+    ? catalogRefreshLogs.filter((entry) => entry.productRef === selectedCatalogRefreshLogRef)
+    : catalogRefreshLogs;
+  const latestCatalogRefreshLog = catalogRefreshLogs[catalogRefreshLogs.length - 1] ?? null;
+  const catalogRefreshLogErrorCount = catalogRefreshLogs.filter((entry) => entry.status === "error").length;
+  const catalogRefreshLogWarningCount = catalogRefreshLogs.filter((entry) => entry.status === "warning").length;
+  const displayedCatalogRefreshLogs = [...visibleCatalogRefreshLogs].slice(-80).reverse();
 
   return (
     <div className="space-y-6">
@@ -4989,6 +5269,8 @@ export function CatalogPage() {
                           const isExpanded = expandedAnalyticsRefs.includes(ref);
                           const analyticsState = articleAnalyticsByRef[ref];
                           const isRefreshing = refreshingArticleRefs.includes(ref);
+                          const hasRefreshLogs = catalogRefreshLogs.some((entry) => entry.productRef === ref);
+                          const isRefreshLogSelected = selectedCatalogRefreshLogRef === ref && catalogRefreshPanelOpen;
                           return (
                             <div className={cn("catalog-product-row-cell flex w-[252px] max-w-[252px] items-start gap-2.5", isRefreshing && "is-refreshing")}>
                               <div className="catalog-article-row-actions">
@@ -5013,6 +5295,15 @@ export function CatalogPage() {
                                   className={cn("catalog-article-action-button", isRefreshing && "is-loading")}
                                 >
                                   <RefreshCw className="size-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openCatalogRefreshLogs(ref)}
+                                  title="Логи обновления"
+                                  aria-label="Открыть логи обновления товара"
+                                  className={cn("catalog-article-action-button", hasRefreshLogs && "has-logs", isRefreshLogSelected && "is-active")}
+                                >
+                                  <FileText className="size-3.5" />
                                 </button>
                                 <Link
                                   to={`/product${buildProductSearch(article.article, start, end)}`}
@@ -5283,6 +5574,66 @@ export function CatalogPage() {
             </Link>
           </div>
         </SectionCard>
+      ) : null}
+
+      {catalogRefreshPanelOpen ? (
+        <aside className="catalog-refresh-log-panel" aria-live="polite">
+          <div className="catalog-refresh-log-head">
+            <div className="min-w-0">
+              <p>Статус обновления</p>
+              <h3>{catalogRefreshActivity?.title ?? (latestCatalogRefreshLog ? "Последние логи" : "Логи обновления")}</h3>
+            </div>
+            <div className="catalog-refresh-log-actions">
+              {selectedCatalogRefreshLogRef ? (
+                <button type="button" onClick={() => setSelectedCatalogRefreshLogRef(null)}>
+                  Все
+                </button>
+              ) : null}
+              <button type="button" onClick={() => setCatalogRefreshLogs([])}>
+                Очистить
+              </button>
+              <button type="button" onClick={() => setCatalogRefreshPanelOpen(false)} aria-label="Закрыть логи обновления">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="catalog-refresh-log-current">
+            <span className={cn("catalog-refresh-log-dot", catalogRefreshActivity ? "is-info" : latestCatalogRefreshLog ? `is-${latestCatalogRefreshLog.status}` : "is-info")} />
+            <div className="min-w-0">
+              <strong>
+                {catalogRefreshActivity?.detail ??
+                  (selectedCatalogRefreshLogRef
+                    ? resolveCatalogRefreshProductLabel(selectedCatalogRefreshLogRef)
+                    : latestCatalogRefreshLog?.message ?? "Запустите обновление товара")}
+              </strong>
+              <small>
+                Ошибок: {formatNumber(catalogRefreshLogErrorCount)} · Предупреждений: {formatNumber(catalogRefreshLogWarningCount)}
+              </small>
+            </div>
+          </div>
+
+          <div className="catalog-refresh-log-list">
+            {displayedCatalogRefreshLogs.length ? (
+              displayedCatalogRefreshLogs.map((entry) => (
+                <div key={entry.id} className={cn("catalog-refresh-log-entry", `is-${entry.status}`)}>
+                  <div className="catalog-refresh-log-entry-top">
+                    <span>{formatCatalogRefreshLogTime(entry.createdAt)}</span>
+                    <span className={cn("catalog-refresh-log-status", `is-${entry.status}`)}>{CATALOG_REFRESH_LOG_STATUS_LABELS[entry.status]}</span>
+                  </div>
+                  <strong>{entry.step}</strong>
+                  <p>{entry.message}</p>
+                  {entry.productLabel ? <small>{entry.productLabel}</small> : null}
+                  {entry.detail ? <em>{entry.detail}</em> : null}
+                </div>
+              ))
+            ) : (
+              <div className="catalog-refresh-log-empty">
+                {selectedCatalogRefreshLogRef ? "По этому товару логов обновления еще нет." : "Логи появятся после запуска обновления."}
+              </div>
+            )}
+          </div>
+        </aside>
       ) : null}
 
       {showScrollTop ? (
