@@ -104,7 +104,7 @@ declare global {
   }
 }
 
-function readCachedProductLoaderData() {
+function readCachedProductLoaderData(options: { article?: string | null; start?: string | null; end?: string | null }) {
   if (typeof window === "undefined") {
     return null;
   }
@@ -115,6 +115,23 @@ function readCachedProductLoaderData() {
     }
     const parsed = JSON.parse(raw) as ProductLoaderData | null;
     if (!parsed?.payload?.products?.length) {
+      return null;
+    }
+    const requestedArticle = String(options.article || "").trim();
+    const cachedArticle = String(parsed.trackedArticles?.[0] || parsed.payload.products[0]?.article || "").trim();
+    if (requestedArticle && cachedArticle !== requestedArticle) {
+      return null;
+    }
+    if ((options.start && parsed.start !== options.start) || (options.end && parsed.end !== options.end)) {
+      return null;
+    }
+    const cachedProductArticle = String(parsed.payload.products[0]?.article || "").trim();
+    const cachedProductStart = parsed.payload.products[0]?.period?.current_start;
+    const cachedProductEnd = parsed.payload.products[0]?.period?.current_end;
+    if (requestedArticle && cachedProductArticle && cachedProductArticle !== requestedArticle) {
+      return null;
+    }
+    if ((options.start && cachedProductStart && cachedProductStart !== options.start) || (options.end && cachedProductEnd && cachedProductEnd !== options.end)) {
       return null;
     }
     return parsed;
@@ -251,7 +268,11 @@ export async function productLoader({ request }: LoaderFunctionArgs) {
     window.location.pathname.startsWith("/product");
 
   if (shouldUseCachedPayload) {
-    const cached = readCachedProductLoaderData();
+    const cached = readCachedProductLoaderData({
+      article: trackedArticles[0],
+      start: range.currentStart,
+      end: range.currentEnd,
+    });
     if (cached) {
       return {
         payload: cached.payload,
@@ -670,7 +691,7 @@ function buildMetricSeries(product: ProductSummary, metric: (row: DailyStat) => 
 }
 
 function buildBoardMetrics(product: ProductSummary) {
-  const totals = product.daily_totals || {};
+  const totals = product.daily_stats.length ? product.daily_totals || {} : {};
   const spend = toNumber(totals.expense_sum ?? product.range_metrics.sum);
   const views = toNumber(totals.views ?? product.range_metrics.views);
   const clicks = toNumber(totals.clicks ?? product.range_metrics.clicks);

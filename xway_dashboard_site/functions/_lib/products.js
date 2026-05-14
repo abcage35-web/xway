@@ -167,6 +167,19 @@ function normalizeDailyStats(rows, start = null, end = null) {
 }
 
 function dailyTotals(rows) {
+  if (!rows?.length) {
+    return {
+      ...Object.fromEntries(DAILY_SUM_FIELDS.map((field) => [field, null])),
+      CTR: null,
+      CPC: null,
+      CR: null,
+      DRR: null,
+      CPO: null,
+      CPO_overall: null,
+      CPO_with_rel: null,
+    };
+  }
+
   const totals = Object.fromEntries(DAILY_SUM_FIELDS.map((field) => [field, 0]));
   for (const row of rows || []) {
     for (const field of DAILY_SUM_FIELDS) {
