@@ -82,6 +82,29 @@ export function buildAiOpenApiSpec(requestUrl) {
             start: { type: "string", format: "date", description: "Analysis start date. Defaults to 30 days before end." },
             end: { type: "string", format: "date", description: "Analysis end date. Defaults to today." },
             refresh: { type: "boolean", description: "Bypass short-lived source caches when supported." },
+            detail_level: {
+              type: "string",
+              enum: ["full", "summary"],
+              default: "full",
+              description: "Use full for recommendation reports. Full includes campaign daily details, bid and budget history, cluster/normquery rows, fixed/excluded flags, cluster bids and positions where XWAY provides them. Summary is only for fast aggregate checks.",
+            },
+            include_campaign_details: {
+              type: "boolean",
+              description: "When true, load campaign-level details even if detail_level is summary. If campaign_ids is omitted, details are loaded for all article campaigns.",
+            },
+            campaign_ids: {
+              type: "array",
+              description: "Optional XWAY campaign ids to load with detailed clusters/phrases. Omit for full details on every campaign.",
+              items: { type: "string" },
+            },
+            include_xway_charts: {
+              type: "boolean",
+              description: "Include catalog chart totals for the requested range, last 7 days and previous 7 days. Defaults to true in full mode.",
+            },
+            include_xway_issues: {
+              type: "boolean",
+              description: "Include catalog issue diagnostics for the last 7 days. Defaults to true in full mode.",
+            },
           },
           required: ["article"],
         },
@@ -99,6 +122,7 @@ export function buildAiOpenApiSpec(requestUrl) {
             ok: { type: "boolean" },
             article: { type: "string" },
             range: { type: "object" },
+            detail: { type: "object" },
             sources: { type: "object" },
             xway: { type: "object" },
             mpvibe: { type: "object" },

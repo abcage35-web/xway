@@ -109,11 +109,65 @@ function productRefForProduct(product) {
   return shopId !== null && shopId !== undefined && productId !== null && productId !== undefined ? `${shopId}:${productId}` : null;
 }
 
-function pickProductFields(product) {
+function pickCampaignSummaryFields(campaign) {
+  return {
+    id: campaign.id,
+    wb_id: campaign.wb_id,
+    name: campaign.name,
+    query_main: campaign.query_main,
+    status: campaign.status,
+    status_xway: campaign.status_xway,
+    auction_mode: campaign.auction_mode,
+    auto_type: campaign.auto_type,
+    payment_type: campaign.payment_type,
+    unified: campaign.unified,
+    schedule_active: campaign.schedule_active,
+    budget: campaign.budget,
+    bid: campaign.bid,
+    min_cpm: campaign.min_cpm,
+    spend: campaign.spend,
+    limits_by_period: campaign.limits_by_period,
+    metrics: campaign.metrics,
+  };
+}
+
+function pickCampaignFullFields(campaign) {
+  return {
+    ...pickCampaignSummaryFields(campaign),
+    created: campaign.created,
+    wb_created: campaign.wb_created,
+    mp_bid: campaign.mp_bid,
+    mp_recom_bid: campaign.mp_recom_bid,
+    min_cpm_recom: campaign.min_cpm_recom,
+    budget_rule: campaign.budget_rule,
+    budget_deposit_status: campaign.budget_deposit_status,
+    budget_deposit_error: campaign.budget_deposit_error,
+    pause_reasons: campaign.pause_reasons,
+    _heavy_loaded: Boolean(campaign._heavy_loaded),
+    daily_exact: campaign.daily_exact || [],
+    spend_limits: campaign.spend_limits || {},
+    schedule_config: campaign.schedule_config || {},
+    schedule_error: campaign.schedule_error || null,
+    bid_history: campaign.bid_history || [],
+    bid_history_error: campaign.bid_history_error || null,
+    budget_history: campaign.budget_history || [],
+    budget_history_error: campaign.budget_history_error || null,
+    budget_rule_config: campaign.budget_rule_config || {},
+    status_logs: campaign.status_logs || null,
+    clusters: campaign.clusters || null,
+    cluster_action_history: campaign.cluster_action_history || [],
+    cluster_errors: campaign.cluster_errors || {},
+  };
+}
+
+function pickProductFields(product, { detailLevel = "full" } = {}) {
   if (!product) {
     return null;
   }
-  return {
+  const full = detailLevel === "full";
+  const picked = {
+    detail_level: detailLevel,
+    full_campaign_details: full,
     article: product.article,
     product_ref: productRefForProduct(product),
     product_id: product.product_id,
@@ -126,25 +180,7 @@ function pickProductFields(product) {
     daily_totals: product.daily_totals,
     catalog_campaign_states: product.catalog_campaign_states,
     schedule_aggregate: product.schedule_aggregate,
-    campaigns: (product.campaigns || []).map((campaign) => ({
-      id: campaign.id,
-      wb_id: campaign.wb_id,
-      name: campaign.name,
-      query_main: campaign.query_main,
-      status: campaign.status,
-      status_xway: campaign.status_xway,
-      auction_mode: campaign.auction_mode,
-      auto_type: campaign.auto_type,
-      payment_type: campaign.payment_type,
-      unified: campaign.unified,
-      schedule_active: campaign.schedule_active,
-      budget: campaign.budget,
-      bid: campaign.bid,
-      min_cpm: campaign.min_cpm,
-      spend: campaign.spend,
-      limits_by_period: campaign.limits_by_period,
-      metrics: campaign.metrics,
-    })),
+    campaigns: (product.campaigns || []).map((campaign) => (full ? pickCampaignFullFields(campaign) : pickCampaignSummaryFields(campaign))),
     daily_stats: (product.daily_stats || []).map((row) => ({
       day: row.day,
       views: row.views,
@@ -162,6 +198,20 @@ function pickProductFields(product) {
       CPO: row.CPO,
     })),
   };
+
+  if (full) {
+    picked.operations = product.operations;
+    picked.comparison = product.comparison;
+    picked.stata_totals = product.stata_totals;
+    picked.heatmap = product.heatmap;
+    picked.orders_heatmap = product.orders_heatmap;
+    picked.article_sheet = product.article_sheet;
+    picked.bid_log = product.bid_log || [];
+    picked.cluster_action_log = product.cluster_action_log || [];
+    picked.errors = product.errors || {};
+  }
+
+  return picked;
 }
 
 function campaignTypeForCampaign(campaign) {
@@ -285,11 +335,16 @@ function buildSourceMap(results) {
 function buildAnalysisContract() {
   return {
     output_language: "ru",
+    recommended_request: {
+      detail_level: "full",
+      use_summary_only_for: "fast aggregate checks without phrase, cluster, bid, status or daily campaign diagnostics",
+    },
     required_reasoning_layers: [
       "plan_vs_fact",
       "monthly_plan_vs_forecast",
       "price_spp_dynamics",
       "campaign_type_efficiency",
+      "manual_campaign_cluster_detail",
       "margin_wb_ds_percent",
       "inventory_unlocking",
       "wb_reviews_quality_risks",
@@ -300,6 +355,8 @@ function buildAnalysisContract() {
       "If plan is already fulfilled, prefer reducing inefficient advertising pressure over buying extra volume.",
       "If sales rose after price_with_wallet decreased or spp changed, treat it as price elasticity, not pure ad efficiency.",
       "For expensive manual CPM, estimate order-risk from its order share, not from its spend share.",
+      "When manual CPM cluster data is present, analyze fixed/excluded clusters, cluster bids, positions, daily cluster metrics and cluster action history before recommending bid changes.",
+      "If manual CPM clusters are missing in the payload, say that the source did not return them; do not invent phrase-level recommendations.",
     ],
   };
 }
@@ -309,8 +366,48 @@ function aiCacheBinding(env) {
   return binding && typeof binding.get === "function" && typeof binding.put === "function" ? binding : null;
 }
 
-function aiCacheKey(article, range) {
-  return `${AI_RECOMMENDATION_CACHE_VERSION}:recommendation-data:${article}:${range.start}:${range.end}`;
+function normalizeCampaignIds(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(",");
+  return [
+    ...new Set(
+      source
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function resolveDetailLevel(requestBody) {
+  const requested = String(requestBody.detail_level || "").trim().toLowerCase();
+  if (requested === "summary") {
+    return "summary";
+  }
+  return "full";
+}
+
+function resolveOptionalFullDefault(value, detailLevel) {
+  if (value === false) {
+    return false;
+  }
+  if (value === true) {
+    return true;
+  }
+  return detailLevel === "full";
+}
+
+function aiCacheKey(article, range, options = {}) {
+  const parts = [
+    AI_RECOMMENDATION_CACHE_VERSION,
+    "recommendation-data",
+    article,
+    range.start,
+    range.end,
+    `detail=${options.detailLevel || "full"}`,
+    `campaigns=${(options.campaignIds || []).slice().sort().join(",")}`,
+    `charts=${options.includeXwayCharts ? "1" : "0"}`,
+    `issues=${options.includeXwayIssues ? "1" : "0"}`,
+  ];
+  return parts.join(":");
 }
 
 function collectMpvibeSignals(mpvibe) {
@@ -362,10 +459,15 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
     end: isoDate(addDays(parseIsoDate(last7Range.start), -1)),
   };
   const forceRefresh = Boolean(refreshOverride || requestBody.refresh);
-  const includeXwayCharts = requestBody.include_xway_charts === true;
-  const includeXwayIssues = requestBody.include_xway_issues === true;
+  const requestedDetailLevel = resolveDetailLevel(requestBody);
+  const campaignIds = normalizeCampaignIds(requestBody.campaign_ids);
+  const includeCampaignDetails = requestedDetailLevel === "full" || requestBody.include_campaign_details === true || campaignIds.length > 0;
+  const detailLevel = includeCampaignDetails ? "full" : "summary";
+  const productCampaignMode = includeCampaignDetails && campaignIds.length === 0 ? "full" : "summary";
+  const includeXwayCharts = resolveOptionalFullDefault(requestBody.include_xway_charts, detailLevel);
+  const includeXwayIssues = resolveOptionalFullDefault(requestBody.include_xway_issues, detailLevel);
   const cache = aiCacheBinding(context.env);
-  const cacheKey = aiCacheKey(article, range);
+  const cacheKey = aiCacheKey(article, range, { detailLevel, campaignIds, includeXwayCharts, includeXwayIssues });
 
   if (cache && !forceRefresh) {
     const cached = await cache.get(cacheKey, "json");
@@ -386,7 +488,8 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
       articles: article,
       start: range.start,
       end: range.end,
-      campaign_mode: "summary",
+      campaign_mode: productCampaignMode,
+      heavy_campaign_ids: includeCampaignDetails && campaignIds.length ? campaignIds.join(",") : "",
       force_refresh: forceRefresh ? "1" : "",
     }),
   );
@@ -463,10 +566,18 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
       previous_7_days: previous7Range,
       days: iterIsoDays(range.start, range.end).length,
     },
+    detail: {
+      level: detailLevel,
+      xway_campaign_mode: productCampaignMode,
+      campaign_ids: campaignIds,
+      full_campaign_details_requested: includeCampaignDetails,
+      include_xway_charts: includeXwayCharts,
+      include_xway_issues: includeXwayIssues,
+    },
     refresh: forceRefresh,
     sources: buildSourceMap(results),
     xway: {
-      product: pickProductFields(product),
+      product: pickProductFields(product, { detailLevel }),
       not_found: xwayProductResult[0]?.not_found || [],
       campaign_type_totals_from_product: summarizeProductCampaignTypes(product),
       chart_30d: summarizeChart(xwayChart30),
