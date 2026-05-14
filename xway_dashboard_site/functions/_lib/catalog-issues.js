@@ -663,8 +663,8 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
   };
 }
 
-export async function collectCatalogIssues(env, { productRefs = [], start = null, end = null } = {}) {
-  const client = new XwayApiClient(env, { start, end });
+export async function collectCatalogIssues(env, { productRefs = [], start = null, end = null, forceRefresh = false } = {}) {
+  const client = new XwayApiClient(env, { start, end, forceRefresh });
   const parsedRefs = parseCatalogChartProductRefs(productRefs);
   const rows = await mapWithConcurrency(parsedRefs, 2, async (ref) => collectSingleCatalogIssue(client, ref));
 

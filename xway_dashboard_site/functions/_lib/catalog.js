@@ -1100,8 +1100,8 @@ function buildCatalogChartTotals(rows) {
   };
 }
 
-export async function collectCatalogChart(env, { productRefs = [], start = null, end = null, includeCampaignTypes = false } = {}) {
-  const client = new XwayApiClient(env, { start, end });
+export async function collectCatalogChart(env, { productRefs = [], start = null, end = null, includeCampaignTypes = false, forceRefresh = false } = {}) {
+  const client = new XwayApiClient(env, { start, end, forceRefresh });
   const parsedRefs = parseCatalogChartProductRefs(productRefs);
   const days = iterIsoDays(client.range.current_start, client.range.current_end);
   const rowsByDay = new Map(days.map((day) => [day, createEmptyCatalogChartRow(day)]));

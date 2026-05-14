@@ -1202,11 +1202,11 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
   );
 }
 
-export async function collectProducts(env, { articles = [], start = null, end = null, campaignMode = "full", heavyCampaignIds = [] } = {}) {
+export async function collectProducts(env, { articles = [], start = null, end = null, campaignMode = "full", heavyCampaignIds = [], forceRefresh = false } = {}) {
   const requestedArticles = [...new Set((articles || []).map((article) => String(article || "").trim()).filter(Boolean))];
   const normalizedMode = String(campaignMode || "").toLowerCase() === "summary" ? "summary" : "full";
   const requestedHeavyIds = new Set((heavyCampaignIds || []).map((campaignId) => String(campaignId || "").trim()).filter(Boolean));
-  const client = new XwayApiClient(env, { start, end });
+  const client = new XwayApiClient(env, { start, end, forceRefresh });
 
   const cacheKey = [
     client.cacheNamespace,
@@ -1216,7 +1216,7 @@ export async function collectProducts(env, { articles = [], start = null, end = 
     requestedArticles.join(","),
     [...requestedHeavyIds].sort().join(","),
   ].join("::");
-  const cached = getCached(cacheKey);
+  const cached = forceRefresh ? null : getCached(cacheKey);
   if (cached) {
     return cached;
   }

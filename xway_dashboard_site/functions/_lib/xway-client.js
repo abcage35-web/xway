@@ -459,7 +459,7 @@ export class XwayApiClient {
 
   async productInfo(shopId, productId) {
     const cacheKey = `${this.cacheNamespace}:product-info:${shopId}:${productId}`;
-    const cached = getCached(cacheStore.productInfo, cacheKey, PRODUCT_INFO_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.productInfo, cacheKey, PRODUCT_INFO_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -472,7 +472,7 @@ export class XwayApiClient {
 
   async productDynamics(shopId, productId) {
     const cacheKey = `${this.cacheNamespace}:product-dynamics:${shopId}:${productId}:${this.range.current_start}:${this.range.current_end}`;
-    const cached = getCached(cacheStore.productDynamics, cacheKey, PRODUCT_DYNAMICS_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.productDynamics, cacheKey, PRODUCT_DYNAMICS_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -492,7 +492,7 @@ export class XwayApiClient {
 
   async productStocksRule(shopId, productId) {
     const cacheKey = `${this.cacheNamespace}:product-stocks-rule:${shopId}:${productId}`;
-    const cached = getCached(cacheStore.productStocksRule, cacheKey, PRODUCT_STOCKS_RULE_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.productStocksRule, cacheKey, PRODUCT_STOCKS_RULE_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -505,7 +505,7 @@ export class XwayApiClient {
 
   async productStataRange(shopId, productId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:product-stata:${shopId}:${productId}:${start}:${end}`;
-    const cached = getCached(cacheStore.productStata, cacheKey, PRODUCT_STATA_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.productStata, cacheKey, PRODUCT_STATA_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -529,7 +529,7 @@ export class XwayApiClient {
 
   async productStatsByDay(shopId, productId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:product-stats:${shopId}:${productId}:${start}:${end}`;
-    const cached = getCached(cacheStore.productDailyStats, cacheKey, PRODUCT_DAILY_STATS_CACHE_TTL_MS);
+    const cached = this.forceRefresh ? null : getCached(cacheStore.productDailyStats, cacheKey, PRODUCT_DAILY_STATS_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }

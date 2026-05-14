@@ -1,6 +1,8 @@
 import { collectCatalog, collectCatalogChart } from "../_lib/catalog.js";
 import { collectCatalogIssues } from "../_lib/catalog-issues.js";
 import { collectClusterDetail } from "../_lib/cluster-detail.js";
+import { handleAiRequest } from "../_lib/ai/handler.js";
+import { isAiRoute } from "../_lib/ai/auth.js";
 import { collectProducts } from "../_lib/products.js";
 import { errorResponse, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
 
@@ -74,7 +76,7 @@ async function handleNativeRequest(context, pathname) {
     return jsonResponse({
       ok: true,
       backend: hasNativeStorageState(context.env) ? "cloudflare-native" : "proxy-only",
-      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-issues", "/api/products", "/api/cluster-detail"],
+      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-issues", "/api/products", "/api/cluster-detail", "/api/ai/*"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       has_storage_state: hasNativeStorageState(context.env),
@@ -174,6 +176,14 @@ export async function onRequest(context) {
   const pathname = requestUrl.pathname;
   const apiOrigin = sanitizeOrigin(context.env.API_ORIGIN);
   const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-issues", "/api/products", "/api/cluster-detail"]);
+
+  if (isAiRoute(pathname)) {
+    try {
+      return withSourceHeader(await handleAiRequest(context, pathname), "native");
+    } catch (error) {
+      return errorResponse(500, error instanceof Error ? error.message : "AI handler failed.");
+    }
+  }
 
   if (nativeRoutes.has(pathname)) {
     if (pathname === "/api/health" || hasNativeStorageState(context.env)) {

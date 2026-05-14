@@ -9,4 +9,8 @@
   // Configure in Cloudflare dashboard or via wrangler secrets:
   // - API_ORIGIN: optional reserve proxy origin for routes not handled by Pages Functions
   // - XWAY_STORAGE_STATE_JSON or XWAY_STORAGE_STATE_BASE64: auth state for native XWAY API calls
+  // - XWAY_AI_API_KEY: required Bearer token for shared ChatGPT Actions
+  // - MPVIBE_COOKIE_HEADER or MPVIBE_AUTHORIZATION: optional MPVibe data source for AI analytics
+  // - WB_FEEDBACK_ROOTS_JSON: optional article -> WB feedback root id mapping
+  // - XWAY_AI_CACHE: optional KV namespace binding for shared AI response cache
 }

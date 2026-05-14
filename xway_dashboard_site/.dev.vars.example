@@ -6,3 +6,16 @@ XWAY_STORAGE_STATE_JSON='{"cookies":[]}'
 # XWAY_COOKIE_HEADER="sessionid=...; csrftoken_v2=..."
 # XWAY_CSRF_TOKEN=""
 # XWAY_SESSIONID=""
+
+# Shared ChatGPT / GPT Actions integration.
+# Required for /api/ai/recommendation-data and /api/ai/context.
+XWAY_AI_API_KEY="replace-with-a-long-random-secret"
+
+# Optional MPVibe API auth for the AI recommendation data layer.
+# Use a service account/session where possible, not a personal browser cookie.
+# MPVIBE_COOKIE_HEADER="session=...; ..."
+# MPVIBE_AUTHORIZATION="Bearer ..."
+
+# Optional WB feedback root mapping when WB public card endpoints are blocked.
+# Example for article 282727300:
+WB_FEEDBACK_ROOTS_JSON='{"282727300":"606943940"}'

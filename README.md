@@ -31,6 +31,10 @@
 - `API_ORIGIN` = необязательно, URL резервного backend, например `https://api.example.com`
 - `XWAY_STORAGE_STATE_JSON` или `XWAY_STORAGE_STATE_BASE64` = storage state с cookies для прямых запросов в XWAY API из Cloudflare Functions
 - либо более простой вариант: `XWAY_COOKIE_HEADER` и `XWAY_CSRF_TOKEN`
+- `XWAY_AI_API_KEY` = Bearer token для общего ChatGPT GPT Action
+- `MPVIBE_COOKIE_HEADER` или `MPVIBE_AUTHORIZATION` = опционально, чтобы AI endpoint подтягивал MPVibe
+- `WB_FEEDBACK_ROOTS_JSON` = опционально, mapping артикула к WB feedback root id
+- `XWAY_AI_CACHE` = опциональный KV binding для общего кэша AI-ответов до ручного refresh
 
 ### Что важно
 
@@ -38,6 +42,7 @@
   `XWAY_STORAGE_STATE_JSON`, `XWAY_STORAGE_STATE_BASE64`, `XWAY_COOKIE_HEADER`, либо `XWAY_SESSIONID`.
 - Отдельный Python backend нужен только если ты сознательно хочешь сохранить запасной proxy через `API_ORIGIN`.
 - Для React SPA отдельный `_redirects` не нужен, если в сборке есть корневой `index.html` и нет верхнеуровневого `404.html`.
+- Для общего доступа через ChatGPT добавлен AI data-layer: `/api/ai/openapi.json`, `/api/ai/context`, `/api/ai/recommendation-data`, `/api/ai/refresh-article`. Настройка описана в `docs/chatgpt-actions.md`.
 
 ## Карта крупных модулей
 
