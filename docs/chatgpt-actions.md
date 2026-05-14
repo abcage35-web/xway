@@ -159,6 +159,8 @@ Supported grouping dimensions are `day`, `category`, `article`, `shop` and `camp
 
 `getAggregatedAdMetrics` retries incomplete catalog-chart loads by default. If `selection.remaining_product_refs` is not empty after the built-in retries, call the returned `retry.recommended_next_request` to load the missing products separately and merge the result in the answer. For repeated source-limit errors, prefer `chunk_size: 1`, `max_retry_rounds: 3` and a larger `retry_delay_ms`.
 
+For the in-dashboard AI chat, prefer `sendDashboardChatMessage` when the user expects the assistant to decide the data-loading path autonomously. That endpoint runs server-side collection first, retries remaining product refs, merges continuation loads, compacts campaign/cluster context and only then calls the LLM.
+
 ## MPVibe endpoints used
 
 The integration discovers and reads MPVibe through the same JSON endpoints used by the browser UI:

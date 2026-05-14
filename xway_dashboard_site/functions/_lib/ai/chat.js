@@ -57,9 +57,105 @@ function compactNumber(value) {
   return Number.isFinite(numeric) ? Number(numeric.toFixed(2)) : null;
 }
 
+function metricBucket() {
+  return {
+    views: 0,
+    clicks: 0,
+    atbs: 0,
+    orders: 0,
+    ordered_total: 0,
+    expense_sum: 0,
+    sum_price: 0,
+    ordered_sum_total: 0,
+    spent_sku_count: 0,
+  };
+}
+
+function addMetricBucket(target, source = {}) {
+  target.views += Number(source.views || 0);
+  target.clicks += Number(source.clicks || 0);
+  target.atbs += Number(source.atbs || 0);
+  target.orders += Number(source.orders || 0);
+  target.ordered_total += Number(source.ordered_total || 0);
+  target.expense_sum += Number(source.expense_sum || 0);
+  target.sum_price += Number(source.sum_price || 0);
+  target.ordered_sum_total += Number(source.ordered_sum_total || 0);
+  target.spent_sku_count += Number(source.spent_sku_count || 0);
+}
+
+function finalizeMetricBucket(metrics) {
+  return {
+    ...metrics,
+    ctr: metrics.views ? (metrics.clicks / metrics.views) * 100 : null,
+    cr_click_to_order: metrics.clicks ? (metrics.orders / metrics.clicks) * 100 : null,
+    cr_view_to_order: metrics.views ? (metrics.orders / metrics.views) * 100 : null,
+    cpc: metrics.clicks ? metrics.expense_sum / metrics.clicks : null,
+    cpo: metrics.orders ? metrics.expense_sum / metrics.orders : null,
+    drr_ads: metrics.sum_price ? (metrics.expense_sum / metrics.sum_price) * 100 : null,
+    drr_total: metrics.ordered_sum_total ? (metrics.expense_sum / metrics.ordered_sum_total) * 100 : null,
+  };
+}
+
+function clampInteger(value, fallback, min, max) {
+  const numeric = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(numeric, max));
+}
+
+function compactCluster(cluster) {
+  return {
+    normquery_id: cluster?.normquery_id,
+    name: pickText(cluster?.name, 120),
+    views: cluster?.views,
+    clicks: cluster?.clicks,
+    orders: cluster?.orders,
+    expense: cluster?.expense,
+    ctr: cluster?.ctr,
+    cpc: cluster?.cpc,
+    cpo: cluster?.cpo,
+    cr: cluster?.cr,
+    bid: cluster?.bid,
+    bid_default: cluster?.bid_default,
+    bid_rule_active: cluster?.bid_rule_active,
+    bid_rule_target_place: cluster?.bid_rule_target_place,
+    bid_rule_max_cpm: cluster?.bid_rule_max_cpm,
+    fixed: cluster?.fixed,
+    excluded: cluster?.excluded,
+    is_main: cluster?.is_main,
+    position: cluster?.position,
+    position_is_promo: cluster?.position_is_promo,
+    latest_date: cluster?.latest_date,
+    latest_org_pos: cluster?.latest_org_pos,
+    latest_promo_pos: cluster?.latest_promo_pos,
+  };
+}
+
+function compactCampaignClusters(campaign, limit = 30) {
+  const items = Array.isArray(campaign?.clusters?.items) ? campaign.clusters.items : [];
+  const activeItems = items.filter((cluster) => !cluster?.excluded);
+  return {
+    available: Boolean(campaign?.clusters?.available),
+    total_clusters: campaign?.clusters?.total_clusters ?? items.length,
+    loaded_clusters: items.length,
+    excluded: campaign?.clusters?.excluded ?? items.filter((cluster) => cluster?.excluded).length,
+    fixed: campaign?.clusters?.fixed ?? items.filter((cluster) => cluster?.fixed).length,
+    active_loaded: activeItems.length,
+    top_active_by_views: [...activeItems]
+      .sort((left, right) => Number(right?.views || 0) - Number(left?.views || 0))
+      .slice(0, limit)
+      .map(compactCluster),
+    top_active_by_spend: [...activeItems]
+      .sort((left, right) => Number(right?.expense || 0) - Number(left?.expense || 0))
+      .slice(0, Math.min(limit, 15))
+      .map(compactCluster),
+  };
+}
+
 function compactCampaign(campaign) {
   const metrics = campaign?.metrics || {};
-  return {
+  const compact = {
     id: campaign?.id,
     wb_id: campaign?.wb_id,
     name: pickText(campaign?.name, 120),
@@ -77,6 +173,10 @@ function compactCampaign(campaign) {
     cpo: metrics.cpo,
     cpc: metrics.cpc,
   };
+  if (campaign?.clusters?.available || campaign?._heavy_loaded) {
+    compact.clusters = compactCampaignClusters(campaign);
+  }
+  return compact;
 }
 
 function topDailyRows(rows, metric, limit = 5, direction = "desc") {
@@ -173,7 +273,111 @@ function compactAdMetricsPayload(payload) {
     rows: (payload?.rows || []).slice(0, 120),
     row_count: payload?.row_count,
     truncated: payload?.truncated,
+    retry: payload?.retry,
+    load_segments: payload?.load_segments,
     errors: payload?.errors,
+  };
+}
+
+function rowIdentity(row) {
+  return {
+    day: row?.day,
+    category: row?.category,
+    article: row?.article,
+    product_ref: row?.product_ref,
+    product_name: row?.product_name,
+    shop_id: row?.shop_id,
+    shop_name: row?.shop_name,
+    campaign_type: row?.campaign_type,
+    campaign_type_label: row?.campaign_type_label,
+  };
+}
+
+function rowIdentityKey(identity) {
+  return Object.entries(identity)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => `${key}=${value}`)
+    .join("|");
+}
+
+function mergeMetricMaps(payloads, key) {
+  const merged = new Map();
+  for (const payload of payloads) {
+    for (const [typeKey, metrics] of Object.entries(payload?.[key] || {})) {
+      const target = merged.get(typeKey) || metricBucket();
+      addMetricBucket(target, metrics);
+      merged.set(typeKey, target);
+    }
+  }
+  return Object.fromEntries([...merged.entries()].map(([typeKey, metrics]) => [typeKey, finalizeMetricBucket(metrics)]));
+}
+
+function mergeAdMetricsPayloads(payloads) {
+  const base = payloads[0] || {};
+  const groupedRows = new Map();
+  const totals = metricBucket();
+  let loadedProducts = 0;
+
+  for (const payload of payloads) {
+    addMetricBucket(totals, payload?.totals || {});
+    loadedProducts += Number(payload?.selection?.loaded_products_count || 0);
+    for (const row of payload?.rows || []) {
+      const identity = rowIdentity(row);
+      const key = rowIdentityKey(identity);
+      const existing = groupedRows.get(key) || {
+        ...identity,
+        product_count: 0,
+        metrics: metricBucket(),
+      };
+      existing.product_count += Number(row.product_count || 0);
+      addMetricBucket(existing.metrics, row.metrics || {});
+      groupedRows.set(key, existing);
+    }
+  }
+
+  const rows = [...groupedRows.values()]
+    .map((row) => ({
+      ...row,
+      metrics: finalizeMetricBucket(row.metrics),
+    }))
+    .sort((left, right) => rowIdentityKey(left).localeCompare(rowIdentityKey(right)));
+  const last = payloads[payloads.length - 1] || base;
+  const remaining = last?.selection?.remaining_product_refs || last?.retry?.remaining_product_refs || [];
+  const matchedArticles = Number(base?.selection?.matched_articles || 0);
+
+  return {
+    ...base,
+    selection: {
+      ...(base.selection || {}),
+      loaded_products_count: loadedProducts,
+      coverage_percent: matchedArticles ? (loadedProducts / matchedArticles) * 100 : base?.selection?.coverage_percent ?? null,
+      remaining_product_refs: remaining,
+    },
+    rows,
+    row_count: rows.length,
+    truncated: payloads.some((payload) => payload?.truncated),
+    totals: finalizeMetricBucket(totals),
+    campaign_type_totals: mergeMetricMaps(payloads, "campaign_type_totals"),
+    retry: {
+      complete: remaining.length === 0,
+      continuation_count: Math.max(payloads.length - 1, 0),
+      attempts: payloads.flatMap((payload, segment) =>
+        (payload?.retry?.attempts || []).map((attempt) => ({
+          ...attempt,
+          segment,
+        })),
+      ),
+      remaining_product_refs: remaining,
+      recommended_next_request: last?.retry?.recommended_next_request || null,
+    },
+    load_segments: payloads.map((payload, index) => ({
+      index,
+      matched_articles: payload?.selection?.matched_articles,
+      loaded_products_count: payload?.selection?.loaded_products_count,
+      remaining_count: (payload?.selection?.remaining_product_refs || []).length,
+      retry_complete: payload?.retry?.complete,
+    })),
+    errors: payloads.flatMap((payload) => payload?.errors || []),
   };
 }
 
@@ -245,6 +449,34 @@ async function callOpenAi(env, { message, history, dataContext }) {
   };
 }
 
+async function collectAdMetricsForChat(context, initialBody, requestBody) {
+  const maxContinuationRounds = clampInteger(requestBody.auto_continue_rounds, 4, 0, 8);
+  const payloads = [];
+  let body = {
+    ...initialBody,
+    retry_failed: true,
+    max_retry_rounds: requestBody.max_retry_rounds ?? 5,
+    retry_delay_ms: requestBody.retry_delay_ms ?? 500,
+    chunk_size: requestBody.chunk_size ?? 8,
+  };
+
+  for (let round = 0; round <= maxContinuationRounds; round += 1) {
+    const payload = await collectAiAdMetrics(buildChildContext(context, body));
+    payloads.push(payload);
+    const remaining = payload?.retry?.remaining_product_refs || payload?.selection?.remaining_product_refs || [];
+    if (!remaining.length || !payload?.retry?.recommended_next_request) {
+      break;
+    }
+    body = {
+      ...payload.retry.recommended_next_request,
+      refresh: false,
+      row_limit: initialBody.row_limit,
+    };
+  }
+
+  return mergeAdMetricsPayloads(payloads);
+}
+
 export async function handleAiChat(context) {
   const requestBody = await readJsonRequest(context.request);
   const message = pickText(requestBody.message, 4000);
@@ -274,8 +506,9 @@ export async function handleAiChat(context) {
     );
     dataContext = compactArticlePayload(sourcePayload);
   } else {
-    sourcePayload = await collectAiAdMetrics(
-      buildChildContext(context, {
+    sourcePayload = await collectAdMetricsForChat(
+      context,
+      {
         start: range.start,
         end: range.end,
         refresh,
@@ -286,7 +519,8 @@ export async function handleAiChat(context) {
         shop_names: requestBody.shop_names || [],
         include_campaign_types: true,
         row_limit: requestBody.row_limit || 120,
-      }),
+      },
+      requestBody,
     );
     dataContext = compactAdMetricsPayload(sourcePayload);
   }
