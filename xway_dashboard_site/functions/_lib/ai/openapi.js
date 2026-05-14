@@ -175,6 +175,26 @@ export function buildAiOpenApiSpec(requestUrl) {
               default: true,
               description: "Include advertising slices by campaign type: manual CPM, unified CPM and CPC where XWAY can split them.",
             },
+            retry_failed: {
+              type: "boolean",
+              default: true,
+              description: "Automatically retry product refs that were not loaded by catalog-chart because of source limits or transient errors.",
+            },
+            max_retry_rounds: {
+              type: "integer",
+              default: 3,
+              description: "How many retry rounds to run for missing product refs. Retries use smaller chunks and eventually single-product requests.",
+            },
+            retry_delay_ms: {
+              type: "integer",
+              default: 350,
+              description: "Delay between retry chunks. Increase on repeated source limit errors, but keep in mind the ChatGPT Action timeout.",
+            },
+            chunk_size: {
+              type: "integer",
+              default: 12,
+              description: "Initial number of product refs per catalog-chart subrequest. Smaller values reduce source-limit errors but increase request time.",
+            },
             row_limit: {
               type: "integer",
               default: 5000,
@@ -219,6 +239,7 @@ export function buildAiOpenApiSpec(requestUrl) {
             totals: { type: "object" },
             campaign_type_totals: { type: "object" },
             campaign_type_meta: { type: "object" },
+            retry: { type: "object" },
             errors: { type: "array", items: { type: "object" } },
           },
         },

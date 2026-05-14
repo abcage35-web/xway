@@ -2,6 +2,8 @@ import { asFloat, resolveRange } from "../utils.js";
 
 const DEFAULT_CHART_CHUNK_SIZE = 12;
 const MAX_GROUP_ROWS_DEFAULT = 5000;
+const DEFAULT_RETRY_ROUNDS = 3;
+const DEFAULT_RETRY_DELAY_MS = 350;
 const GROUP_DIMENSIONS = new Set(["day", "category", "article", "shop", "campaign_type"]);
 
 async function readJsonRequest(request) {
@@ -83,6 +85,19 @@ function chunk(items, size) {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+function sleep(ms) {
+  const delay = Number.parseInt(String(ms || 0), 10);
+  return delay > 0 ? new Promise((resolve) => setTimeout(resolve, delay)) : Promise.resolve();
+}
+
+function clampInteger(value, fallback, min, max) {
+  const numeric = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(numeric, max));
 }
 
 function catalogArticles(catalog) {
@@ -231,12 +246,15 @@ function emptyMeta(productRef) {
   };
 }
 
-async function collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh) {
-  const chunks = chunk(productRefs, DEFAULT_CHART_CHUNK_SIZE);
+async function collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh, { chunkSize = DEFAULT_CHART_CHUNK_SIZE, retryDelayMs = 0 } = {}) {
+  const chunks = chunk(productRefs, chunkSize);
   const payloads = [];
   const errors = [];
 
-  for (const refs of chunks) {
+  for (const [index, refs] of chunks.entries()) {
+    if (index > 0 && retryDelayMs > 0) {
+      await sleep(retryDelayMs);
+    }
     try {
       payloads.push(
         await fetchSelfJson(context, "/api/catalog-chart", {
@@ -255,7 +273,86 @@ async function collectChartChunks(context, productRefs, range, includeCampaignTy
     }
   }
 
-  return { payloads, errors, chunk_count: chunks.length };
+  return { payloads, errors, chunk_count: chunks.length, requested_count: productRefs.length, chunk_size: chunkSize };
+}
+
+function loadedProductRefs(payloads) {
+  return new Set(payloads.flatMap((payload) => (payload.product_rows || []).map((row) => row.product_ref)));
+}
+
+function missingProductRefs(productRefs, payloads) {
+  const loaded = loadedProductRefs(payloads);
+  return productRefs.filter((productRef) => !loaded.has(productRef));
+}
+
+function retryChunkSize(initialChunkSize, round) {
+  if (round <= 1) {
+    return Math.max(1, Math.min(6, Math.ceil(initialChunkSize / 2)));
+  }
+  if (round === 2) {
+    return Math.max(1, Math.min(3, Math.ceil(initialChunkSize / 4)));
+  }
+  return 1;
+}
+
+async function collectChartWithRetries(context, productRefs, range, includeCampaignTypes, forceRefresh, options = {}) {
+  const initialChunkSize = clampInteger(options.chunkSize, DEFAULT_CHART_CHUNK_SIZE, 1, 25);
+  const retryFailed = options.retryFailed !== false;
+  const maxRetryRounds = retryFailed ? clampInteger(options.maxRetryRounds, DEFAULT_RETRY_ROUNDS, 0, 5) : 0;
+  const retryDelayMs = clampInteger(options.retryDelayMs, DEFAULT_RETRY_DELAY_MS, 0, 1500);
+  const initial = await collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh, {
+    chunkSize: initialChunkSize,
+    retryDelayMs: 0,
+  });
+  const payloads = [...initial.payloads];
+  const errors = [...initial.errors];
+  const attempts = [
+    {
+      round: 0,
+      phase: "initial",
+      chunk_size: initialChunkSize,
+      requested_count: productRefs.length,
+      loaded_count: loadedProductRefs(payloads).size,
+      remaining_count: missingProductRefs(productRefs, payloads).length,
+      transport_error_count: initial.errors.length,
+      source_error_count: initial.payloads.reduce((sum, payload) => sum + (payload.errors || []).length, 0),
+    },
+  ];
+
+  let remaining = missingProductRefs(productRefs, payloads);
+  for (let round = 1; round <= maxRetryRounds && remaining.length; round += 1) {
+    await sleep(retryDelayMs);
+    const chunkSize = retryChunkSize(initialChunkSize, round);
+    const retry = await collectChartChunks(context, remaining, range, includeCampaignTypes, forceRefresh, {
+      chunkSize,
+      retryDelayMs,
+    });
+    payloads.push(...retry.payloads);
+    errors.push(...retry.errors);
+    remaining = missingProductRefs(productRefs, payloads);
+    attempts.push({
+      round,
+      phase: "retry",
+      chunk_size: chunkSize,
+      requested_count: retry.requested_count,
+      loaded_count: loadedProductRefs(payloads).size,
+      remaining_count: remaining.length,
+      transport_error_count: retry.errors.length,
+      source_error_count: retry.payloads.reduce((sum, payload) => sum + (payload.errors || []).length, 0),
+    });
+  }
+
+  return {
+    payloads,
+    errors,
+    attempts,
+    chunk_count: attempts.reduce((sum, attempt) => sum + Math.ceil((attempt.requested_count || 0) / Math.max(attempt.chunk_size || 1, 1)), 0),
+    initial_chunk_size: initialChunkSize,
+    retry_failed: retryFailed,
+    max_retry_rounds: maxRetryRounds,
+    retry_delay_ms: retryDelayMs,
+    remaining_product_refs: remaining,
+  };
 }
 
 function aggregateRows({ chartPayloads, metaByRef, groupBy, rowLimit, includeCampaignTypes }) {
@@ -344,6 +441,12 @@ export async function collectAiAdMetrics(context) {
   const groupBy = normalizeGroupBy(requestBody.group_by || requestBody.slices);
   const includeCampaignTypes = requestBody.include_campaign_types !== false || groupBy.includes("campaign_type");
   const rowLimit = Math.max(1, Math.min(Number.parseInt(String(requestBody.row_limit || MAX_GROUP_ROWS_DEFAULT), 10) || MAX_GROUP_ROWS_DEFAULT, 20000));
+  const retryOptions = {
+    retryFailed: requestBody.retry_failed !== false,
+    maxRetryRounds: requestBody.max_retry_rounds,
+    retryDelayMs: requestBody.retry_delay_ms,
+    chunkSize: requestBody.chunk_size,
+  };
   const filters = {
     categories: toList(requestBody.categories, requestBody.category),
     articles: toList(requestBody.articles, requestBody.article),
@@ -371,6 +474,7 @@ export async function collectAiAdMetrics(context) {
         filters,
         group_by: groupBy,
         include_campaign_types: includeCampaignTypes,
+        retry_failed: retryOptions.retryFailed,
       },
       selection: {
         total_catalog_articles: allArticles.length,
@@ -388,7 +492,7 @@ export async function collectAiAdMetrics(context) {
   }
 
   const metaByRef = new Map(matchedArticles.map((row) => [row.product_ref, row]));
-  const chart = await collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh);
+  const chart = await collectChartWithRetries(context, productRefs, range, includeCampaignTypes, forceRefresh, retryOptions);
   const aggregated = aggregateRows({
     chartPayloads: chart.payloads,
     metaByRef,
@@ -397,9 +501,24 @@ export async function collectAiAdMetrics(context) {
     includeCampaignTypes,
   });
   const chartErrors = chart.payloads.flatMap((payload) => payload.errors || []);
-  const loadedRefs = new Set(chart.payloads.flatMap((payload) => (payload.product_rows || []).map((row) => row.product_ref)));
+  const loadedRefs = loadedProductRefs(chart.payloads);
   const matchedShopIds = new Set(matchedArticles.map((row) => String(row.shop_id)));
   const matchedCategories = [...new Set(matchedArticles.map((row) => row.category || "uncategorized"))].sort((left, right) => left.localeCompare(right));
+  const remainingProductRefs = chart.remaining_product_refs || [];
+  const recommendedNextRequest = remainingProductRefs.length
+    ? {
+        product_refs: remainingProductRefs,
+        start: range.current_start,
+        end: range.current_end,
+        group_by: groupBy,
+        include_campaign_types: includeCampaignTypes,
+        retry_failed: true,
+        max_retry_rounds: chart.max_retry_rounds,
+        retry_delay_ms: Math.min((chart.retry_delay_ms || DEFAULT_RETRY_DELAY_MS) * 2, 1500),
+        chunk_size: 1,
+        row_limit: rowLimit,
+      }
+    : null;
 
   return {
     ok: true,
@@ -410,6 +529,10 @@ export async function collectAiAdMetrics(context) {
       group_by: groupBy,
       include_campaign_types: includeCampaignTypes,
       row_limit: rowLimit,
+      retry_failed: chart.retry_failed,
+      max_retry_rounds: chart.max_retry_rounds,
+      retry_delay_ms: chart.retry_delay_ms,
+      chunk_size: chart.initial_chunk_size,
     },
     selection: {
       total_catalog_articles: allArticles.length,
@@ -417,8 +540,16 @@ export async function collectAiAdMetrics(context) {
       matched_shops: matchedShopIds.size,
       loaded_products_count: loadedRefs.size,
       chart_chunk_count: chart.chunk_count,
+      coverage_percent: productRefs.length ? (loadedRefs.size / productRefs.length) * 100 : null,
       categories: matchedCategories,
       product_refs: productRefs,
+      remaining_product_refs: remainingProductRefs,
+    },
+    retry: {
+      attempts: chart.attempts,
+      complete: remainingProductRefs.length === 0,
+      remaining_product_refs: remainingProductRefs,
+      recommended_next_request: recommendedNextRequest,
     },
     rows: aggregated.rows,
     row_count: aggregated.row_count,

@@ -144,6 +144,8 @@ Daily category metrics split by ad type:
 
 Supported grouping dimensions are `day`, `category`, `article`, `shop` and `campaign_type`. The same endpoint supports cabinet/shop cuts (`shop_ids` or `shop_names`), exact articles (`articles`) and exact product refs (`product_refs`).
 
+`getAggregatedAdMetrics` retries incomplete catalog-chart loads by default. If `selection.remaining_product_refs` is not empty after the built-in retries, call the returned `retry.recommended_next_request` to load the missing products separately and merge the result in the answer. For repeated source-limit errors, prefer `chunk_size: 1`, `max_retry_rounds: 3` and a larger `retry_delay_ms`.
+
 ## MPVibe endpoints used
 
 The integration discovers and reads MPVibe through the same JSON endpoints used by the browser UI:
