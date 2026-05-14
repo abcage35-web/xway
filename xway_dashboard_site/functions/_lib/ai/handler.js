@@ -2,6 +2,7 @@ import { errorResponse, jsonResponse } from "../utils.js";
 import { requireAiAuth } from "./auth.js";
 import { buildAiContextPayload } from "./context.js";
 import { buildAiOpenApiSpec } from "./openapi.js";
+import { collectAiAdMetrics } from "./ad-metrics.js";
 import { collectAiRecommendationData } from "./recommendation-data.js";
 
 function methodAllowed(context, allowed) {
@@ -65,6 +66,18 @@ export async function handleAiRequest(context, pathname) {
     }
     try {
       return jsonResponse(await collectAiRecommendationData(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/ad-metrics") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await collectAiAdMetrics(context));
     } catch (error) {
       return aiErrorResponse(error);
     }

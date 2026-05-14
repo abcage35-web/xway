@@ -43,6 +43,28 @@ export function buildAiOpenApiSpec(requestUrl) {
           },
         },
       },
+      "/api/ai/ad-metrics": {
+        post: {
+          operationId: "getAggregatedAdMetrics",
+          summary: "Aggregate XWAY advertising metrics by day, category, article, cabinet/shop and campaign type.",
+          description: "Use this for catalog/category/cabinet requests such as daily ad metrics for a category, slices by campaign type, or grouped metrics by articles and shops.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/AdMetricsRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Aggregated advertising metrics.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/AdMetricsResponse" } } },
+            },
+          },
+        },
+      },
       "/api/ai/refresh-article": {
         post: {
           operationId: "refreshArticleRecommendationData",
@@ -108,6 +130,58 @@ export function buildAiOpenApiSpec(requestUrl) {
           },
           required: ["article"],
         },
+        AdMetricsRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            start: { type: "string", format: "date", description: "Analysis start date. Defaults to 30 days before end." },
+            end: { type: "string", format: "date", description: "Analysis end date. Defaults to today." },
+            refresh: { type: "boolean", description: "Bypass source caches where supported." },
+            group_by: {
+              type: "array",
+              description: "Dimensions for aggregation. Use day for daily rows, campaign_type for ad slices, category for category rows, article for article rows, and shop for cabinet/shop rows. Examples: ['day'], ['day','campaign_type'], ['category','day'], ['shop','category'], ['article','day'].",
+              items: {
+                type: "string",
+                enum: ["day", "category", "article", "shop", "campaign_type"],
+              },
+            },
+            categories: {
+              type: "array",
+              description: "Category keywords to include, for example ['Одеяла']. Matching is case-insensitive and allows partial matches.",
+              items: { type: "string" },
+            },
+            articles: {
+              type: "array",
+              description: "WB nmId/articles to include.",
+              items: { type: "string" },
+            },
+            shop_ids: {
+              type: "array",
+              description: "XWAY cabinet/shop ids to include.",
+              items: { type: "string" },
+            },
+            shop_names: {
+              type: "array",
+              description: "Cabinet/shop names to include. Matching is case-insensitive and allows partial matches.",
+              items: { type: "string" },
+            },
+            product_refs: {
+              type: "array",
+              description: "Exact XWAY product refs in shop_id:product_id format.",
+              items: { type: "string" },
+            },
+            include_campaign_types: {
+              type: "boolean",
+              default: true,
+              description: "Include advertising slices by campaign type: manual CPM, unified CPM and CPC where XWAY can split them.",
+            },
+            row_limit: {
+              type: "integer",
+              default: 5000,
+              description: "Maximum number of grouped rows returned. If exceeded, response.truncated is true.",
+            },
+          },
+        },
         ContextResponse: {
           type: "object",
           properties: {
@@ -129,6 +203,23 @@ export function buildAiOpenApiSpec(requestUrl) {
             wb_public: { type: "object" },
             recommendation_context: { type: "object" },
             analysis_contract: { type: "object" },
+          },
+        },
+        AdMetricsResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            range: { type: "object" },
+            request: { type: "object" },
+            selection: { type: "object" },
+            rows: { type: "array", items: { type: "object" } },
+            row_count: { type: "integer" },
+            source_rows_count: { type: "integer" },
+            truncated: { type: "boolean" },
+            totals: { type: "object" },
+            campaign_type_totals: { type: "object" },
+            campaign_type_meta: { type: "object" },
+            errors: { type: "array", items: { type: "object" } },
           },
         },
       },

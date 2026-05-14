@@ -10,6 +10,7 @@ Cloudflare Pages Functions now expose an AI data layer:
 - `GET /api/ai/health` - public configuration health check.
 - `GET /api/ai/context` - recommendation methodology.
 - `POST /api/ai/recommendation-data` - structured XWAY, MPVibe and WB data for one article.
+- `POST /api/ai/ad-metrics` - aggregated XWAY advertising metrics by day, category, article, cabinet/shop and campaign type.
 - `POST /api/ai/refresh-article` - same payload, but requests source refresh where supported.
 
 The endpoint does not call OpenAI itself. ChatGPT calls this API as an Action, receives structured data and writes the recommendation using the embedded context.
@@ -79,7 +80,7 @@ Configure authentication as Bearer token and use the same value as `XWAY_AI_API_
 Recommended GPT instruction:
 
 ```text
-You are XWAY AI Analyst. When the user asks for article analytics or recommendations, call getArticleRecommendationData first with detail_level="full" unless the user explicitly asks for a fast aggregate check. Use the returned recommendation_context and analysis_contract. If the user asks to refresh data, call refreshArticleRecommendationData with detail_level="full". Answer in Russian and cite which source blocks were available or missing.
+You are XWAY AI Analyst. When the user asks for one article analytics or recommendations, call getArticleRecommendationData first with detail_level="full" unless the user explicitly asks for a fast aggregate check. When the user asks for metrics by category, article list, cabinet/shop, daily rows, or advertising slices, call getAggregatedAdMetrics with the needed group_by dimensions. Use the returned recommendation_context and analysis_contract for recommendations. If the user asks to refresh one article, call refreshArticleRecommendationData with detail_level="full". Answer in Russian and cite which source blocks were available or missing.
 ```
 
 ## Example Action request
@@ -116,6 +117,32 @@ Use `detail_level: "summary"` only for fast aggregate checks. If the user asks a
   "campaign_ids": ["33211298"]
 }
 ```
+
+## Aggregated ad metrics examples
+
+Daily advertising metrics for category:
+
+```json
+{
+  "categories": ["Одеяла"],
+  "start": "2026-05-01",
+  "end": "2026-05-14",
+  "group_by": ["day"]
+}
+```
+
+Daily category metrics split by ad type:
+
+```json
+{
+  "categories": ["Одеяла"],
+  "start": "2026-05-01",
+  "end": "2026-05-14",
+  "group_by": ["day", "campaign_type"]
+}
+```
+
+Supported grouping dimensions are `day`, `category`, `article`, `shop` and `campaign_type`. The same endpoint supports cabinet/shop cuts (`shop_ids` or `shop_names`), exact articles (`articles`) and exact product refs (`product_refs`).
 
 ## MPVibe endpoints used
 
