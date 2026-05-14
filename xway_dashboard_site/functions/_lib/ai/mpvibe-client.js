@@ -126,6 +126,26 @@ function findFirstObject(value, predicate) {
   return null;
 }
 
+function findRealtimeCard(payload, article) {
+  for (const accountRow of Array.isArray(payload) ? payload : []) {
+    const cards = accountRow?.cards && typeof accountRow.cards === "object" ? accountRow.cards : {};
+    for (const card of Object.values(cards)) {
+      if (objectMatchesArticle(card, article)) {
+        return {
+          card,
+          account_id: accountRow.account_id ?? card?.account_id ?? null,
+          entity_id: accountRow.entity_id ?? card?.entity_id ?? null,
+          manager_id: accountRow.manager_id ?? null,
+          manager_name: accountRow.manager_name ?? null,
+        };
+      }
+    }
+  }
+
+  const card = findFirstObject(payload, (value) => objectMatchesArticle(value, article));
+  return card ? { card, account_id: card.account_id ?? null, entity_id: card.entity_id ?? null } : null;
+}
+
 function readByCardId(value, cardId) {
   const key = asString(cardId);
   if (!key) {
@@ -221,7 +241,7 @@ function normalizePriceCard(pricePayload, article, cardId) {
   return row ? selectFields(row, PRICE_FIELDS) : null;
 }
 
-function normalizeMainCard(card, article) {
+function normalizeMainCard(card, article, parent = {}) {
   if (!card) {
     return null;
   }
@@ -231,8 +251,10 @@ function normalizeMainCard(card, article) {
     card_id: card.card_id ?? card.id ?? null,
     sku: card.sku ?? article,
     offer_id: card.offer_id ?? null,
-    account_id: card.account_id ?? null,
-    entity_id: card.entity_id ?? null,
+    account_id: card.account_id ?? parent.account_id ?? null,
+    entity_id: card.entity_id ?? parent.entity_id ?? null,
+    manager_id: parent.manager_id ?? null,
+    manager_name: parent.manager_name ?? null,
     name: card.name ?? card.title ?? null,
     current_price: card.current_price ?? filterData.current_price ?? null,
     filter_data: selectFields(filterData, ["order_count", "revenue", "margin", "margin_percent", "margin_ds_percent", "sebes", "illiquid", "is_outdated"]),
@@ -252,8 +274,8 @@ export async function collectMpvibeArticle(env, { article, start, end } = {}) {
   }
 
   const mainPayload = await mpvibeJson(env, "/api/realtime/mp/wb", { start_date: start, end_date: end });
-  const mainRawCard = findFirstObject(mainPayload, (value) => objectMatchesArticle(value, normalizedArticle));
-  const mainCard = normalizeMainCard(mainRawCard, normalizedArticle);
+  const mainMatch = findRealtimeCard(mainPayload, normalizedArticle);
+  const mainCard = normalizeMainCard(mainMatch?.card, normalizedArticle, mainMatch);
   const cardId = mainCard?.card_id;
   const accountId = mainCard?.account_id;
   if (!cardId) {
