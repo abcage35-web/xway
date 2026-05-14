@@ -1,6 +1,3 @@
-import { collectCatalogChart } from "../catalog.js";
-import { collectCatalogIssues } from "../catalog-issues.js";
-import { collectProducts } from "../products.js";
 import { asFloat, iterIsoDays } from "../utils.js";
 import { buildAiContextPayload } from "./context.js";
 import { collectMpvibeArticle } from "./mpvibe-client.js";
@@ -74,6 +71,32 @@ async function safeSource(name, fn) {
       },
     ];
   }
+}
+
+async function fetchSelfJson(context, pathname, params = {}) {
+  const url = new URL(pathname, context.request.url);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  const response = await fetch(url.toString(), {
+    headers: {
+      accept: "application/json",
+      "cache-control": "no-cache",
+    },
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.error || text || `Self API request failed (${response.status})`);
+  }
+  return payload;
 }
 
 function firstProduct(productsPayload) {
@@ -359,12 +382,12 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
   }
 
   const xwayProductResult = await safeSource("xway_products", () =>
-    collectProducts(context.env, {
-      articles: [article],
+    fetchSelfJson(context, "/api/products", {
+      articles: article,
       start: range.start,
       end: range.end,
-      campaignMode: "summary",
-      forceRefresh,
+      campaign_mode: "summary",
+      force_refresh: forceRefresh ? "1" : "",
     }),
   );
   const product = firstProduct(xwayProductResult[0]);
@@ -373,30 +396,30 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
   const chartCalls = productRef && includeXwayCharts
     ? {
         xway_chart_30d: safeSource("xway_chart_30d", () =>
-          collectCatalogChart(context.env, {
-            productRefs: [productRef],
+          fetchSelfJson(context, "/api/catalog-chart", {
+            products: productRef,
             start: range.start,
             end: range.end,
-            includeCampaignTypes: true,
-            forceRefresh,
+            include_campaign_types: "1",
+            force_refresh: forceRefresh ? "1" : "",
           }),
         ),
         xway_chart_7d: safeSource("xway_chart_7d", () =>
-          collectCatalogChart(context.env, {
-            productRefs: [productRef],
+          fetchSelfJson(context, "/api/catalog-chart", {
+            products: productRef,
             start: last7Range.start,
             end: last7Range.end,
-            includeCampaignTypes: true,
-            forceRefresh,
+            include_campaign_types: "1",
+            force_refresh: forceRefresh ? "1" : "",
           }),
         ),
         xway_chart_previous_7d: safeSource("xway_chart_previous_7d", () =>
-          collectCatalogChart(context.env, {
-            productRefs: [productRef],
+          fetchSelfJson(context, "/api/catalog-chart", {
+            products: productRef,
             start: previous7Range.start,
             end: previous7Range.end,
-            includeCampaignTypes: true,
-            forceRefresh,
+            include_campaign_types: "1",
+            force_refresh: forceRefresh ? "1" : "",
           }),
         ),
       }
@@ -404,11 +427,11 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
   const issueCalls = productRef && includeXwayIssues
     ? {
         xway_issues: safeSource("xway_issues", () =>
-          collectCatalogIssues(context.env, {
-            productRefs: [productRef],
+          fetchSelfJson(context, "/api/catalog-issues", {
+            products: productRef,
             start: last7Range.start,
             end: last7Range.end,
-            forceRefresh,
+            force_refresh: forceRefresh ? "1" : "",
           }),
         ),
       }

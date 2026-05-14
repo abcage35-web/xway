@@ -117,6 +117,7 @@ async function handleNativeRequest(context, pathname) {
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
         includeCampaignTypes: requestUrl.searchParams.get("include_campaign_types") === "1",
+        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
       }),
     );
   }
@@ -131,6 +132,7 @@ async function handleNativeRequest(context, pathname) {
         productRefs,
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
+        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
       }),
     );
   }
@@ -151,6 +153,7 @@ async function handleNativeRequest(context, pathname) {
         end: searchParamsValue(requestUrl, "end"),
         campaignMode: searchParamsValue(requestUrl, "campaign_mode") || "full",
         heavyCampaignIds,
+        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
       }),
     );
   }
