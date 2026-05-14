@@ -3083,7 +3083,7 @@ export function CatalogPage() {
       createdAt: new Date().toISOString(),
       productLabel: entry.productRef ? (entry.productLabel ?? resolveCatalogRefreshProductLabel(entry.productRef)) : entry.productLabel,
     }));
-    setCatalogRefreshLogs((current) => [...current, ...nextEntries].slice(-600));
+    setCatalogRefreshLogs((current) => [...current, ...nextEntries].slice(-5000));
     setCatalogRefreshPanelOpen(true);
   };
   const appendCatalogRefreshLogsForRefs = (
@@ -4676,7 +4676,7 @@ export function CatalogPage() {
           selectionCount: chartSourceSelectionCount,
           chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
           onWorkerLimit: (limitRefs) => {
-            appendCatalogRefreshLogs({
+            appendCatalogRefreshLogsForRefs(limitRefs, {
               status: "warning",
               scope,
               step: "Р“СЂР°С„РёРє Рё Р Рљ",
@@ -5581,6 +5581,7 @@ export function CatalogPage() {
                           const isRefreshing = refreshingArticleRefs.includes(ref);
                           const hasRefreshLogs = catalogRefreshLogs.some((entry) => entry.productRef === ref);
                           const isRefreshLogSelected = selectedCatalogRefreshLogRef === ref && catalogRefreshPanelOpen;
+                          const isDisabledProduct = article.enabled === false || article.is_active === false;
                           return (
                             <div className={cn("catalog-product-row-cell flex w-[252px] max-w-[252px] items-start gap-2.5", isRefreshing && "is-refreshing")}>
                               <div className="catalog-article-row-actions">
@@ -5629,9 +5630,16 @@ export function CatalogPage() {
                                 {article.image_url ? <img src={article.image_url} alt={article.name} className="h-full w-full object-cover" /> : null}
                               </div>
                               <div className="catalog-product-copy min-w-0 flex-1">
-                                <p className="truncate font-medium text-[var(--color-ink)]" title={article.name}>
-                                  {article.name}
-                                </p>
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <p className="min-w-0 truncate font-medium text-[var(--color-ink)]" title={article.name}>
+                                    {article.name}
+                                  </p>
+                                  {isDisabledProduct ? (
+                                    <span className="catalog-product-status-chip is-disabled" title="Товар отключен">
+                                      Отключен
+                                    </span>
+                                  ) : null}
+                                </div>
                                 <p className="mt-1 text-xs text-[var(--color-muted)]">
                                   {article.article} · {article.brand || "Без бренда"} · {article.vendor_code || "без vendor"}
                                 </p>

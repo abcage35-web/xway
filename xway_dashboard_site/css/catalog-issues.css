@@ -871,6 +871,27 @@
   opacity: 0.62;
 }
 
+.catalog-product-status-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 18px;
+  max-width: 86px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.catalog-product-status-chip.is-disabled {
+  border: 1px solid rgba(143, 151, 170, 0.24);
+  background: rgba(143, 151, 170, 0.14);
+  color: #c5ccd9;
+}
+
 .catalog-refresh-log-panel {
   position: fixed;
   right: 24px;
