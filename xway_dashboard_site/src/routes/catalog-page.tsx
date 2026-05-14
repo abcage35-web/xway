@@ -5828,19 +5828,28 @@ export function CatalogPage() {
                         ),
                         cellClassName: "w-[128px] min-w-[128px]",
                         render: (article) => {
-                          const label = article.best_order_time?.label;
+                          const ranges = article.best_order_time?.ranges || [];
+                          if (!ranges.length) {
+                            return (
+                              <span
+                                className="inline-flex max-w-[128px] items-center rounded-full bg-[var(--color-surface-soft)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[var(--color-muted)]"
+                                title={formatCatalogBestOrderTimeTitle(article)}
+                              >
+                                —
+                              </span>
+                            );
+                          }
                           return (
-                            <span
-                              className={cn(
-                                "inline-flex max-w-[128px] items-center rounded-full px-2.5 py-1 text-[11px] font-semibold leading-tight",
-                                label
-                                  ? "bg-[rgba(139,100,246,0.14)] text-[#bfa9ff]"
-                                  : "bg-[var(--color-surface-soft)] text-[var(--color-muted)]",
-                              )}
-                              title={formatCatalogBestOrderTimeTitle(article)}
-                            >
-                              {label || "—"}
-                            </span>
+                            <div className="flex max-w-[128px] flex-col items-start gap-1" title={formatCatalogBestOrderTimeTitle(article)}>
+                              {ranges.map((range) => (
+                                <span
+                                  key={`${article.article}-${range.start_hour}-${range.end_hour}`}
+                                  className="inline-flex max-w-full items-center rounded-full bg-[rgba(139,100,246,0.14)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[#bfa9ff]"
+                                >
+                                  {range.label}
+                                </span>
+                              ))}
+                            </div>
                           );
                         },
                       },
