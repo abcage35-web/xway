@@ -48,6 +48,18 @@ export async function handleAiRequest(context, pathname) {
     });
   }
 
+  if (pathname === "/api/ai/chat") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await handleAiChat(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
   const authError = authed(context);
   if (authError) {
     return authError;
@@ -80,18 +92,6 @@ export async function handleAiRequest(context, pathname) {
     }
     try {
       return jsonResponse(await collectAiAdMetrics(context));
-    } catch (error) {
-      return aiErrorResponse(error);
-    }
-  }
-
-  if (pathname === "/api/ai/chat") {
-    const methodError = methodAllowed(context, ["POST"]);
-    if (methodError) {
-      return methodError;
-    }
-    try {
-      return jsonResponse(await handleAiChat(context));
     } catch (error) {
       return aiErrorResponse(error);
     }

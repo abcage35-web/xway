@@ -368,7 +368,6 @@ export async function fetchClusterDetail(options: {
 export async function sendAiChatMessage(options: {
   message: string;
   history?: AiChatMessage[];
-  token: string;
   article?: string | null;
   start?: string | null;
   end?: string | null;
@@ -380,7 +379,6 @@ export async function sendAiChatMessage(options: {
     signal: options.signal,
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${options.token}`,
     },
     body: JSON.stringify({
       message: options.message,

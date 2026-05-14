@@ -1,29 +1,8 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
-import { Bot, KeyRound, LoaderCircle, RefreshCw, Send, UserRound } from "lucide-react";
+import { Bot, LoaderCircle, RefreshCw, Send, UserRound } from "lucide-react";
 import { sendAiChatMessage } from "../lib/api";
 import { cn, getTodayIso, shiftIsoDate } from "../lib/format";
 import type { AiChatMessage } from "../lib/types";
-
-const AI_CHAT_TOKEN_STORAGE_KEY = "xway-ai-chat-token";
-
-function readStoredToken() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  try {
-    return window.localStorage.getItem(AI_CHAT_TOKEN_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredToken(token: string) {
-  try {
-    window.localStorage.setItem(AI_CHAT_TOKEN_STORAGE_KEY, token);
-  } catch {
-    // Ignore storage failures.
-  }
-}
 
 function defaultRange() {
   const today = getTodayIso();
@@ -33,7 +12,6 @@ function defaultRange() {
 
 export function AiPage() {
   const initialRange = useMemo(() => defaultRange(), []);
-  const [token, setToken] = useState(() => readStoredToken());
   const [article, setArticle] = useState("");
   const [start, setStart] = useState(initialRange.start);
   const [end, setEnd] = useState(initialRange.end);
@@ -41,7 +19,7 @@ export function AiPage() {
   const [messages, setMessages] = useState<AiChatMessage[]>([
     {
       role: "assistant",
-      content: "Введите артикул или задайте вопрос по каталогу. Я соберу XWAY/MPVIBE данные на сервере и верну короткий разбор.",
+      content: "Введите артикул или задайте вопрос по каталогу. Я соберу XWAY/MPVibe данные на сервере и верну короткий разбор.",
     },
   ]);
   const [isLoading, setLoading] = useState(false);
@@ -51,11 +29,9 @@ export function AiPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmedMessage = message.trim();
-    const trimmedToken = token.trim();
-    if (!trimmedMessage || !trimmedToken || isLoading) {
+    if (!trimmedMessage || isLoading) {
       return;
     }
-    writeStoredToken(trimmedToken);
     setError(null);
     setMessage("");
     const nextMessages = [...messages, { role: "user" as const, content: trimmedMessage }];
@@ -68,7 +44,6 @@ export function AiPage() {
       const response = await sendAiChatMessage({
         message: trimmedMessage,
         history: nextMessages.slice(-10),
-        token: trimmedToken,
         article: article.trim() || null,
         start,
         end,
@@ -121,24 +96,8 @@ export function AiPage() {
 
         <section className="grid min-h-[calc(100vh-170px)] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
           <aside className="ai-sidebar">
-            <div className="ai-sidebar-block">
-              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                <KeyRound className="size-4" />
-                Доступ
-              </div>
-              <label className="ai-field">
-                <span>Bearer token</span>
-                <input
-                  type="password"
-                  value={token}
-                  onChange={(event) => setToken(event.target.value)}
-                  onBlur={() => writeStoredToken(token.trim())}
-                  placeholder="XWAY_AI_API_KEY"
-                />
-              </label>
-            </div>
             <div className="ai-sidebar-block text-sm text-[var(--color-muted)]">
-              Ассистент работает через Cloudflare: секреты XWAY и MPVIBE остаются на сервере, а модель получает компактный аналитический контекст.
+              Ассистент работает через Cloudflare: секреты XWAY, MPVibe и OpenAI остаются на сервере, а модель получает компактный аналитический контекст.
             </div>
           </aside>
 
@@ -155,7 +114,9 @@ export function AiPage() {
               })}
               {isLoading ? (
                 <div className="ai-message is-assistant">
-                  <div className="ai-message-icon"><Bot className="size-4" /></div>
+                  <div className="ai-message-icon">
+                    <Bot className="size-4" />
+                  </div>
                   <div className="ai-message-bubble inline-flex items-center gap-2">
                     <LoaderCircle className="size-4 animate-spin" />
                     Собираю данные и считаю ответ
@@ -180,7 +141,7 @@ export function AiPage() {
                     Стоп
                   </button>
                 ) : null}
-                <button type="submit" disabled={!message.trim() || !token.trim() || isLoading}>
+                <button type="submit" disabled={!message.trim() || isLoading}>
                   <Send className="size-4" />
                   Отправить
                 </button>

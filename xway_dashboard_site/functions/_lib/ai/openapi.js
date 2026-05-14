@@ -69,8 +69,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         post: {
           operationId: "sendDashboardChatMessage",
           summary: "Ask the in-site XWAY AI assistant a question.",
-          description: "This endpoint is intended for the dashboard chat UI. It collects compact XWAY/MPVibe context server-side and returns a final model answer.",
-          security: [{ bearerAuth: [] }],
+          description: "This endpoint is intended for the dashboard chat UI. It collects compact XWAY/MPVibe context server-side and returns a final model answer. It is callable without a Bearer token from the dashboard.",
           requestBody: {
             required: true,
             content: {
