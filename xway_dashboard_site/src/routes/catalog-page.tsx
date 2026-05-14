@@ -4551,6 +4551,7 @@ export function CatalogPage() {
     const targetLabel = refs.length === 1 ? resolveCatalogRefreshProductLabel(refs[0]!) : `${formatNumber(refs.length)} товаров`;
     const activityRef = refs.length === 1 ? refs[0] : undefined;
     let firstErrorMessage: string | null = null;
+    let currentStepErrorRefs = refs;
 
     const rememberStepError = (message: string) => {
       if (!firstErrorMessage) {
@@ -4558,13 +4559,13 @@ export function CatalogPage() {
       }
     };
 
-    const logStepError = async (step: string, error: unknown) => {
+    const logStepError = async (step: string, error: unknown, errorRefs = currentStepErrorRefs) => {
       if (isAbortError(error) || options.signal?.aborted) {
         throw error;
       }
       const message = await readApiErrorMessage(error);
       rememberStepError(message);
-      appendCatalogRefreshLogsForRefs(refs, {
+      appendCatalogRefreshLogsForRefs(errorRefs, {
         status: "error",
         scope,
         step,
@@ -4575,55 +4576,60 @@ export function CatalogPage() {
 
     try {
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: строка, РК и остаток`, activityRef);
-      try {
-        const currentCatalog = await fetchCatalog({
-          productRefs: refs,
-          start: payload.range.current_start,
-          end: payload.range.current_end,
-          forceRefresh: true,
-          signal: options.signal,
-        });
-        const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, refs);
-        const loadedRefs = Object.keys(articleOverrides);
-        if (loadedRefs.length) {
-          setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
-        }
-        if (loadedRefs.length) {
-          appendCatalogRefreshLogsForRefs(loadedRefs, {
-            status: "success",
-            scope,
-            step: "Строка товара",
-            message: "Загружены показатели, РК и остаток",
+      for (const ref of refs) {
+        currentStepErrorRefs = [ref];
+        try {
+          const currentCatalog = await fetchCatalog({
+            productRefs: [ref],
+            start: payload.range.current_start,
+            end: payload.range.current_end,
+            forceRefresh: true,
+            signal: options.signal,
           });
+          const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, [ref]);
+          const loadedRefs = Object.keys(articleOverrides);
+          if (loadedRefs.length) {
+            setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+          }
+          if (loadedRefs.length) {
+            appendCatalogRefreshLogsForRefs(loadedRefs, {
+              status: "success",
+              scope,
+              step: "Строка товара",
+              message: "Загружены показатели, РК и остаток",
+            });
+          }
+          const missingRefs = Object.keys(articleOverrides).length ? [] : [ref];
+          if (missingRefs.length) {
+            appendCatalogRefreshLogsForRefs(missingRefs, {
+              status: "warning",
+              scope,
+              step: "Строка товара",
+              message: "Товар не найден в ответе каталога",
+              detail: "API ответил без строки этого товара.",
+            });
+          }
+        } catch (error) {
+          await logStepError("Строка товара", error);
         }
-        const missingRefs = refs.filter((ref) => !articleOverrides[ref]);
-        if (missingRefs.length) {
-          appendCatalogRefreshLogsForRefs(missingRefs, {
-            status: "warning",
-            scope,
-            step: "Строка товара",
-            message: "Товар не найден в ответе каталога",
-            detail: "API ответил без строки этого товара.",
-          });
-        }
-      } catch (error) {
-        await logStepError("Строка товара", error);
       }
+      currentStepErrorRefs = refs;
 
       const turnoverEnd = payload.range.current_end;
       const turnoverStart = shiftIsoDate(turnoverEnd, -2);
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: оборачиваемость за 3 дня`, activityRef);
-      try {
-        const turnoverCatalog = await fetchCatalog({
-          productRefs: refs,
-          start: turnoverStart,
-          end: turnoverEnd,
-          forceRefresh: true,
-          signal: options.signal,
-        });
-        const turnoverOverrides: Record<string, number | string | null | undefined> = {};
-        const emptyTurnoverRefs: string[] = [];
-        refs.forEach((ref) => {
+      for (const ref of refs) {
+        currentStepErrorRefs = [ref];
+        try {
+          const turnoverCatalog = await fetchCatalog({
+            productRefs: [ref],
+            start: turnoverStart,
+            end: turnoverEnd,
+            forceRefresh: true,
+            signal: options.signal,
+          });
+          const turnoverOverrides: Record<string, number | string | null | undefined> = {};
+          const emptyTurnoverRefs: string[] = [];
           const turnoverArticle = findCatalogArticleByRef(turnoverCatalog, ref);
           if (turnoverArticle) {
             turnoverOverrides[ref] = turnoverArticle.ordered_report ?? 0;
@@ -4631,31 +4637,32 @@ export function CatalogPage() {
             turnoverOverrides[ref] = 0;
             emptyTurnoverRefs.push(ref);
           }
-        });
-        const loadedRefs = refs.filter((ref) => !emptyTurnoverRefs.includes(ref));
-        if (Object.keys(turnoverOverrides).length) {
-          setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
+          const loadedRefs = emptyTurnoverRefs.length ? [] : [ref];
+          if (Object.keys(turnoverOverrides).length) {
+            setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
+          }
+          if (loadedRefs.length) {
+            appendCatalogRefreshLogsForRefs(loadedRefs, {
+              status: "success",
+              scope,
+              step: "Оборачиваемость",
+              message: "Загружены заказы за 3 дня",
+            });
+          }
+          if (emptyTurnoverRefs.length) {
+            appendCatalogRefreshLogsForRefs(emptyTurnoverRefs, {
+              status: "info",
+              scope,
+              step: "Оборачиваемость",
+              message: "Заказов за 3 дня нет",
+              detail: "Короткий период не вернул строку товара, поэтому значение принято как 0.",
+            });
+          }
+        } catch (error) {
+          await logStepError("Оборачиваемость", error);
         }
-        if (loadedRefs.length) {
-          appendCatalogRefreshLogsForRefs(loadedRefs, {
-            status: "success",
-            scope,
-            step: "Оборачиваемость",
-            message: "Загружены заказы за 3 дня",
-          });
-        }
-        if (emptyTurnoverRefs.length) {
-          appendCatalogRefreshLogsForRefs(emptyTurnoverRefs, {
-            status: "info",
-            scope,
-            step: "Оборачиваемость",
-            message: "Заказов за 3 дня нет",
-            detail: "Короткий период не вернул строку товара, поэтому значение принято как 0.",
-          });
-        }
-      } catch (error) {
-        await logStepError("Оборачиваемость", error);
       }
+      currentStepErrorRefs = refs;
 
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: график и метрики РК`, activityRef);
       try {
