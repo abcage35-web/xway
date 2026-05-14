@@ -3,6 +3,7 @@ import { RouteLoadingScreen } from "../components/ui";
 import { DEFAULT_ARTICLES } from "../lib/api";
 import { getTodayIso, shiftIsoDate } from "../lib/format";
 import { RouteErrorBoundary } from "../routes/error-boundary";
+import { AiPage } from "../routes/ai-page";
 import { catalogLoader, CatalogPage } from "../routes/catalog-page";
 import { productLoader, ProductPage } from "../routes/product-page";
 import { RootLayout } from "../routes/root-layout";
@@ -45,6 +46,12 @@ export const router = createBrowserRouter([
         path: "catalog",
         loader: catalogLoader,
         element: <CatalogPage />,
+        hydrateFallbackElement: <RouteLoadingScreen />,
+        errorElement: <RouteErrorBoundary />,
+      },
+      {
+        path: "ai",
+        element: <AiPage />,
         hydrateFallbackElement: <RouteLoadingScreen />,
         errorElement: <RouteErrorBoundary />,
       },

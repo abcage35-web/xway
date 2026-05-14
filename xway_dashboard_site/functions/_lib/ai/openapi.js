@@ -65,6 +65,28 @@ export function buildAiOpenApiSpec(requestUrl) {
           },
         },
       },
+      "/api/ai/chat": {
+        post: {
+          operationId: "sendDashboardChatMessage",
+          summary: "Ask the in-site XWAY AI assistant a question.",
+          description: "This endpoint is intended for the dashboard chat UI. It collects compact XWAY/MPVibe context server-side and returns a final model answer.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ChatRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Assistant answer.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/ChatResponse" } } },
+            },
+          },
+        },
+      },
       "/api/ai/refresh-article": {
         post: {
           operationId: "refreshArticleRecommendationData",
@@ -202,6 +224,28 @@ export function buildAiOpenApiSpec(requestUrl) {
             },
           },
         },
+        ChatRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            message: { type: "string" },
+            history: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  role: { type: "string", enum: ["user", "assistant"] },
+                  content: { type: "string" },
+                },
+              },
+            },
+            article: { type: "string" },
+            start: { type: "string", format: "date" },
+            end: { type: "string", format: "date" },
+            refresh: { type: "boolean" },
+          },
+          required: ["message"],
+        },
         ContextResponse: {
           type: "object",
           properties: {
@@ -241,6 +285,20 @@ export function buildAiOpenApiSpec(requestUrl) {
             campaign_type_meta: { type: "object" },
             retry: { type: "object" },
             errors: { type: "array", items: { type: "object" } },
+          },
+        },
+        ChatResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            generated_at: { type: "string" },
+            answer: { type: "string" },
+            model: { type: "string" },
+            mode: { type: "string" },
+            article: { type: ["string", "null"] },
+            range: { type: "object" },
+            sources: { type: "object" },
+            context_summary: { type: "object" },
           },
         },
       },

@@ -1,4 +1,4 @@
-import type { CatalogChartResponse, CatalogIssuesResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogChartResponse, CatalogIssuesResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
@@ -363,4 +363,43 @@ export async function fetchClusterDetail(options: {
   url.searchParams.set("normquery_id", String(options.normqueryId));
   appendRange(url.searchParams, options.start, options.end);
   return requestJson<ClusterDetailResponse>(url.toString(), options.signal);
+}
+
+export async function sendAiChatMessage(options: {
+  message: string;
+  history?: AiChatMessage[];
+  token: string;
+  article?: string | null;
+  start?: string | null;
+  end?: string | null;
+  refresh?: boolean;
+  signal?: AbortSignal;
+}) {
+  const response = await fetch(new URL("/api/ai/chat", window.location.origin).toString(), {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${options.token}`,
+    },
+    body: JSON.stringify({
+      message: options.message,
+      history: options.history || [],
+      article: options.article || undefined,
+      start: options.start || undefined,
+      end: options.end || undefined,
+      refresh: options.refresh || undefined,
+    }),
+  });
+  const text = await response.text();
+  let payload: AiChatResponse & { error?: string };
+  try {
+    payload = text ? JSON.parse(text) : ({ ok: false, error: "Empty response" } as AiChatResponse & { error?: string });
+  } catch {
+    payload = { ok: false, error: text || response.statusText } as AiChatResponse & { error?: string };
+  }
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || text || response.statusText);
+  }
+  return payload;
 }

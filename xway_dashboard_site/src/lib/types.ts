@@ -579,6 +579,26 @@ export interface CatalogResponse {
   shops: CatalogShop[];
 }
 
+export interface AiChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AiChatResponse {
+  ok: boolean;
+  generated_at: string;
+  answer: string;
+  model?: string;
+  mode?: string;
+  article?: string | null;
+  range?: {
+    start?: string | null;
+    end?: string | null;
+  };
+  sources?: Record<string, unknown>;
+  context_summary?: Record<string, unknown>;
+}
+
 export interface CatalogChartRow {
   day: string;
   day_label: string;

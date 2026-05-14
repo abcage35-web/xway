@@ -12,8 +12,9 @@ Cloudflare Pages Functions now expose an AI data layer:
 - `POST /api/ai/recommendation-data` - structured XWAY, MPVibe and WB data for one article.
 - `POST /api/ai/ad-metrics` - aggregated XWAY advertising metrics by day, category, article, cabinet/shop and campaign type.
 - `POST /api/ai/refresh-article` - same payload, but requests source refresh where supported.
+- `POST /api/ai/chat` - in-site assistant endpoint that collects compact analytics context and calls an LLM server-side.
 
-The endpoint does not call OpenAI itself. ChatGPT calls this API as an Action, receives structured data and writes the recommendation using the embedded context.
+The Action endpoints do not call OpenAI themselves. ChatGPT calls them as Actions, receives structured data and writes the recommendation using the embedded context. The separate `/api/ai/chat` endpoint is for the dashboard UI: it keeps the large source payload server-side, sends a compact context to the configured model, and returns the final answer.
 
 ## Cloudflare secrets
 
@@ -23,6 +24,18 @@ Required:
 
 ```text
 XWAY_AI_API_KEY=<long random secret>
+```
+
+Required only for the in-site `/ai` chat:
+
+```text
+OPENAI_API_KEY=<OpenAI API key>
+```
+
+Optional:
+
+```text
+OPENAI_MODEL=<model for /api/ai/chat>
 ```
 
 Already required by native XWAY handlers:

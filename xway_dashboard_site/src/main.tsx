@@ -8,6 +8,7 @@ import "../css/campaigns.css";
 import "../css/detail.css";
 import "../css/catalog-issues.css";
 import "../css/catalog-table.css";
+import "../css/ai-chat.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

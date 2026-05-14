@@ -3,6 +3,7 @@ import { requireAiAuth } from "./auth.js";
 import { buildAiContextPayload } from "./context.js";
 import { buildAiOpenApiSpec } from "./openapi.js";
 import { collectAiAdMetrics } from "./ad-metrics.js";
+import { handleAiChat } from "./chat.js";
 import { collectAiRecommendationData } from "./recommendation-data.js";
 
 function methodAllowed(context, allowed) {
@@ -41,6 +42,7 @@ export async function handleAiRequest(context, pathname) {
       ok: true,
       service: "xway-ai-actions",
       auth_configured: Boolean(String(context.env.XWAY_AI_API_KEY || "").trim()),
+      openai_configured: Boolean(String(context.env.OPENAI_API_KEY || "").trim()),
       mpvibe_configured: Boolean(String(context.env.MPVIBE_COOKIE_HEADER || context.env.MPVIBE_AUTHORIZATION || "").trim()),
       wb_feedback_roots_configured: Boolean(String(context.env.WB_FEEDBACK_ROOTS_JSON || "").trim()),
     });
@@ -78,6 +80,18 @@ export async function handleAiRequest(context, pathname) {
     }
     try {
       return jsonResponse(await collectAiAdMetrics(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/chat") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await handleAiChat(context));
     } catch (error) {
       return aiErrorResponse(error);
     }
