@@ -1,4 +1,10 @@
 const MPVIBE_API_ORIGIN = "https://m-api.mpvibe.ru";
+const MPVIBE_AUTH_ORIGIN = "https://auth.mpvibe.ru";
+const MPVIBE_TOKEN_CACHE_KEY = "mpvibe:access-token:v1";
+const MPVIBE_TOKEN_SKEW_SECONDS = 60;
+
+let mpvibeTokenMemory = null;
+let mpvibeRefreshPromise = null;
 
 const DAILY_FIELDS = [
   "date",
@@ -50,22 +56,186 @@ const PRICE_FIELDS = [
 ];
 
 function hasMpvibeAuth(env) {
-  return Boolean(String(env.MPVIBE_COOKIE_HEADER || env.MPVIBE_AUTHORIZATION || "").trim());
+  return Boolean(String(env.MPVIBE_COOKIE_HEADER || env.MPVIBE_REFRESH_COOKIE_HEADER || env.MPVIBE_AUTHORIZATION || "").trim());
 }
 
-function mpvibeHeaders(env) {
+function normalizeBearer(value) {
+  const token = String(value || "").trim();
+  if (!token) {
+    return "";
+  }
+  return /^Bearer\s+/i.test(token) ? token : `Bearer ${token}`;
+}
+
+function mpvibeCacheBinding(env) {
+  const binding = env.XWAY_AI_CACHE;
+  return binding && typeof binding.get === "function" && typeof binding.put === "function" ? binding : null;
+}
+
+function decodeJwtPayload(authorization) {
+  const token = String(authorization || "").replace(/^Bearer\s+/i, "").trim();
+  const payloadPart = token.split(".")[1];
+  if (!payloadPart) {
+    return null;
+  }
+  try {
+    const normalized = payloadPart.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payloadPart.length / 4) * 4, "=");
+    return JSON.parse(atob(normalized));
+  } catch {
+    return null;
+  }
+}
+
+function authorizationExpiresAt(authorization) {
+  const exp = Number(decodeJwtPayload(authorization)?.exp);
+  return Number.isFinite(exp) ? exp : null;
+}
+
+function isUsableAuthorization(authorization) {
+  if (!authorization) {
+    return false;
+  }
+  const expiresAt = authorizationExpiresAt(authorization);
+  return expiresAt === null || expiresAt > Math.floor(Date.now() / 1000) + MPVIBE_TOKEN_SKEW_SECONDS;
+}
+
+function tokenCacheTtlSeconds(authorization) {
+  const expiresAt = authorizationExpiresAt(authorization);
+  if (!expiresAt) {
+    return 3600;
+  }
+  return Math.max(60, expiresAt - Math.floor(Date.now() / 1000) - MPVIBE_TOKEN_SKEW_SECONDS);
+}
+
+async function readCachedMpvibeAuthorization(env) {
+  if (isUsableAuthorization(mpvibeTokenMemory?.authorization)) {
+    return mpvibeTokenMemory.authorization;
+  }
+
+  const cache = mpvibeCacheBinding(env);
+  if (!cache) {
+    return "";
+  }
+  const cached = await cache.get(MPVIBE_TOKEN_CACHE_KEY, "json");
+  const authorization = normalizeBearer(cached?.authorization || cached?.token);
+  if (!isUsableAuthorization(authorization)) {
+    return "";
+  }
+  mpvibeTokenMemory = {
+    authorization,
+    expires_at: authorizationExpiresAt(authorization),
+  };
+  return authorization;
+}
+
+async function writeCachedMpvibeAuthorization(env, authorization) {
+  const normalized = normalizeBearer(authorization);
+  if (!normalized) {
+    return;
+  }
+  mpvibeTokenMemory = {
+    authorization: normalized,
+    expires_at: authorizationExpiresAt(normalized),
+  };
+
+  const cache = mpvibeCacheBinding(env);
+  if (cache) {
+    await cache.put(
+      MPVIBE_TOKEN_CACHE_KEY,
+      JSON.stringify({
+        authorization: normalized,
+        expires_at: mpvibeTokenMemory.expires_at,
+      }),
+      { expirationTtl: tokenCacheTtlSeconds(normalized) },
+    );
+  }
+}
+
+function mpvibeRefreshCookieHeader(env) {
+  return String(env.MPVIBE_REFRESH_COOKIE_HEADER || env.MPVIBE_COOKIE_HEADER || "").trim();
+}
+
+function mpvibeTimezoneOffset(env) {
+  const value = Number.parseInt(String(env.MPVIBE_TIMEZONE_OFFSET || "-240"), 10);
+  return Number.isFinite(value) ? value : -240;
+}
+
+async function refreshMpvibeAuthorization(env) {
+  const cookieHeader = mpvibeRefreshCookieHeader(env);
+  if (!cookieHeader) {
+    throw new Error("MPVibe refresh cookie is not configured. Set MPVIBE_REFRESH_COOKIE_HEADER or MPVIBE_COOKIE_HEADER.");
+  }
+
+  if (!mpvibeRefreshPromise) {
+    mpvibeRefreshPromise = (async () => {
+      const response = await fetch(`${MPVIBE_AUTH_ORIGIN}/api/refresh-token`, {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/plain, */*",
+          "content-type": "application/json",
+          origin: "https://m.mpvibe.ru",
+          referer: "https://m.mpvibe.ru/",
+          cookie: cookieHeader,
+        },
+        body: JSON.stringify({ timeZoneOffset: mpvibeTimezoneOffset(env) }),
+      });
+      const text = await response.text();
+      let payload = null;
+      try {
+        payload = text ? JSON.parse(text) : null;
+      } catch {
+        payload = null;
+      }
+      if (!response.ok) {
+        throw new Error(`MPVibe token refresh failed (${response.status}): ${text.slice(0, 240) || response.statusText}`);
+      }
+      const authorization = normalizeBearer(payload?.token);
+      if (!authorization) {
+        throw new Error("MPVibe token refresh did not return a token.");
+      }
+      await writeCachedMpvibeAuthorization(env, authorization);
+      return authorization;
+    })().finally(() => {
+      mpvibeRefreshPromise = null;
+    });
+  }
+
+  return mpvibeRefreshPromise;
+}
+
+async function resolveMpvibeAuthorization(env, { forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    const cached = await readCachedMpvibeAuthorization(env);
+    if (cached) {
+      return cached;
+    }
+
+    const configured = normalizeBearer(env.MPVIBE_AUTHORIZATION);
+    if (isUsableAuthorization(configured)) {
+      return configured;
+    }
+  }
+
+  if (mpvibeRefreshCookieHeader(env)) {
+    return refreshMpvibeAuthorization(env);
+  }
+
+  return normalizeBearer(env.MPVIBE_AUTHORIZATION);
+}
+
+async function mpvibeHeaders(env, { authorization } = {}) {
   const headers = new Headers({
     accept: "application/json, text/plain, */*",
     origin: "https://m.mpvibe.ru",
     referer: "https://m.mpvibe.ru/",
   });
   const cookieHeader = String(env.MPVIBE_COOKIE_HEADER || "").trim();
-  const authorization = String(env.MPVIBE_AUTHORIZATION || "").trim();
   if (cookieHeader) {
     headers.set("cookie", cookieHeader);
   }
-  if (authorization) {
-    headers.set("authorization", authorization);
+  const resolvedAuthorization = authorization || (await resolveMpvibeAuthorization(env));
+  if (resolvedAuthorization) {
+    headers.set("authorization", resolvedAuthorization);
   }
   return headers;
 }
@@ -77,8 +247,14 @@ async function mpvibeJson(env, pathname, params = {}) {
       url.searchParams.set(key, String(value));
     }
   }
-  const response = await fetch(url.toString(), { headers: mpvibeHeaders(env) });
-  const text = await response.text();
+  let authorization = await resolveMpvibeAuthorization(env);
+  let response = await fetch(url.toString(), { headers: await mpvibeHeaders(env, { authorization }) });
+  let text = await response.text();
+  if (response.status === 401 && mpvibeRefreshCookieHeader(env)) {
+    authorization = await resolveMpvibeAuthorization(env, { forceRefresh: true });
+    response = await fetch(url.toString(), { headers: await mpvibeHeaders(env, { authorization }) });
+    text = await response.text();
+  }
   if (!response.ok) {
     throw new Error(`MPVibe request failed (${response.status}): ${text.slice(0, 240) || response.statusText}`);
   }

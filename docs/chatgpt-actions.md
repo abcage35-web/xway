@@ -55,6 +55,12 @@ XWAY_SESSIONID=<session id>
 Optional MPVibe source:
 
 ```text
+MPVIBE_REFRESH_COOKIE_HEADER=<refresh cookie header from auth.mpvibe.ru>
+```
+
+or a full cookie header that can be used both for refresh and direct MPVibe API calls:
+
+```text
 MPVIBE_COOKIE_HEADER=<service session cookie header>
 ```
 
@@ -63,6 +69,8 @@ or:
 ```text
 MPVIBE_AUTHORIZATION=Bearer <token>
 ```
+
+`MPVIBE_AUTHORIZATION` is short-lived. Prefer `MPVIBE_REFRESH_COOKIE_HEADER`: the Worker refreshes the access token through `https://auth.mpvibe.ru/api/refresh-token`, caches the new Bearer token in `XWAY_AI_CACHE` when that KV binding exists, retries once after MPVibe `401`, and only asks for a new cookie when the refresh session itself expires.
 
 Optional WB feedback root mapping:
 
