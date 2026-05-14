@@ -600,74 +600,107 @@ function normalizeOrdersByHour(payload) {
   });
 }
 
+function buildCatalogHourRange(startHour, hours, ordersByHour) {
+  let orders = 0;
+  let maxOrders = 0;
+  const coveredHours = [];
+  for (let offset = 0; offset < hours; offset += 1) {
+    const hour = (startHour + offset) % 24;
+    const hourOrders = ordersByHour[hour] || 0;
+    orders += hourOrders;
+    maxOrders = Math.max(maxOrders, hourOrders);
+    coveredHours.push(hour);
+  }
+  const endHour = (startHour + hours) % 24;
+  return {
+    start_hour: startHour,
+    end_hour: endHour,
+    hours,
+    orders,
+    max_orders: maxOrders,
+    label: `${formatCatalogHour(startHour)}-${formatCatalogHour(endHour)}`,
+    coveredHours,
+  };
+}
+
+function rangesOverlap(left, right) {
+  const leftHours = new Set(left.coveredHours);
+  return right.coveredHours.some((hour) => leftHours.has(hour));
+}
+
+function compareBestOrderTimeSolutions(left, right) {
+  if (!right) {
+    return -1;
+  }
+  const leftHours = left.ranges.reduce((sum, range) => sum + range.hours, 0);
+  const rightHours = right.ranges.reduce((sum, range) => sum + range.hours, 0);
+  if (leftHours !== rightHours) {
+    return leftHours - rightHours;
+  }
+  const leftOrders = left.ranges.reduce((sum, range) => sum + range.orders, 0);
+  const rightOrders = right.ranges.reduce((sum, range) => sum + range.orders, 0);
+  if (leftOrders !== rightOrders) {
+    return rightOrders - leftOrders;
+  }
+  return left.ranges.length - right.ranges.length;
+}
+
 function buildBestOrderTimeSummary(payload) {
   const ordersByHour = normalizeOrdersByHour(payload);
+  const totalOrders = ordersByHour.reduce((sum, value) => sum + value, 0);
   const maxOrders = Math.max(...ordersByHour);
   if (!Number.isFinite(maxOrders) || maxOrders <= 0) {
     return null;
   }
 
-  const threshold = maxOrders >= 10 ? maxOrders * 0.9 : maxOrders;
-  const selected = ordersByHour.map((orders) => orders > 0 && orders >= threshold);
-  const groups = [];
-
-  if (selected.every(Boolean)) {
-    groups.push({
-      start_hour: 0,
-      end_hour: 0,
-      hours: 24,
-      orders: ordersByHour.reduce((sum, value) => sum + value, 0),
-      max_orders: maxOrders,
-      label: "00:00-00:00",
-    });
-  } else {
-    for (let hour = 0; hour < 24; hour += 1) {
-      const previousHour = (hour + 23) % 24;
-      if (!selected[hour] || selected[previousHour]) {
-        continue;
-      }
-
-      let length = 0;
-      let totalOrders = 0;
-      let groupMaxOrders = 0;
-      while (length < 24 && selected[(hour + length) % 24]) {
-        const orders = ordersByHour[(hour + length) % 24];
-        totalOrders += orders;
-        groupMaxOrders = Math.max(groupMaxOrders, orders);
-        length += 1;
-      }
-
-      const endHour = (hour + length) % 24;
-      groups.push({
-        start_hour: hour,
-        end_hour: endHour,
-        hours: length,
-        orders: totalOrders,
-        max_orders: groupMaxOrders,
-        label: `${formatCatalogHour(hour)}-${formatCatalogHour(endHour)}`,
-      });
+  const targetOrders = totalOrders * 0.75;
+  const ranges = [];
+  for (let hours = 2; hours <= 24; hours += 1) {
+    for (let startHour = 0; startHour < 24; startHour += 1) {
+      ranges.push(buildCatalogHourRange(startHour, hours, ordersByHour));
     }
   }
 
-  const ranges = groups
-    .sort((left, right) => {
-      const peakDiff = right.max_orders - left.max_orders;
-      if (peakDiff) {
-        return peakDiff;
+  let bestSolution = null;
+  for (const range of ranges) {
+    if (range.orders >= targetOrders) {
+      const solution = { ranges: [range] };
+      if (compareBestOrderTimeSolutions(solution, bestSolution) < 0) {
+        bestSolution = solution;
       }
-      const totalDiff = right.orders - left.orders;
-      if (totalDiff) {
-        return totalDiff;
+    }
+  }
+
+  const pairableRanges = ranges.filter((range) => range.hours < 24);
+  for (let leftIndex = 0; leftIndex < pairableRanges.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < pairableRanges.length; rightIndex += 1) {
+      const left = pairableRanges[leftIndex];
+      const right = pairableRanges[rightIndex];
+      if (rangesOverlap(left, right)) {
+        continue;
       }
-      return right.hours - left.hours;
-    })
-    .slice(0, 2)
-    .sort((left, right) => left.start_hour - right.start_hour);
+      if (left.orders + right.orders < targetOrders) {
+        continue;
+      }
+      const solution = {
+        ranges: [left, right].sort((first, second) => first.start_hour - second.start_hour),
+      };
+      if (compareBestOrderTimeSolutions(solution, bestSolution) < 0) {
+        bestSolution = solution;
+      }
+    }
+  }
+
+  const resultRanges = (bestSolution?.ranges || [buildCatalogHourRange(0, 24, ordersByHour)]).map(
+    ({ coveredHours: _coveredHours, ...range }) => range,
+  );
 
   return {
-    label: ranges.map((range) => range.label).join(", "),
+    label: resultRanges.map((range) => range.label).join(", "),
     max_orders: maxOrders,
-    ranges,
+    total_orders: totalOrders,
+    target_orders: targetOrders,
+    ranges: resultRanges,
   };
 }
 

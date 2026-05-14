@@ -2630,62 +2630,92 @@ def _normalize_catalog_orders_by_hour(payload: Optional[Dict[str, Any]]) -> List
     return result
 
 
+def _build_catalog_hour_range(start_hour: int, hours: int, orders_by_hour: List[float]) -> Dict[str, Any]:
+    orders = 0.0
+    max_orders = 0.0
+    covered_hours: List[int] = []
+    for offset in range(hours):
+        hour = (start_hour + offset) % 24
+        hour_orders = orders_by_hour[hour] if hour < len(orders_by_hour) else 0
+        orders += hour_orders
+        max_orders = max(max_orders, hour_orders)
+        covered_hours.append(hour)
+    end_hour = (start_hour + hours) % 24
+    return {
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+        "hours": hours,
+        "orders": orders,
+        "max_orders": max_orders,
+        "label": f"{_format_catalog_hour(start_hour)}-{_format_catalog_hour(end_hour)}",
+        "covered_hours": covered_hours,
+    }
+
+
+def _catalog_ranges_overlap(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    left_hours = set(left.get("covered_hours") or [])
+    return any(hour in left_hours for hour in (right.get("covered_hours") or []))
+
+
+def _compare_catalog_best_order_time_solutions(left: Dict[str, Any], right: Optional[Dict[str, Any]]) -> int:
+    if right is None:
+        return -1
+    left_ranges = left.get("ranges") or []
+    right_ranges = right.get("ranges") or []
+    left_hours = sum(item.get("hours") or 0 for item in left_ranges)
+    right_hours = sum(item.get("hours") or 0 for item in right_ranges)
+    if left_hours != right_hours:
+        return left_hours - right_hours
+    left_orders = sum(item.get("orders") or 0 for item in left_ranges)
+    right_orders = sum(item.get("orders") or 0 for item in right_ranges)
+    if left_orders != right_orders:
+        return -1 if left_orders > right_orders else 1
+    return len(left_ranges) - len(right_ranges)
+
+
 def _build_catalog_best_order_time_summary(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     orders_by_hour = _normalize_catalog_orders_by_hour(payload)
+    total_orders = sum(orders_by_hour)
     max_orders = max(orders_by_hour) if orders_by_hour else 0
     if max_orders <= 0:
         return None
 
-    threshold = max_orders * 0.9 if max_orders >= 10 else max_orders
-    selected = [orders > 0 and orders >= threshold for orders in orders_by_hour]
-    groups: List[Dict[str, Any]] = []
+    target_orders = total_orders * 0.75
+    candidate_ranges = [
+        _build_catalog_hour_range(start_hour, hours, orders_by_hour)
+        for hours in range(2, 25)
+        for start_hour in range(24)
+    ]
 
-    if all(selected):
-        groups.append(
-            {
-                "start_hour": 0,
-                "end_hour": 0,
-                "hours": 24,
-                "orders": sum(orders_by_hour),
-                "max_orders": max_orders,
-                "label": "00:00-00:00",
-            }
-        )
-    else:
-        for hour in range(24):
-            previous_hour = (hour + 23) % 24
-            if not selected[hour] or selected[previous_hour]:
+    best_solution: Optional[Dict[str, Any]] = None
+    for candidate_range in candidate_ranges:
+        if candidate_range["orders"] >= target_orders:
+            solution = {"ranges": [candidate_range]}
+            if _compare_catalog_best_order_time_solutions(solution, best_solution) < 0:
+                best_solution = solution
+
+    pairable_ranges = [candidate_range for candidate_range in candidate_ranges if candidate_range["hours"] < 24]
+    for left_index, left_range in enumerate(pairable_ranges):
+        for right_range in pairable_ranges[left_index + 1 :]:
+            if _catalog_ranges_overlap(left_range, right_range):
                 continue
+            if left_range["orders"] + right_range["orders"] < target_orders:
+                continue
+            solution = {"ranges": sorted([left_range, right_range], key=lambda item: item["start_hour"])}
+            if _compare_catalog_best_order_time_solutions(solution, best_solution) < 0:
+                best_solution = solution
 
-            length = 0
-            total_orders = 0.0
-            group_max_orders = 0.0
-            while length < 24 and selected[(hour + length) % 24]:
-                orders = orders_by_hour[(hour + length) % 24]
-                total_orders += orders
-                group_max_orders = max(group_max_orders, orders)
-                length += 1
-
-            end_hour = (hour + length) % 24
-            groups.append(
-                {
-                    "start_hour": hour,
-                    "end_hour": end_hour,
-                    "hours": length,
-                    "orders": total_orders,
-                    "max_orders": group_max_orders,
-                    "label": f"{_format_catalog_hour(hour)}-{_format_catalog_hour(end_hour)}",
-                }
-            )
-
-    ranges = sorted(
-        sorted(groups, key=lambda item: (item["max_orders"], item["orders"], item["hours"]), reverse=True)[:2],
-        key=lambda item: item["start_hour"],
-    )
+    ranges = best_solution["ranges"] if best_solution else [_build_catalog_hour_range(0, 24, orders_by_hour)]
+    result_ranges = [
+        {key: value for key, value in item.items() if key != "covered_hours"}
+        for item in ranges
+    ]
     return {
-        "label": ", ".join(item["label"] for item in ranges),
+        "label": ", ".join(item["label"] for item in result_ranges),
         "max_orders": max_orders,
-        "ranges": ranges,
+        "total_orders": total_orders,
+        "target_orders": target_orders,
+        "ranges": result_ranges,
     }
 
 
