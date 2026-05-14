@@ -141,6 +141,25 @@ function pickProductFields(product) {
   };
 }
 
+function campaignTypeForCampaign(campaign) {
+  const text = [
+    campaign?.payment_type,
+    campaign?.name,
+    campaign?.auction_mode,
+    campaign?.auto_type,
+    campaign?.query_main,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  if (/cpc|click|клик/.test(text)) {
+    return "cpc";
+  }
+  if (campaign?.unified || /unified|auto|единая/.test(text)) {
+    return "cpm-unified";
+  }
+  return "cpm-manual";
+}
+
 function rate(numerator, denominator) {
   return denominator ? (numerator / denominator) * 100 : null;
 }
@@ -189,6 +208,30 @@ function summarizeChart(chart) {
     rows: chart.rows,
     errors: chart.errors,
   };
+}
+
+function summarizeProductCampaignTypes(product) {
+  const totals = {};
+  for (const campaign of product?.campaigns || []) {
+    const key = campaignTypeForCampaign(campaign);
+    const metrics = campaign.metrics || {};
+    const target = totals[key] || {
+      views: 0,
+      clicks: 0,
+      atbs: 0,
+      orders: 0,
+      spend: 0,
+      revenue: 0,
+    };
+    target.views += asFloat(metrics.views);
+    target.clicks += asFloat(metrics.clicks);
+    target.atbs += asFloat(metrics.atbs);
+    target.orders += asFloat(metrics.orders);
+    target.spend += asFloat(metrics.sum);
+    target.revenue += asFloat(metrics.sum_price);
+    totals[key] = target;
+  }
+  return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, enrichCampaignTypeMetrics(value)]));
 }
 
 function summarizeIssues(issues) {
@@ -296,6 +339,8 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
     end: isoDate(addDays(parseIsoDate(last7Range.start), -1)),
   };
   const forceRefresh = Boolean(refreshOverride || requestBody.refresh);
+  const includeXwayCharts = requestBody.include_xway_charts === true;
+  const includeXwayIssues = requestBody.include_xway_issues === true;
   const cache = aiCacheBinding(context.env);
   const cacheKey = aiCacheKey(article, range);
 
@@ -325,7 +370,7 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
   const product = firstProduct(xwayProductResult[0]);
   const productRef = productRefForProduct(product);
 
-  const chartCalls = productRef
+  const chartCalls = productRef && includeXwayCharts
     ? {
         xway_chart_30d: safeSource("xway_chart_30d", () =>
           collectCatalogChart(context.env, {
@@ -354,6 +399,10 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
             forceRefresh,
           }),
         ),
+      }
+    : {};
+  const issueCalls = productRef && includeXwayIssues
+    ? {
         xway_issues: safeSource("xway_issues", () =>
           collectCatalogIssues(context.env, {
             productRefs: [productRef],
@@ -367,6 +416,7 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
 
   const settled = await Promise.all([
     ...Object.entries(chartCalls).map(async ([key, promise]) => [key, await promise]),
+    ...Object.entries(issueCalls).map(async ([key, promise]) => [key, await promise]),
     safeSource("mpvibe", () => collectMpvibeArticle(context.env, { article, start: last7Range.start, end: last7Range.end })).then((value) => ["mpvibe", value]),
     safeSource("wb_public", () => collectWbPublicFeedbacks(context.env, { article, end: range.end, days: 30 })).then((value) => ["wb_public", value]),
   ]);
@@ -395,6 +445,7 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
     xway: {
       product: pickProductFields(product),
       not_found: xwayProductResult[0]?.not_found || [],
+      campaign_type_totals_from_product: summarizeProductCampaignTypes(product),
       chart_30d: summarizeChart(xwayChart30),
       chart_7d: summarizeChart(xwayChart7),
       chart_previous_7d: summarizeChart(xwayChartPrevious7),
