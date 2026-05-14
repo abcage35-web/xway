@@ -105,7 +105,7 @@ The response includes:
 - WB feedback summary if `WB_FEEDBACK_ROOTS_JSON` contains a root id for the article;
 - recommendation rules and required reasoning layers.
 
-Use `detail_level: "summary"` only for fast aggregate checks. If the user asks about manual CPM phrases, clusters, fixed positions, excluded phrases or cluster bids, use `detail_level: "full"`. To limit a heavy diagnostic to known campaigns, pass `campaign_ids`, for example:
+Use `detail_level: "summary"` only for fast aggregate checks. If the user asks about manual CPM phrases, clusters, fixed positions, excluded phrases or cluster bids, use `detail_level: "full"`. To limit a heavy diagnostic to known campaigns, pass `campaign_ids`; both internal XWAY campaign ids and WB campaign ids are accepted, for example:
 
 ```json
 {

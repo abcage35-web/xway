@@ -94,7 +94,7 @@ export function buildAiOpenApiSpec(requestUrl) {
             },
             campaign_ids: {
               type: "array",
-              description: "Optional XWAY campaign ids to load with detailed clusters/phrases. Omit for full details on every campaign.",
+              description: "Optional campaign ids to load with detailed clusters/phrases. Accepts either internal XWAY campaign ids or WB campaign ids. Omit for full details on every campaign.",
               items: { type: "string" },
             },
             include_xway_charts: {

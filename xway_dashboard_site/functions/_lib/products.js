@@ -1044,6 +1044,20 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
 
   const campaignRows = stata?.campaign_wb || [];
   const campaignIds = campaignRows.map((campaign) => campaign?.id).filter((value) => value !== null && value !== undefined);
+  const campaignRefs = campaignRows
+    .map((campaign) => {
+      const id = campaign?.id;
+      if (id === null || id === undefined) {
+        return null;
+      }
+      return {
+        id,
+        keys: [campaign?.id, campaign?.external_id]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean),
+      };
+    })
+    .filter(Boolean);
   const campaignHistoryStarts = Object.fromEntries(
     campaignRows
       .filter((campaign) => campaign?.id !== null && campaign?.id !== undefined)
@@ -1052,11 +1066,13 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
 
   let heavyIds;
   if (campaignMode === "summary") {
-    const defaultHeavyIds = campaignIds.slice(0, 2).map((campaignId) => String(campaignId));
+    const defaultHeavyIds = campaignRefs.slice(0, 2).map((campaign) => String(campaign.id));
     heavyIds = new Set(
-      campaignIds
-        .map((campaignId) => String(campaignId))
-        .filter((campaignId) => requestedHeavyIds.size ? requestedHeavyIds.has(campaignId) : defaultHeavyIds.includes(campaignId)),
+      campaignRefs
+        .filter((campaign) =>
+          requestedHeavyIds.size ? campaign.keys.some((key) => requestedHeavyIds.has(key)) : defaultHeavyIds.includes(String(campaign.id)),
+        )
+        .map((campaign) => String(campaign.id)),
     );
   } else {
     heavyIds = new Set(campaignIds.map((campaignId) => String(campaignId)));
