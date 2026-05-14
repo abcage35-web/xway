@@ -9,6 +9,7 @@ xway_storage_state.json
 xway_dashboard_site/node_modules/
 xway_dashboard_site/dist/
 xway_dashboard_site/.vite/
+xway_dashboard_site/.wrangler/
 xway_dashboard_site/.DS_Store
 
 npm-debug.log*
