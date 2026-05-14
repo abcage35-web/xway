@@ -2,7 +2,7 @@ import type { CatalogChartResponse, CatalogIssuesResponse, CatalogResponse, Clus
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
-const API_RESPONSE_CACHE_VERSION = "v1";
+const API_RESPONSE_CACHE_VERSION = "v2";
 
 function buildBaseUrl(request?: Request) {
   if (request) {

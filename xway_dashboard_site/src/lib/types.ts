@@ -490,6 +490,21 @@ export interface CatalogArticleCampaignTypeMetrics {
   revenue?: number | string | null;
 }
 
+export interface CatalogArticleBestOrderTimeRange {
+  start_hour: number;
+  end_hour: number;
+  hours: number;
+  orders: number;
+  max_orders: number;
+  label: string;
+}
+
+export interface CatalogArticleBestOrderTime {
+  label: string;
+  max_orders: number;
+  ranges: CatalogArticleBestOrderTimeRange[];
+}
+
 export interface CatalogArticle {
   article: string;
   product_id: number;
@@ -510,6 +525,7 @@ export interface CatalogArticle {
   clicks: number | null;
   atbs: number | null;
   orders: number | null;
+  best_order_time?: CatalogArticleBestOrderTime | null;
   sum_price: number | null;
   ctr: number | null;
   cpc: number | null;

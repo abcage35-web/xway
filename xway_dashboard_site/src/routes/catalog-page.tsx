@@ -2262,6 +2262,16 @@ function resolveCatalogArticleDrr(article: CatalogArticle) {
   return catalogChartRate(toNumber(article.expense_sum) ?? 0, toNumber(article.sum_price) ?? 0);
 }
 
+function formatCatalogBestOrderTimeTitle(article: CatalogArticle) {
+  const bestTime = article.best_order_time;
+  if (!bestTime?.ranges?.length) {
+    return "Недостаточно заказов по часам за выбранный период";
+  }
+  return bestTime.ranges
+    .map((range) => `${range.label}: ${formatNumber(range.orders)} заказов, пик ${formatNumber(range.max_orders)}`)
+    .join("\n");
+}
+
 function buildCategoryAverageCrMap(articles: CatalogArticle[]) {
   const byCategory = new Map<string, { totalCr: number; count: number }>();
 
@@ -5805,6 +5815,32 @@ export function CatalogPage() {
                               metric="orders"
                               fallback={formatNumber(article.orders)}
                             />
+                          );
+                        },
+                      },
+                      {
+                        key: "bestOrderTime",
+                        header: (
+                          <span className="inline-flex w-[112px] flex-col leading-[1.05]">
+                            <span>Лучшее</span>
+                            <span>время</span>
+                          </span>
+                        ),
+                        cellClassName: "w-[128px] min-w-[128px]",
+                        render: (article) => {
+                          const label = article.best_order_time?.label;
+                          return (
+                            <span
+                              className={cn(
+                                "inline-flex max-w-[128px] items-center rounded-full px-2.5 py-1 text-[11px] font-semibold leading-tight",
+                                label
+                                  ? "bg-[rgba(139,100,246,0.14)] text-[#bfa9ff]"
+                                  : "bg-[var(--color-surface-soft)] text-[var(--color-muted)]",
+                              )}
+                              title={formatCatalogBestOrderTimeTitle(article)}
+                            >
+                              {label || "—"}
+                            </span>
                           );
                         },
                       },

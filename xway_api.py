@@ -2617,6 +2617,112 @@ def _catalog_product_has_campaign_slots(product: Dict[str, Any], stat_item: Dict
     )
 
 
+def _format_catalog_hour(hour: int) -> str:
+    return f"{hour % 24:02d}:00"
+
+
+def _normalize_catalog_orders_by_hour(payload: Optional[Dict[str, Any]]) -> List[float]:
+    by_hour = (payload or {}).get("by_hour") or {}
+    result: List[float] = []
+    for hour in range(24):
+        entry = by_hour.get(str(hour)) or {}
+        result.append(_as_float(entry.get("value")))
+    return result
+
+
+def _build_catalog_best_order_time_summary(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    orders_by_hour = _normalize_catalog_orders_by_hour(payload)
+    max_orders = max(orders_by_hour) if orders_by_hour else 0
+    if max_orders <= 0:
+        return None
+
+    threshold = max_orders * 0.9 if max_orders >= 10 else max_orders
+    selected = [orders > 0 and orders >= threshold for orders in orders_by_hour]
+    groups: List[Dict[str, Any]] = []
+
+    if all(selected):
+        groups.append(
+            {
+                "start_hour": 0,
+                "end_hour": 0,
+                "hours": 24,
+                "orders": sum(orders_by_hour),
+                "max_orders": max_orders,
+                "label": "00:00-00:00",
+            }
+        )
+    else:
+        for hour in range(24):
+            previous_hour = (hour + 23) % 24
+            if not selected[hour] or selected[previous_hour]:
+                continue
+
+            length = 0
+            total_orders = 0.0
+            group_max_orders = 0.0
+            while length < 24 and selected[(hour + length) % 24]:
+                orders = orders_by_hour[(hour + length) % 24]
+                total_orders += orders
+                group_max_orders = max(group_max_orders, orders)
+                length += 1
+
+            end_hour = (hour + length) % 24
+            groups.append(
+                {
+                    "start_hour": hour,
+                    "end_hour": end_hour,
+                    "hours": length,
+                    "orders": total_orders,
+                    "max_orders": group_max_orders,
+                    "label": f"{_format_catalog_hour(hour)}-{_format_catalog_hour(end_hour)}",
+                }
+            )
+
+    ranges = sorted(
+        sorted(groups, key=lambda item: (item["max_orders"], item["orders"], item["hours"]), reverse=True)[:2],
+        key=lambda item: item["start_hour"],
+    )
+    return {
+        "label": ", ".join(item["label"] for item in ranges),
+        "max_orders": max_orders,
+        "ranges": ranges,
+    }
+
+
+def _collect_catalog_best_order_times(
+    api: XwayApi,
+    shop_id: int,
+    products: List[Dict[str, Any]],
+    stat_map: Dict[str, Any],
+) -> Tuple[Dict[str, Optional[Dict[str, Any]]], int]:
+    targets: List[Dict[str, Any]] = []
+    for product in products:
+        product_id = product.get("id")
+        stat_item = stat_map.get(str(product_id), {}) if product_id is not None else {}
+        stat = stat_item.get("stat") or {}
+        if product_id is not None and _as_float(stat.get("orders")) > 0:
+            targets.append(product)
+
+    best_time_by_product_id: Dict[str, Optional[Dict[str, Any]]] = {}
+    error_count = 0
+    if not targets:
+        return best_time_by_product_id, error_count
+
+    with ThreadPoolExecutor(max_workers=min(6, len(targets))) as executor:
+        future_by_product_id = {
+            executor.submit(api.product_orders_heat_map, shop_id, int(product["id"])): str(product["id"])
+            for product in targets
+            if product.get("id") is not None
+        }
+        for future in as_completed(future_by_product_id):
+            product_id = future_by_product_id[future]
+            try:
+                best_time_by_product_id[product_id] = _build_catalog_best_order_time_summary(future.result() or {})
+            except Exception:
+                error_count += 1
+    return best_time_by_product_id, error_count
+
+
 def _collect_catalog_campaign_detail_sources(
     api: XwayApi,
     shop_id: int,
@@ -3240,6 +3346,7 @@ def _collect_shop_catalog(
         products = filtered_products
     stat_map = (listing.get("list_stat") or {}).get("products_wb") or {}
     campaign_detail_sources, campaign_detail_error_count = _collect_catalog_campaign_detail_sources(api, shop_id, products, stat_map)
+    best_order_times, best_order_time_error_count = _collect_catalog_best_order_times(api, shop_id, products, stat_map)
     shop_articles: List[Dict[str, Any]] = []
     for product in products:
         article = str(product.get("external_id") or "").strip()
@@ -3285,6 +3392,7 @@ def _collect_shop_catalog(
             "clicks": stat.get("clicks"),
             "atbs": stat.get("atbs"),
             "orders": stat.get("orders"),
+            "best_order_time": best_order_times.get(str(product_id)) if product_id is not None else None,
             "sum_price": stat.get("sum_price"),
             "ctr": stat.get("CTR"),
             "cpc": stat.get("CPC"),
@@ -3358,6 +3466,8 @@ def _collect_shop_catalog(
         "listing_meta": shop_listing_meta,
         "campaign_limit_details_loaded": len(campaign_detail_sources),
         "campaign_limit_details_errors": campaign_detail_error_count,
+        "best_order_time_loaded": len(best_order_times),
+        "best_order_time_errors": best_order_time_error_count,
         "shop_detail_error": shop_detail_error,
         "products_count": len(shop_articles),
         "listing_error": listing_error,

@@ -587,6 +587,114 @@ function productHasCampaignSlots(product, statItem) {
   );
 }
 
+function formatCatalogHour(hour) {
+  return `${String(((hour % 24) + 24) % 24).padStart(2, "0")}:00`;
+}
+
+function normalizeOrdersByHour(payload) {
+  const byHour = payload?.by_hour || {};
+  return Array.from({ length: 24 }, (_, hour) => {
+    const value = byHour[String(hour)]?.value;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  });
+}
+
+function buildBestOrderTimeSummary(payload) {
+  const ordersByHour = normalizeOrdersByHour(payload);
+  const maxOrders = Math.max(...ordersByHour);
+  if (!Number.isFinite(maxOrders) || maxOrders <= 0) {
+    return null;
+  }
+
+  const threshold = maxOrders >= 10 ? maxOrders * 0.9 : maxOrders;
+  const selected = ordersByHour.map((orders) => orders > 0 && orders >= threshold);
+  const groups = [];
+
+  if (selected.every(Boolean)) {
+    groups.push({
+      start_hour: 0,
+      end_hour: 0,
+      hours: 24,
+      orders: ordersByHour.reduce((sum, value) => sum + value, 0),
+      max_orders: maxOrders,
+      label: "00:00-00:00",
+    });
+  } else {
+    for (let hour = 0; hour < 24; hour += 1) {
+      const previousHour = (hour + 23) % 24;
+      if (!selected[hour] || selected[previousHour]) {
+        continue;
+      }
+
+      let length = 0;
+      let totalOrders = 0;
+      let groupMaxOrders = 0;
+      while (length < 24 && selected[(hour + length) % 24]) {
+        const orders = ordersByHour[(hour + length) % 24];
+        totalOrders += orders;
+        groupMaxOrders = Math.max(groupMaxOrders, orders);
+        length += 1;
+      }
+
+      const endHour = (hour + length) % 24;
+      groups.push({
+        start_hour: hour,
+        end_hour: endHour,
+        hours: length,
+        orders: totalOrders,
+        max_orders: groupMaxOrders,
+        label: `${formatCatalogHour(hour)}-${formatCatalogHour(endHour)}`,
+      });
+    }
+  }
+
+  const ranges = groups
+    .sort((left, right) => {
+      const peakDiff = right.max_orders - left.max_orders;
+      if (peakDiff) {
+        return peakDiff;
+      }
+      const totalDiff = right.orders - left.orders;
+      if (totalDiff) {
+        return totalDiff;
+      }
+      return right.hours - left.hours;
+    })
+    .slice(0, 2)
+    .sort((left, right) => left.start_hour - right.start_hour);
+
+  return {
+    label: ranges.map((range) => range.label).join(", "),
+    max_orders: maxOrders,
+    ranges,
+  };
+}
+
+async function collectCatalogBestOrderTimes(shopId, products, statMap, client) {
+  const targets = products
+    .map((product) => {
+      const productId = product?.id;
+      const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
+      return productId !== null && productId !== undefined && asFloat(statItem?.stat?.orders) > 0 ? product : null;
+    })
+    .filter(Boolean);
+  const bestTimeByProductId = new Map();
+  let errorCount = 0;
+
+  await mapWithConcurrency(targets, 4, async (product) => {
+    try {
+      const productId = product.id;
+      const payload = await client.productOrdersHeatMap(shopId, productId);
+      bestTimeByProductId.set(String(productId), buildBestOrderTimeSummary(payload));
+    } catch {
+      errorCount += 1;
+    }
+  });
+
+  return { bestTimeByProductId, loadedCount: bestTimeByProductId.size, errorCount };
+}
+
 async function collectCatalogCampaignDetailSources(shopId, products, statMap, client) {
   const targets = products
     .map((product) => {
@@ -640,7 +748,10 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
     ? (listWo.products_wb || []).filter((product) => product?.id !== null && product?.id !== undefined && productIds.has(Number(product.id)))
     : listWo.products_wb || [];
   const statMap = listStat.products_wb || {};
-  const campaignDetailSources = await collectCatalogCampaignDetailSources(shopId, products, statMap, client);
+  const [campaignDetailSources, bestOrderTimes] = await Promise.all([
+    collectCatalogCampaignDetailSources(shopId, products, statMap, client),
+    collectCatalogBestOrderTimes(shopId, products, statMap, client),
+  ]);
 
   const shopArticles = [];
   for (const product of products) {
@@ -680,6 +791,7 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
       clicks: stat.clicks,
       atbs: stat.atbs,
       orders: stat.orders,
+      best_order_time: productId !== null && productId !== undefined ? bestOrderTimes.bestTimeByProductId.get(String(productId)) ?? null : null,
       sum_price: stat.sum_price,
       ctr: stat.CTR,
       cpc: stat.CPC,
@@ -755,6 +867,8 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
     listing_meta: shopListingMeta,
     campaign_limit_details_loaded: campaignDetailSources.loadedCount,
     campaign_limit_details_errors: campaignDetailSources.errorCount,
+    best_order_time_loaded: bestOrderTimes.loadedCount,
+    best_order_time_errors: bestOrderTimes.errorCount,
     shop_detail_error: shopDetailError,
     products_count: shopArticles.length,
     listing_error: listingError,
