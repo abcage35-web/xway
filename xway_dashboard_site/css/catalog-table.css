@@ -22,9 +22,20 @@
   isolation: auto;
 }
 
-.catalog-shop-section .metric-table-sticky-header-clone {
+.catalog-shop-section .metric-table-sticky-header-slot {
+  position: relative;
+  z-index: 70;
+}
+
+.catalog-shop-section .metric-table-sticky-header-clone,
+.metric-table-sticky-header-clone.is-fixed {
   border-radius: 22px 22px 0 0;
   box-shadow: 0 14px 32px rgba(7, 10, 18, 0.22);
+}
+
+.catalog-shop-section .metric-table-sticky-header-clone.is-fixed,
+.metric-table-sticky-header-clone.is-fixed {
+  pointer-events: none;
 }
 
 .catalog-table-head,

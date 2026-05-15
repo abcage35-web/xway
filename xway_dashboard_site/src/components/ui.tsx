@@ -2,6 +2,7 @@ import { Group } from "@visx/group";
 import { Text as VisxText } from "@visx/text";
 import { useTooltip } from "@visx/tooltip";
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { CalendarDays, ChevronRight, LoaderCircle, Search, Sparkles } from "lucide-react";
 import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, formatNumber, formatPercent, relativeDeltaClass, statusTone } from "../lib/format";
 import type { ScheduleAggregate } from "../lib/types";
@@ -300,6 +301,7 @@ export function MetricTable<T>({
   getRowKey?: (row: T, rowIndex: number) => string | number;
   renderExpandedRow?: (row: T, rowIndex: number) => ReactNode;
 }) {
+  const tableShellRef = useRef<HTMLDivElement | null>(null);
   const tableViewportRef = useRef<HTMLDivElement | null>(null);
   const tableElementRef = useRef<HTMLTableElement | null>(null);
   const [headerCloneState, setHeaderCloneState] = useState<{
@@ -307,24 +309,70 @@ export function MetricTable<T>({
     tableWidth: number;
     viewportWidth: number;
     scrollLeft: number;
+    headerHeight: number;
   }>({
     columnWidths: [],
     tableWidth: 0,
     viewportWidth: 0,
     scrollLeft: 0,
+    headerHeight: 0,
+  });
+  const [headerPinState, setHeaderPinState] = useState<{
+    active: boolean;
+    left: number;
+    width: number;
+  }>({
+    active: false,
+    left: 0,
+    width: 0,
   });
   const columnKeys = columns.map((column) => column.key).join("|");
 
   useEffect(() => {
+    const shellNode = tableShellRef.current;
     const viewportNode = tableViewportRef.current;
     const tableNode = tableElementRef.current;
-    if (!viewportNode || !tableNode) {
+    if (!shellNode || !viewportNode || !tableNode) {
       return;
     }
+
+    const stickyTopPx = (() => {
+      if (typeof headerStickyTop === "number") {
+        return Number.isFinite(headerStickyTop) ? headerStickyTop : 0;
+      }
+      const parsed = Number.parseFloat(headerStickyTop);
+      return Number.isFinite(parsed) ? parsed : 0;
+    })();
+
+    const syncHeaderPin = () => {
+      if (!stickyHeader) {
+        setHeaderPinState((current) => (current.active ? { active: false, left: 0, width: 0 } : current));
+        return;
+      }
+
+      const shellRect = shellNode.getBoundingClientRect();
+      const tableRect = tableNode.getBoundingClientRect();
+      const viewportRect = viewportNode.getBoundingClientRect();
+      const cloneNode = shellNode.querySelector<HTMLElement>(".metric-table-sticky-header-clone");
+      const fallbackHeaderNode = tableNode.querySelector<HTMLElement>("thead");
+      const headerHeight = Math.round(
+        (cloneNode?.getBoundingClientRect().height || fallbackHeaderNode?.getBoundingClientRect().height || 0) + 0.5,
+      );
+      const active = shellRect.top <= stickyTopPx && Math.max(shellRect.bottom, tableRect.bottom) > stickyTopPx + headerHeight;
+      const next = {
+        active,
+        left: active ? Math.round(viewportRect.left) : 0,
+        width: active ? Math.round(viewportRect.width) : 0,
+      };
+      setHeaderPinState((current) =>
+        current.active === next.active && current.left === next.left && current.width === next.width ? current : next,
+      );
+    };
 
     const syncScrollLeft = () => {
       const nextScrollLeft = Math.round(viewportNode.scrollLeft);
       setHeaderCloneState((current) => (current.scrollLeft === nextScrollLeft ? current : { ...current, scrollLeft: nextScrollLeft }));
+      syncHeaderPin();
     };
 
     const syncHeaderMetrics = () => {
@@ -334,12 +382,22 @@ export function MetricTable<T>({
       const nextColumnWidths = measuredCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
       const nextTableWidth = Math.round(Math.max(tableNode.getBoundingClientRect().width, tableNode.scrollWidth));
       const nextViewportWidth = Math.round(viewportNode.clientWidth);
+      const cloneNode = shellNode.querySelector<HTMLElement>(".metric-table-sticky-header-clone");
+      const headerNode = tableNode.querySelector<HTMLElement>("thead");
+      const nextHeaderHeight = Math.round(
+        (cloneNode?.getBoundingClientRect().height || headerNode?.getBoundingClientRect().height || 0) + 0.5,
+      );
       syncScrollLeft();
       setHeaderCloneState((current) => {
         const sameWidths =
           current.columnWidths.length === nextColumnWidths.length &&
           current.columnWidths.every((value, index) => value === nextColumnWidths[index]);
-        if (sameWidths && current.tableWidth === nextTableWidth && current.viewportWidth === nextViewportWidth) {
+        if (
+          sameWidths &&
+          current.tableWidth === nextTableWidth &&
+          current.viewportWidth === nextViewportWidth &&
+          current.headerHeight === nextHeaderHeight
+        ) {
           return current;
         }
         return {
@@ -347,16 +405,22 @@ export function MetricTable<T>({
           columnWidths: nextColumnWidths,
           tableWidth: nextTableWidth,
           viewportWidth: nextViewportWidth,
+          headerHeight: nextHeaderHeight,
         };
       });
+      syncHeaderPin();
     };
 
     syncHeaderMetrics();
     viewportNode.addEventListener("scroll", syncScrollLeft, { passive: true });
+    window.addEventListener("scroll", syncHeaderPin, { passive: true });
+    window.addEventListener("resize", syncHeaderMetrics);
 
     if (typeof ResizeObserver === "undefined") {
       return () => {
         viewportNode.removeEventListener("scroll", syncScrollLeft);
+        window.removeEventListener("scroll", syncHeaderPin);
+        window.removeEventListener("resize", syncHeaderMetrics);
       };
     }
 
@@ -366,9 +430,11 @@ export function MetricTable<T>({
     [...tableNode.querySelectorAll<HTMLTableCellElement>("thead th")].forEach((cell) => observer.observe(cell));
     return () => {
       viewportNode.removeEventListener("scroll", syncScrollLeft);
+      window.removeEventListener("scroll", syncHeaderPin);
+      window.removeEventListener("resize", syncHeaderMetrics);
       observer.disconnect();
     };
-  }, [columnKeys, columns.length, rows.length, stickyHeader]);
+  }, [columnKeys, columns.length, headerStickyTop, rows.length, stickyHeader]);
 
   if (!rows.length) {
     return <EmptyState title="Пока пусто" text={emptyText} />;
@@ -429,81 +495,108 @@ export function MetricTable<T>({
     </thead>
   );
 
-  return (
+  const renderHeaderClone = ({ fixed = false, hidden = false }: { fixed?: boolean; hidden?: boolean } = {}) => (
     <div
       className={cn(
-        variant === "default"
-          ? "table-shell overflow-visible rounded-[28px] border border-[var(--color-line)] bg-white"
-          : "table-shell-flat overflow-visible rounded-none border-0 bg-transparent shadow-none",
-        stickyHeader && "metric-table-shell-sticky",
-        className,
+        "metric-table-sticky-header-clone z-[80] overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]",
+        fixed && "is-fixed",
       )}
+      style={{
+        position: fixed ? "fixed" : "sticky",
+        top: headerStickyTop,
+        zIndex: 80,
+        visibility: hidden ? "hidden" : undefined,
+        ...(fixed ? { left: `${headerPinState.left}px`, width: `${headerPinState.width}px` } : undefined),
+      }}
     >
-      {showStickyHeaderClone ? (
-        <div className="metric-table-sticky-header-clone sticky z-[60] overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ top: headerStickyTop }}>
+      <table
+        className="data-table text-sm"
+        style={{
+          width: `${headerCloneState.tableWidth}px`,
+          transform: `translateX(-${headerCloneState.scrollLeft}px)`,
+        }}
+      >
+        {colgroup}
+        {renderHeader({ clone: true })}
+      </table>
+    </div>
+  );
+
+  const fixedHeaderPortal =
+    showStickyHeaderClone && headerPinState.active && typeof document !== "undefined"
+      ? createPortal(renderHeaderClone({ fixed: true }), document.body)
+      : null;
+
+  return (
+    <>
+      <div
+        ref={tableShellRef}
+        className={cn(
+          variant === "default"
+            ? "table-shell overflow-visible rounded-[28px] border border-[var(--color-line)] bg-white"
+            : "table-shell-flat overflow-visible rounded-none border-0 bg-transparent shadow-none",
+          stickyHeader && "metric-table-shell-sticky",
+          className,
+        )}
+      >
+        {showStickyHeaderClone ? (
+          <div className="metric-table-sticky-header-slot" style={headerCloneState.headerHeight ? { height: `${headerCloneState.headerHeight}px` } : undefined}>
+            {renderHeaderClone({ hidden: headerPinState.active })}
+          </div>
+        ) : null}
+
+        <div ref={tableViewportRef} className={cn("overflow-x-auto", variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible")}>
           <table
-            className="data-table text-sm"
-            style={{
-              width: `${headerCloneState.tableWidth}px`,
-              transform: `translateX(-${headerCloneState.scrollLeft}px)`,
-            }}
+            ref={tableElementRef}
+            className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm"
+            style={showStickyHeaderClone && headerCloneState.tableWidth ? { width: `${headerCloneState.tableWidth}px` } : undefined}
           >
             {colgroup}
-            {renderHeader({ clone: true })}
+            {!showStickyHeaderClone ? renderHeader() : null}
+            <tbody className="divide-y divide-[var(--color-line)] bg-white">
+              {rows.map((row, rowIndex) => {
+                const expandedRow = renderExpandedRow?.(row, rowIndex);
+                const rowKey = getRowKey?.(row, rowIndex) ?? rowIndex;
+                return (
+                  <Fragment key={rowKey}>
+                    <tr className="transition hover:bg-[var(--color-surface-soft)]">
+                      {columns.map((column) => (
+                        <td
+                          key={column.key}
+                          style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+                          className={cn(
+                            "px-4 py-3 align-top text-[var(--color-ink)]",
+                            column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-cell",
+                            column.dividerBefore && "border-l border-[var(--color-line)]",
+                            column.align === "right" ? "text-right" : "text-left",
+                            column.cellClassName,
+                          )}
+                        >
+                          {column.render(row)}
+                        </td>
+                      ))}
+                    </tr>
+                    {expandedRow ? (
+                      <tr className="metric-table-expanded-row">
+                        <td colSpan={columns.length} className="metric-table-expanded-cell p-0 align-top">
+                          <div
+                            className="metric-table-expanded-content"
+                            style={headerCloneState.viewportWidth ? { width: `${headerCloneState.viewportWidth}px` } : undefined}
+                          >
+                            {expandedRow}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </tbody>
           </table>
         </div>
-      ) : null}
-
-      <div ref={tableViewportRef} className={cn("overflow-x-auto", variant === "flat" ? "overflow-y-hidden" : "overflow-y-visible")}>
-        <table
-          ref={tableElementRef}
-          className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm"
-          style={showStickyHeaderClone && headerCloneState.tableWidth ? { width: `${headerCloneState.tableWidth}px` } : undefined}
-        >
-          {colgroup}
-          {!showStickyHeaderClone ? renderHeader() : null}
-          <tbody className="divide-y divide-[var(--color-line)] bg-white">
-            {rows.map((row, rowIndex) => {
-              const expandedRow = renderExpandedRow?.(row, rowIndex);
-              const rowKey = getRowKey?.(row, rowIndex) ?? rowIndex;
-              return (
-                <Fragment key={rowKey}>
-                  <tr className="transition hover:bg-[var(--color-surface-soft)]">
-                    {columns.map((column) => (
-                      <td
-                        key={column.key}
-                        style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
-                        className={cn(
-                          "px-4 py-3 align-top text-[var(--color-ink)]",
-                          column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-cell",
-                          column.dividerBefore && "border-l border-[var(--color-line)]",
-                          column.align === "right" ? "text-right" : "text-left",
-                          column.cellClassName,
-                        )}
-                      >
-                        {column.render(row)}
-                      </td>
-                    ))}
-                  </tr>
-                  {expandedRow ? (
-                    <tr className="metric-table-expanded-row">
-                      <td colSpan={columns.length} className="metric-table-expanded-cell p-0 align-top">
-                        <div
-                          className="metric-table-expanded-content"
-                          style={headerCloneState.viewportWidth ? { width: `${headerCloneState.viewportWidth}px` } : undefined}
-                        >
-                          {expandedRow}
-                        </div>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
       </div>
-    </div>
+      {fixedHeaderPortal}
+    </>
   );
 }
 
