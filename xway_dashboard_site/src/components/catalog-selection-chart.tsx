@@ -927,6 +927,7 @@ export function CatalogSelectionChart({
   selectionCount,
   loadedProductsCount,
   loadTargetCount,
+  loadingProgressLabel,
   chunkCount,
   loadedChunkCount,
   errorCount,
@@ -945,6 +946,7 @@ export function CatalogSelectionChart({
   selectionCount: number;
   loadedProductsCount?: number | null;
   loadTargetCount?: number | null;
+  loadingProgressLabel?: string | null;
   chunkCount?: number | null;
   loadedChunkCount?: number | null;
   errorCount?: number | null;
@@ -1028,7 +1030,9 @@ export function CatalogSelectionChart({
           {isLoading ? (
             <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5">
               <LoaderCircle className="size-4 animate-spin text-brand-200" />
-              {loadedProductsCount !== undefined && loadedProductsCount !== null
+              {loadingProgressLabel
+                ? loadingProgressLabel
+                : loadedProductsCount !== undefined && loadedProductsCount !== null
                 ? `Загружено ${formatNumber(loadedProductsCount)} / ${formatNumber(loadingTargetCount)}`
                 : "Обновляем график"}
             </span>

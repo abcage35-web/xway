@@ -3343,6 +3343,7 @@ export function CatalogPage() {
   const [refreshingAllCatalog, setRefreshingAllCatalog] = useState(false);
   const [refreshingShopIds, setRefreshingShopIds] = useState<string[]>([]);
   const [refreshingArticleRefs, setRefreshingArticleRefs] = useState<string[]>([]);
+  const [catalogRefreshProductProgress, setCatalogRefreshProductProgress] = useState<{ completed: number; total: number } | null>(null);
   const [catalogRefreshLogs, setCatalogRefreshLogs] = useState<CatalogRefreshLogEntry[]>([]);
   const [catalogRefreshPanelOpen, setCatalogRefreshPanelOpen] = useState(false);
   const [selectedCatalogRefreshLogRef, setSelectedCatalogRefreshLogRef] = useState<string | null>(null);
@@ -5429,6 +5430,7 @@ export function CatalogPage() {
     });
 
     try {
+      setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
       const knownArticlesByRef = await refreshCatalogRowsByShop(productRefs, {
         signal: controller.signal,
         scope: "catalog",
@@ -5446,6 +5448,7 @@ export function CatalogPage() {
           skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
           knownArticlesByRef,
         });
+        setCatalogRefreshProductProgress({ completed: index + 1, total: productRefs.length });
         if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
@@ -5472,6 +5475,7 @@ export function CatalogPage() {
         });
       }
       setRefreshingAllCatalog(false);
+      setCatalogRefreshProductProgress(null);
     }
   };
 
@@ -5535,6 +5539,7 @@ export function CatalogPage() {
     setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
 
     try {
+      setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
       const knownArticlesByRef = await refreshCatalogRowsByShop(productRefs, {
         signal: controller.signal,
         scope: "shop",
@@ -5551,6 +5556,7 @@ export function CatalogPage() {
           skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
           knownArticlesByRef,
         });
+        setCatalogRefreshProductProgress({ completed: index + 1, total: productRefs.length });
         if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
@@ -5577,6 +5583,7 @@ export function CatalogPage() {
         });
       }
       setRefreshingShopIds((current) => current.filter((id) => id !== shopId));
+      setCatalogRefreshProductProgress(null);
     }
   };
 
@@ -5860,6 +5867,11 @@ export function CatalogPage() {
               selectionCount={chartSelectionCount}
               loadedProductsCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.loadedProductsCount : chartSourceData?.loaded_products_count ?? null}
               loadTargetCount={chartSourceSelectionCount}
+              loadingProgressLabel={
+                catalogRefreshing && catalogRefreshProductProgress
+                  ? `Обновлено ${formatNumber(catalogRefreshProductProgress.completed)} / ${formatNumber(catalogRefreshProductProgress.total)}`
+                  : null
+              }
               chunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.chunkCount : null}
               loadedChunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.loadedChunkCount : null}
               errorCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.errorCount : chartData?.errors.length ?? null}
