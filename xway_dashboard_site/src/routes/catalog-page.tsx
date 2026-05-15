@@ -537,16 +537,8 @@ function mergeCatalogArticlePreservingDetails(baseArticle: CatalogArticle | null
   };
 }
 
-function catalogProductRefsFromPayload(payload: CatalogResponse) {
-  return payload.shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
-}
-
-function catalogProductRefsFromPayloads(payloads: CatalogResponse[]) {
-  return [
-    ...new Set(
-      payloads.flatMap((payload) => catalogProductRefsFromPayload(payload)),
-    ),
-  ];
+function catalogProductRefsFromShops(shops: CatalogShop[]) {
+  return shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
 }
 
 function mergeCatalogPayloadWithShopResponse(basePayload: CatalogResponse, shopResponse: CatalogResponse) {
@@ -4072,6 +4064,7 @@ export function CatalogPage() {
       };
     })
     .filter(Boolean) as CatalogShop[];
+  const visibleProductRefs = catalogProductRefsFromShops(visibleShops);
   const visibleTotals = computeCatalogTotals(visibleShops);
   const compareTurnoverOrdersByRef = new Map(
     (comparePayload?.shops || []).flatMap((shop) =>
@@ -5017,6 +5010,11 @@ export function CatalogPage() {
     (stockFrom || stockTo ? 1 : 0) +
     (turnoverFrom || turnoverTo ? 1 : 0) +
     (quickView !== "all" ? 1 : 0);
+  const catalogRefreshUsesFilters = activeListFilterCount > 0;
+  const resolveShopRefreshProductRefs = (shop: CatalogShop) => {
+    const visibleShop = visibleShops.find((candidate) => String(candidate.id) === String(shop.id)) ?? shop;
+    return visibleShop.articles.map((article) => `${visibleShop.id}:${article.product_id}`);
+  };
   const articleIssuesCollectLabel = articleIssuesLoading
     ? "Собираем ошибки..."
     : articleIssuesPendingCount > 0 && articleIssuesPendingCount < articleIssuesTotalCount
@@ -5293,7 +5291,12 @@ export function CatalogPage() {
           signal: options.signal,
         });
         const responseShop = currentCatalog.shops.find((shop) => String(shop.id) === shopId);
-        const loadedRefs = responseShop ? responseShop.articles.map((article) => `${responseShop.id}:${article.product_id}`) : [];
+        const targetShopRefSet = shopRefs.length ? new Set(shopRefs) : null;
+        const loadedRefs = responseShop
+          ? responseShop.articles
+              .map((article) => `${responseShop.id}:${article.product_id}`)
+              .filter((ref) => !targetShopRefSet || targetShopRefSet.has(ref))
+          : [];
         const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, loadedRefs);
         if (loadedRefs.length) {
           refreshedProductRefs.push(...loadedRefs);
@@ -6314,6 +6317,15 @@ export function CatalogPage() {
       return;
     }
 
+    let productRefs = [...new Set(visibleProductRefs)];
+    if (!productRefs.length) {
+      setCatalogRefreshActivity({
+        title: "Нет товаров для обновления",
+        detail: "Под текущий фильтр не попали товары.",
+      });
+      return;
+    }
+
     catalogRefreshAbortRef.current?.abort();
     const controller = new AbortController();
     catalogRefreshAbortRef.current = controller;
@@ -6323,17 +6335,22 @@ export function CatalogPage() {
     chartFetchAbortRef.current?.abort();
     catalogRowCampaignTypesAbortRef.current?.abort();
     setChartLoading(false);
-    setCatalogPayloadOverride(null);
-    setTurnoverPayloadOverride(null);
-    setCatalogArticleOverridesByRef({});
-    setTurnoverOrdersOverridesByRef({});
-    setArticleAnalyticsByRef({});
+    if (!catalogRefreshUsesFilters) {
+      setCatalogPayloadOverride(null);
+      setTurnoverPayloadOverride(null);
+      setCatalogArticleOverridesByRef({});
+      setTurnoverOrdersOverridesByRef({});
+      setArticleAnalyticsByRef({});
+    } else {
+      const scopedRefs = new Set(productRefs);
+      setArticleAnalyticsByRef((current) =>
+        Object.fromEntries(Object.entries(current).filter(([ref]) => !scopedRefs.has(ref))),
+      );
+    }
     setChartSourceData(null);
     setChartProgress(null);
     setChartError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
-
-    let productRefs = catalogProductRefsFromPayloads([loaderPayload, sourcePayload]);
 
     setChartProgress({
       cacheKey: chartSourceCacheKey,
@@ -6356,8 +6373,7 @@ export function CatalogPage() {
       const baseRefresh = await refreshCatalogRowsByShop(productRefs, {
         signal: controller.signal,
         scope: "catalog",
-        scopeLabel: "Обновление всех товаров",
-        includeAllKnownShops: true,
+        scopeLabel: catalogRefreshUsesFilters ? "Обновление товаров по фильтру" : "Обновление всех товаров",
         onFastProgress: ({ completed, total, currentLabel }) => {
           setCatalogRefreshProductProgress({
             stage: "fast",
@@ -6393,7 +6409,7 @@ export function CatalogPage() {
       await runCatalogDeepRefreshQueue(productRefs, {
         signal: controller.signal,
         scope: "catalog",
-        scopeLabel: "Обновление всех товаров",
+        scopeLabel: catalogRefreshUsesFilters ? "Обновление товаров по фильтру" : "Обновление всех товаров",
         fastCompleted: baseRefresh.shopCount,
         fastTotal: baseRefresh.shopCount,
         knownArticlesByRef,
@@ -6435,8 +6451,7 @@ export function CatalogPage() {
       return;
     }
 
-    const allProductRefs = catalogProductRefsFromPayloads([loaderPayload, sourcePayload]);
-    const productRefs = allProductRefs.filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+    const productRefs = [...new Set(visibleProductRefs)].filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
     catalogRefreshAbortRef.current?.abort();
     const controller = new AbortController();
     catalogRefreshAbortRef.current = controller;
@@ -6547,8 +6562,14 @@ export function CatalogPage() {
       return;
     }
 
-    const sourceShop = sourcePayload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
-    let productRefs = sourceShop.articles.map((article) => `${sourceShop.id}:${article.product_id}`);
+    let productRefs = [...new Set(resolveShopRefreshProductRefs(shop))];
+    if (!productRefs.length) {
+      setCatalogRefreshActivity({
+        title: "Нет товаров для обновления",
+        detail: `${shop.name}: под текущий фильтр не попали товары.`,
+      });
+      return;
+    }
 
     catalogRefreshAbortRef.current?.abort();
     const controller = new AbortController();
@@ -6622,8 +6643,14 @@ export function CatalogPage() {
       return;
     }
 
-    const sourceShop = sourcePayload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
-    let productRefs = sourceShop.articles.map((article) => `${sourceShop.id}:${article.product_id}`);
+    let productRefs = [...new Set(resolveShopRefreshProductRefs(shop))];
+    if (!productRefs.length) {
+      setCatalogRefreshActivity({
+        title: "Нет товаров для обновления",
+        detail: `${shop.name}: под текущий фильтр не попали товары.`,
+      });
+      return;
+    }
 
     catalogRefreshAbortRef.current?.abort();
     const controller = new AbortController();
