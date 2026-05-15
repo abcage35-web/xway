@@ -26,6 +26,8 @@ interface CatalogLoaderData {
   turnoverPayload: CatalogResponse | null;
   start?: string | null;
   end?: string | null;
+  sourceStart?: string | null;
+  sourceEnd?: string | null;
 }
 
 type CatalogChartWindow = 7 | 14 | 30 | 60;
@@ -108,6 +110,7 @@ const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_CHART_FETCH_CHUNK_SIZE = 24;
 const CATALOG_REFRESH_FETCH_CHUNK_SIZE = 24;
 const CATALOG_REFRESH_CAMPAIGN_PROCESS_SIZE = 1;
+const CATALOG_SOURCE_WINDOW_DAYS = 30;
 const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
 const CATALOG_CHART_CHUNK_DELAY_MS = 650;
@@ -1757,13 +1760,55 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
   return slots;
 }
 
-function buildCatalogSearch(start?: string | null, end?: string | null) {
+function isoDateSpanDays(start?: string | null, end?: string | null) {
+  if (!start || !end) {
+    return null;
+  }
+  const diff = Math.round((new Date(`${end}T00:00:00`).getTime() - new Date(`${start}T00:00:00`).getTime()) / 86_400_000);
+  return Number.isFinite(diff) && diff >= 0 ? diff + 1 : null;
+}
+
+function isCatalogRangeWithin(start?: string | null, end?: string | null, sourceStart?: string | null, sourceEnd?: string | null) {
+  return Boolean(start && end && sourceStart && sourceEnd && start >= sourceStart && end <= sourceEnd);
+}
+
+function resolveCatalogSourceWindow(
+  start?: string | null,
+  end?: string | null,
+  preferredSourceStart?: string | null,
+  preferredSourceEnd?: string | null,
+) {
+  if (!start || !end) {
+    return null;
+  }
+  if (isCatalogRangeWithin(start, end, preferredSourceStart, preferredSourceEnd)) {
+    return { start: preferredSourceStart!, end: preferredSourceEnd! };
+  }
+  const spanDays = isoDateSpanDays(start, end);
+  if (spanDays !== null && spanDays <= CATALOG_SOURCE_WINDOW_DAYS) {
+    return {
+      start: shiftIsoDate(end, -(CATALOG_SOURCE_WINDOW_DAYS - 1)),
+      end,
+    };
+  }
+  return { start, end };
+}
+
+function buildCatalogSearch(
+  start?: string | null,
+  end?: string | null,
+  source?: { start?: string | null; end?: string | null } | null,
+) {
   const params = new URLSearchParams();
   if (start) {
     params.set("start", start);
   }
   if (end) {
     params.set("end", end);
+  }
+  if (source?.start && source?.end && isCatalogRangeWithin(start, end, source.start, source.end)) {
+    params.set("source_start", source.start);
+    params.set("source_end", source.end);
   }
   return params.toString() ? `?${params.toString()}` : "";
 }
@@ -2158,24 +2203,36 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
   const url = new URL(request.url);
   const start = url.searchParams.get("start");
   const end = url.searchParams.get("end");
-  const payload = await fetchCatalog({ request, start, end });
-  const compareStart = shiftIsoDate(payload.range.current_start, -payload.range.span_days);
-  const compareEnd = shiftIsoDate(payload.range.current_end, -payload.range.span_days);
+  const requestedSourceStart = url.searchParams.get("source_start");
+  const requestedSourceEnd = url.searchParams.get("source_end");
+  const sourceWindow = resolveCatalogSourceWindow(start, end, requestedSourceStart, requestedSourceEnd);
+  const payload = await fetchCatalog({
+    request,
+    start: sourceWindow?.start ?? start,
+    end: sourceWindow?.end ?? end,
+  });
+  const selectedStart = start ?? payload.range.current_start;
+  const selectedEnd = end ?? payload.range.current_end;
+  const selectedIsSourceRange = selectedStart === payload.range.current_start && selectedEnd === payload.range.current_end;
+  const compareStart = shiftIsoDate(selectedStart, -(isoDateSpanDays(selectedStart, selectedEnd) ?? payload.range.span_days));
+  const compareEnd = shiftIsoDate(selectedEnd, -(isoDateSpanDays(selectedStart, selectedEnd) ?? payload.range.span_days));
   let comparePayload: CatalogResponse | null = null;
 
-  try {
-    comparePayload = await fetchCatalog({ request, start: compareStart, end: compareEnd });
-  } catch {
-    comparePayload = null;
+  if (selectedIsSourceRange) {
+    try {
+      comparePayload = await fetchCatalog({ request, start: compareStart, end: compareEnd });
+    } catch {
+      comparePayload = null;
+    }
   }
 
-  const turnoverEnd = payload.range.current_end;
+  const turnoverEnd = selectedEnd;
   const turnoverStart = shiftIsoDate(turnoverEnd, -2);
   let turnoverPayload: CatalogResponse | null = null;
 
-  if (payload.range.current_start === turnoverStart && payload.range.current_end === turnoverEnd) {
+  if (selectedIsSourceRange && payload.range.current_start === turnoverStart && payload.range.current_end === turnoverEnd) {
     turnoverPayload = payload;
-  } else {
+  } else if (selectedIsSourceRange) {
     try {
       turnoverPayload = await fetchCatalog({ request, start: turnoverStart, end: turnoverEnd });
     } catch {
@@ -2183,7 +2240,15 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
     }
   }
 
-  return { payload, comparePayload, turnoverPayload, start, end };
+  return {
+    payload,
+    comparePayload,
+    turnoverPayload,
+    start: selectedStart,
+    end: selectedEnd,
+    sourceStart: payload.range.current_start,
+    sourceEnd: payload.range.current_end,
+  };
 }
 
 function articleMatches(article: CatalogArticle, query: string) {
@@ -3048,6 +3113,99 @@ function computeCatalogTotals(shops: CatalogShop[]) {
   );
 }
 
+function metricAmountPer(numerator: number | string | null | undefined, denominator: number | string | null | undefined) {
+  const top = toNumber(numerator);
+  const bottom = toNumber(denominator);
+  if (top === null || bottom === null || bottom <= 0) {
+    return null;
+  }
+  return top / bottom;
+}
+
+function sumCatalogChartRows(rows: CatalogChartResponse["rows"]) {
+  return rows.reduce(
+    (totals, row) => {
+      totals.views += toNumber(row.views) ?? 0;
+      totals.clicks += toNumber(row.clicks) ?? 0;
+      totals.atbs += toNumber(row.atbs) ?? 0;
+      totals.orders += toNumber(row.orders) ?? 0;
+      totals.ordered_total += toNumber(row.ordered_total) ?? 0;
+      totals.expense_sum += toNumber(row.expense_sum) ?? 0;
+      totals.sum_price += toNumber(row.sum_price) ?? 0;
+      totals.rel_shks += toNumber(row.rel_shks) ?? 0;
+      totals.ordered_sum_total += toNumber(row.ordered_sum_total) ?? 0;
+      return totals;
+    },
+    {
+      views: 0,
+      clicks: 0,
+      atbs: 0,
+      orders: 0,
+      ordered_total: 0,
+      expense_sum: 0,
+      sum_price: 0,
+      rel_shks: 0,
+      ordered_sum_total: 0,
+    },
+  );
+}
+
+function applyCatalogChartMetricsToPayload(
+  payload: CatalogResponse,
+  chartData: CatalogChartResponse | null,
+  start?: string | null,
+  end?: string | null,
+) {
+  if (!chartData?.product_rows?.length || !start || !end) {
+    return payload;
+  }
+
+  const productRowsByRef = new Map(chartData.product_rows.map((product) => [product.product_ref, product.rows]));
+  const shops = payload.shops.map((shop) => ({
+    ...shop,
+    articles: shop.articles.map((article) => {
+      const productRows = productRowsByRef.get(`${shop.id}:${article.product_id}`);
+      if (!productRows) {
+        return article;
+      }
+      const rows = productRows.filter((row) => row.day >= start && row.day <= end);
+      const totals = sumCatalogChartRows(rows);
+      const campaignTypeTotals = isCatalogArticleDisabled(article) ? {} : buildCatalogCampaignTypeTotals(rows);
+      return {
+        ...article,
+        expense_sum: totals.expense_sum,
+        views: totals.views,
+        clicks: totals.clicks,
+        atbs: totals.atbs,
+        orders: totals.orders,
+        ordered_report: totals.ordered_total,
+        ordered_sum_report: totals.ordered_sum_total,
+        sum_price: totals.sum_price,
+        ctr: catalogMetricRate(totals.clicks, totals.views),
+        cpc: metricAmountPer(totals.expense_sum, totals.clicks),
+        cr: catalogMetricRate(totals.orders, totals.clicks),
+        cpo: metricAmountPer(totals.expense_sum, totals.orders),
+        cpo_overall: metricAmountPer(totals.expense_sum, totals.ordered_total),
+        cpo_with_rel: metricAmountPer(totals.expense_sum, totals.orders + totals.rel_shks),
+        drr: catalogMetricRate(totals.expense_sum, totals.sum_price),
+        campaign_type_totals: campaignTypeTotals,
+      };
+    }),
+  }));
+
+  return {
+    ...payload,
+    range: {
+      ...payload.range,
+      current_start: start,
+      current_end: end,
+      span_days: isoDateSpanDays(start, end) ?? payload.range.span_days,
+    },
+    totals: computeCatalogTotals(shops),
+    shops,
+  };
+}
+
 function sumCatalogShopArticleField(shops: CatalogShop[], field: keyof Pick<CatalogArticle, "sum_price">) {
   return shops.reduce(
     (total, shop) => total + shop.articles.reduce((shopTotal, article) => shopTotal + (toNumber(article[field]) ?? 0), 0),
@@ -3056,7 +3214,7 @@ function sumCatalogShopArticleField(shops: CatalogShop[], field: keyof Pick<Cata
 }
 
 export function CatalogPage() {
-  const { payload: loaderPayload, comparePayload, turnoverPayload, start, end } = useLoaderData() as CatalogLoaderData;
+  const { payload: loaderPayload, comparePayload, turnoverPayload, start, end, sourceStart, sourceEnd } = useLoaderData() as CatalogLoaderData;
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
@@ -3124,9 +3282,15 @@ export function CatalogPage() {
     chartCacheRef.current.set(cacheKey, entry);
     writeCatalogChartSourceCache(cacheKey, entry);
   };
-  const payload = useMemo(
+  const sourcePayload = useMemo(
     () => applyCatalogArticleOverrides(catalogPayloadOverride ?? loaderPayload, catalogArticleOverridesByRef),
     [catalogArticleOverridesByRef, catalogPayloadOverride, loaderPayload],
+  );
+  const selectedRangeStart = start ?? sourcePayload.range.current_start;
+  const selectedRangeEnd = end ?? sourcePayload.range.current_end;
+  const payload = useMemo(
+    () => applyCatalogChartMetricsToPayload(sourcePayload, chartSourceData, selectedRangeStart, selectedRangeEnd),
+    [sourcePayload, chartSourceData, selectedRangeStart, selectedRangeEnd],
   );
   const catalogArticleByRef = useMemo(() => {
     const next = new Map<string, CatalogArticle>();
@@ -3334,7 +3498,8 @@ export function CatalogPage() {
   useEffect(() => {
     setExpandedAnalyticsRefs([]);
     setArticleAnalyticsByRef({});
-  }, [start, end]);
+    setChartWindow(resolveCatalogChartWindow(isoDateSpanDays(selectedRangeStart, selectedRangeEnd)));
+  }, [selectedRangeStart, selectedRangeEnd]);
 
   const shopOptions = buildShopOptions(payload);
   const categoryOptions = buildCategoryOptions(payload);
@@ -3521,7 +3686,7 @@ export function CatalogPage() {
     ),
   ).values()];
   const chartSourceArticles = [...new Map(
-    payload.shops.flatMap((shop) =>
+    sourcePayload.shops.flatMap((shop) =>
       shop.articles.map((article) => [
         `${shop.id}:${article.product_id}`,
         {
@@ -3538,11 +3703,16 @@ export function CatalogPage() {
   const chartSourceSelectionCount = chartSourceArticles.length;
   const chartSourceProductRefs = chartSourceArticles.map((item) => `${item.shopId}:${item.productId}`);
   const chartSourceProductRefsKey = chartSourceProductRefs.join(",");
-  const chartRangeEnd = payload.range.current_end;
+  const chartRangeEnd = selectedRangeEnd;
   const chartSourceWindow = chartWindow === 60 ? 60 : DEFAULT_CATALOG_CHART_WINDOW;
-  const chartSourceRangeStart = shiftIsoDate(chartRangeEnd, -(chartSourceWindow - 1));
-  const chartRangeStart = shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
-  const chartSourceCacheKey = `${chartSourceRangeStart}|${chartRangeEnd}|${chartSourceProductRefsKey}`;
+  const chartSourceRangeStart = chartWindow === 60 ? shiftIsoDate(sourcePayload.range.current_end, -(chartSourceWindow - 1)) : sourcePayload.range.current_start;
+  const chartSourceRangeEnd = sourcePayload.range.current_end;
+  const selectedRangeSpanDays = isoDateSpanDays(selectedRangeStart, selectedRangeEnd);
+  const chartRangeStart =
+    selectedRangeSpanDays !== null && chartWindow === resolveCatalogChartWindow(selectedRangeSpanDays)
+      ? selectedRangeStart
+      : shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
+  const chartSourceCacheKey = `${chartSourceRangeStart}|${chartSourceRangeEnd}|${chartSourceProductRefsKey}`;
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
   const chartData = useMemo(
     () =>
@@ -3563,7 +3733,8 @@ export function CatalogPage() {
   const yesterdayLabel = formatDate(yesterdayIso);
   const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
   const preset = getRangePreset(start, end);
-  const catalogSearch = buildCatalogSearch(start, end);
+  const currentSourceRange = { start: sourceStart ?? sourcePayload.range.current_start, end: sourceEnd ?? sourcePayload.range.current_end };
+  const catalogSearch = buildCatalogSearch(start, end, currentSourceRange);
   const articleIssueRowsAllKinds = mapCatalogIssueRows(visibleIssueTargets, articleIssueCacheByRef, {
     ...articleIssueSettings,
     visibleKinds: DEFAULT_CATALOG_ISSUE_VISIBILITY,
@@ -3619,7 +3790,10 @@ export function CatalogPage() {
                   : `За ${yesterdaySentenceLabel}: ${formatNumber(articleIssueRowsAllKinds.length)} ${formatArticlesWord(articleIssueRowsAllKinds.length)} с ошибками.`;
 
   const handleRangeChange = (next: { start: string; end: string }) => {
-    navigate(`/catalog${buildCatalogSearch(next.start, next.end)}`);
+    const nextSourceRange = isCatalogRangeWithin(next.start, next.end, currentSourceRange.start, currentSourceRange.end)
+      ? currentSourceRange
+      : resolveCatalogSourceWindow(next.start, next.end);
+    navigate(`/catalog${buildCatalogSearch(next.start, next.end, nextSourceRange)}`);
   };
 
   const handlePresetChange = (nextPreset: string) => {
@@ -3627,7 +3801,10 @@ export function CatalogPage() {
       return;
     }
     const nextRange = buildPresetRange(nextPreset);
-    navigate(`/catalog${buildCatalogSearch(nextRange.start, nextRange.end)}`);
+    const nextSourceRange = isCatalogRangeWithin(nextRange.start, nextRange.end, currentSourceRange.start, currentSourceRange.end)
+      ? currentSourceRange
+      : resolveCatalogSourceWindow(nextRange.start, nextRange.end);
+    navigate(`/catalog${buildCatalogSearch(nextRange.start, nextRange.end, nextSourceRange)}`);
   };
 
   const toggleShop = (shopId: number) => {
@@ -3805,7 +3982,7 @@ export function CatalogPage() {
       cacheKey: chartSourceCacheKey,
       productRefsKey: chartSourceProductRefsKey,
       rangeStart: chartSourceRangeStart,
-      rangeEnd: chartRangeEnd,
+      rangeEnd: chartSourceRangeEnd,
     });
     if (cached) {
       setChartLoading(false);
@@ -3838,17 +4015,17 @@ export function CatalogPage() {
           isCompleteCatalogChartCacheEntry(persistedEntry) &&
           persistedEntry.productRefsKey === chartSourceProductRefsKey &&
           persistedEntry.rangeStart <= chartSourceRangeStart &&
-          persistedEntry.rangeEnd === chartRangeEnd
+          persistedEntry.rangeEnd === chartSourceRangeEnd
         ) {
           const persistedResponse =
             persistedEntry.rangeStart === chartSourceRangeStart
               ? persistedEntry.response
-              : aggregateCatalogChartResponse(persistedEntry.response, chartSourceProductRefs, chartSourceRangeStart, chartRangeEnd);
+              : aggregateCatalogChartResponse(persistedEntry.response, chartSourceProductRefs, chartSourceRangeStart, chartSourceRangeEnd);
           rememberCatalogChartCacheEntry(chartSourceCacheKey, {
             response: persistedResponse,
             productRefsKey: chartSourceProductRefsKey,
             rangeStart: chartSourceRangeStart,
-            rangeEnd: chartRangeEnd,
+            rangeEnd: chartSourceRangeEnd,
           });
           setChartLoading(false);
           setChartError(null);
@@ -3868,7 +4045,7 @@ export function CatalogPage() {
           persistedEntry &&
           persistedEntry.productRefsKey === chartSourceProductRefsKey &&
           persistedEntry.rangeStart === chartSourceRangeStart &&
-          persistedEntry.rangeEnd === chartRangeEnd
+          persistedEntry.rangeEnd === chartSourceRangeEnd
             ? persistedEntry.response
             : null;
         const persistedLoadedRefs = persistedPartialResponse ? catalogChartLoadedProductRefs(persistedPartialResponse) : new Set<string>();
@@ -3895,7 +4072,7 @@ export function CatalogPage() {
             const chunkResponse = await fetchCatalogChartWorkerSafe({
               productRefs: productChunks[chunkIndex]!,
               start: chartSourceRangeStart,
-              end: chartRangeEnd,
+              end: chartSourceRangeEnd,
               includeCampaignTypes: false,
               signal: controller.signal,
               selectionCount: chartSourceSelectionCount,
@@ -3924,7 +4101,7 @@ export function CatalogPage() {
               response: nextResponse,
               productRefsKey: chartSourceProductRefsKey,
               rangeStart: chartSourceRangeStart,
-              rangeEnd: chartRangeEnd,
+              rangeEnd: chartSourceRangeEnd,
             });
           }
         } catch (error) {
@@ -3944,7 +4121,7 @@ export function CatalogPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [catalogRefreshing, chartCollapsed, chartRangeEnd, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceSelectionCount]);
+  }, [catalogRefreshing, chartCollapsed, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceRangeEnd, chartSourceSelectionCount]);
 
   const loadChartCampaignTypes = async () => {
     if (
@@ -3976,7 +4153,7 @@ export function CatalogPage() {
         const chunkResponse = await fetchCatalogChartWorkerSafe({
           productRefs: chunkRefs,
           start: chartSourceRangeStart,
-          end: chartRangeEnd,
+          end: chartSourceRangeEnd,
           includeCampaignTypes: true,
           signal: controller.signal,
           selectionCount: chartSourceSelectionCount,
@@ -4007,7 +4184,7 @@ export function CatalogPage() {
           response: nextResponse,
           productRefsKey: chartSourceProductRefsKey,
           rangeStart: chartSourceRangeStart,
-          rangeEnd: chartRangeEnd,
+          rangeEnd: chartSourceRangeEnd,
         });
       }
     } catch (error) {
@@ -4070,7 +4247,7 @@ export function CatalogPage() {
             const chunkResponse = await fetchCatalogChartWorkerSafe({
               productRefs: chunkRefs,
               start: chartSourceRangeStart,
-              end: chartRangeEnd,
+              end: chartSourceRangeEnd,
               includeCampaignTypes: false,
               forceRefresh: true,
               signal: controller.signal,
@@ -4112,7 +4289,7 @@ export function CatalogPage() {
         response: nextResponse,
         productRefsKey: chartSourceProductRefsKey,
         rangeStart: chartSourceRangeStart,
-        rangeEnd: chartRangeEnd,
+        rangeEnd: chartSourceRangeEnd,
       });
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -4629,10 +4806,10 @@ export function CatalogPage() {
       isCompleteCatalogChartCacheEntry(persistedEntry) &&
       persistedEntry.productRefsKey === chartSourceProductRefsKey &&
       persistedEntry.rangeStart <= chartSourceRangeStart &&
-      persistedEntry.rangeEnd === chartRangeEnd
+      persistedEntry.rangeEnd === chartSourceRangeEnd
         ? persistedEntry.rangeStart === chartSourceRangeStart
           ? persistedEntry.response
-          : aggregateCatalogChartResponse(persistedEntry.response, chartSourceProductRefs, chartSourceRangeStart, chartRangeEnd)
+          : aggregateCatalogChartResponse(persistedEntry.response, chartSourceProductRefs, chartSourceRangeStart, chartSourceRangeEnd)
         : null;
 
     setChartSourceData((current) => {
@@ -4644,7 +4821,7 @@ export function CatalogPage() {
         response: nextResponse,
         productRefsKey: chartSourceProductRefsKey,
         rangeStart: chartSourceRangeStart,
-        rangeEnd: chartRangeEnd,
+        rangeEnd: chartSourceRangeEnd,
       });
       setChartProgress({
         cacheKey: chartSourceCacheKey,
@@ -4723,8 +4900,8 @@ export function CatalogPage() {
         try {
           const currentCatalog = await fetchCatalog({
             productRefs: [ref],
-            start: payload.range.current_start,
-            end: payload.range.current_end,
+            start: sourcePayload.range.current_start,
+            end: sourcePayload.range.current_end,
             forceRefresh: true,
             signal: options.signal,
           });
@@ -4757,7 +4934,7 @@ export function CatalogPage() {
       }
       currentStepErrorRefs = refs;
 
-      const turnoverEnd = payload.range.current_end;
+      const turnoverEnd = selectedRangeEnd;
       const turnoverStart = shiftIsoDate(turnoverEnd, -2);
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: оборачиваемость за 3 дня`, activityRef);
       for (const ref of refs) {
@@ -4830,7 +5007,7 @@ export function CatalogPage() {
         const chartResponse = await fetchCatalogChartWorkerSafe({
           productRefs: chartProcessRefs,
           start: chartSourceRangeStart,
-          end: chartRangeEnd,
+          end: chartSourceRangeEnd,
           includeCampaignTypes: true,
           forceRefresh: true,
           signal: options.signal,
