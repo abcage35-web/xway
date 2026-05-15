@@ -33,7 +33,7 @@ const DEFAULT_CATALOG_CHART_WINDOW: CatalogChartWindow = 30;
 type CatalogCampaignSlotKind = "unified" | "manual" | "cpc";
 type CatalogCampaignDisplayStatus = "active" | "paused" | "freeze" | "muted";
 type CatalogCampaignTypeKey = "cpm-manual" | "cpm-unified" | "cpc";
-type CatalogCampaignTypeMetricKey = "spend" | "views" | "clicks" | "orders" | "ctr" | "cr" | "drr";
+type CatalogCampaignTypeMetricKey = "spend" | "views" | "clicks" | "atbs" | "orders" | "ctr" | "cr" | "cr1" | "cr2" | "drr";
 
 interface CatalogCampaignTypeTotals {
   views: number;
@@ -285,9 +285,12 @@ type CatalogSortField =
   | "spend"
   | "views"
   | "clicks"
+  | "atbs"
   | "orders"
   | "ctr"
   | "cr"
+  | "cr1"
+  | "cr2"
   | "drr"
   | "categoryAvgCr";
 
@@ -301,9 +304,11 @@ const CATALOG_SORT_FIELD_OPTIONS: Array<{ value: CatalogSortField; label: string
   { value: "spend", label: "Расход" },
   { value: "views", label: "Показы" },
   { value: "clicks", label: "Клики" },
+  { value: "atbs", label: "Корзины" },
   { value: "orders", label: "Заказы" },
   { value: "ctr", label: "CTR" },
-  { value: "cr", label: "CR" },
+  { value: "cr1", label: "CR1" },
+  { value: "cr2", label: "CR2" },
   { value: "drr", label: "ДРР" },
   { value: "categoryAvgCr", label: "Ср. CR категории" },
   { value: "article", label: "Артикул" },
@@ -584,6 +589,12 @@ function resolveCatalogCampaignTypeMetricValue(totals: CatalogCampaignTypeTotals
   if (metric === "cr") {
     return totals.clicks > 0 ? (totals.orders / totals.clicks) * 100 : null;
   }
+  if (metric === "cr1") {
+    return totals.clicks > 0 ? (totals.atbs / totals.clicks) * 100 : null;
+  }
+  if (metric === "cr2") {
+    return totals.atbs > 0 ? (totals.orders / totals.atbs) * 100 : null;
+  }
   if (metric === "drr") {
     return totals.revenue > 0 ? (totals.spend / totals.revenue) * 100 : null;
   }
@@ -597,7 +608,7 @@ function formatCatalogCampaignTypeMetricValue(metric: CatalogCampaignTypeMetricK
   if (metric === "views") {
     return formatCompactNumber(value);
   }
-  if (metric === "ctr" || metric === "cr" || metric === "drr") {
+  if (metric === "ctr" || metric === "cr" || metric === "cr1" || metric === "cr2" || metric === "drr") {
     return formatPercent(value);
   }
   return formatNumber(value);
@@ -1943,6 +1954,15 @@ function parseNumericFilterValue(value: string) {
 
 function catalogChartRate(numerator: number, denominator: number) {
   return denominator > 0 ? (numerator / denominator) * 100 : null;
+}
+
+function catalogMetricRate(numerator: number | string | null | undefined, denominator: number | string | null | undefined) {
+  const top = toNumber(numerator);
+  const bottom = toNumber(denominator);
+  if (top === null || bottom === null || bottom <= 0) {
+    return null;
+  }
+  return (top / bottom) * 100;
 }
 
 function matchesNumericRange(value: number | null | undefined, from: string, to: string) {
@@ -3337,10 +3357,16 @@ export function CatalogPage() {
               return toNumber(article.views) ?? Number.NEGATIVE_INFINITY;
             case "clicks":
               return toNumber(article.clicks) ?? Number.NEGATIVE_INFINITY;
+            case "atbs":
+              return toNumber(article.atbs) ?? Number.NEGATIVE_INFINITY;
             case "orders":
               return toNumber(article.orders) ?? Number.NEGATIVE_INFINITY;
             case "ctr":
               return toNumber(article.ctr) ?? Number.NEGATIVE_INFINITY;
+            case "cr1":
+              return catalogMetricRate(article.atbs, article.clicks) ?? Number.NEGATIVE_INFINITY;
+            case "cr2":
+              return catalogMetricRate(article.orders, article.atbs) ?? Number.NEGATIVE_INFINITY;
             case "drr":
               return resolveCatalogArticleDrr(article) ?? Number.NEGATIVE_INFINITY;
             case "categoryAvgCr":
@@ -5928,6 +5954,28 @@ export function CatalogPage() {
                         },
                       },
                       {
+                        key: "atbs",
+                        header: "Корзины",
+                        align: "right",
+                        cellClassName: "catalog-campaign-type-metric-cell",
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="atbs"
+                              fallback={formatNumber(article.atbs)}
+                            />
+                          );
+                        },
+                      },
+                      {
                         key: "orders",
                         header: "Заказы",
                         align: "right",
@@ -6007,8 +6055,8 @@ export function CatalogPage() {
                         },
                       },
                       {
-                        key: "cr",
-                        header: "CR",
+                        key: "cr1",
+                        header: "CR1",
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -6022,8 +6070,30 @@ export function CatalogPage() {
                             <CatalogCampaignTypeMetricStack
                               totalsByType={totalsByType}
                               visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
-                              metric="cr"
-                              fallback={formatPercent(article.cr)}
+                              metric="cr1"
+                              fallback={formatPercent(catalogMetricRate(article.atbs, article.clicks))}
+                            />
+                          );
+                        },
+                      },
+                      {
+                        key: "cr2",
+                        header: "CR2",
+                        align: "right",
+                        cellClassName: "catalog-campaign-type-metric-cell",
+                        render: (article) => {
+                          const totalsByType = resolveCatalogCampaignTypeTotalsForArticle(
+                            article,
+                            `${shop.id}:${article.product_id}`,
+                            catalogRowCampaignTypesByRef,
+                            chartData,
+                          );
+                          return (
+                            <CatalogCampaignTypeMetricStack
+                              totalsByType={totalsByType}
+                              visibleTypes={resolveVisibleCatalogCampaignTypeRows(article, totalsByType)}
+                              metric="cr2"
+                              fallback={formatPercent(catalogMetricRate(article.orders, article.atbs))}
                             />
                           );
                         },
