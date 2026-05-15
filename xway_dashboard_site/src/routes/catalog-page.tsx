@@ -413,6 +413,20 @@ function catalogArticleOverridesFromPayload(payload: CatalogResponse, productRef
   return overrides;
 }
 
+function catalogArticleMapFromPayload(payload: CatalogResponse) {
+  const articlesByRef = new Map<string, CatalogArticle>();
+  payload.shops.forEach((shop) => {
+    shop.articles.forEach((article) => {
+      articlesByRef.set(`${shop.id}:${article.product_id}`, article);
+    });
+  });
+  return articlesByRef;
+}
+
+function catalogProductRefsFromPayload(payload: CatalogResponse) {
+  return payload.shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
+}
+
 function formatCatalogRefreshLogTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -3244,6 +3258,17 @@ function formatCatalogShopRefreshSummary(shop: CatalogShop | null | undefined) {
   ].join(" · ");
 }
 
+function formatCatalogPayloadRefreshSummary(payload: CatalogResponse) {
+  const totals = computeCatalogTotals(payload.shops);
+  return [
+    `Расход: ${formatMoney(totals.expense_sum, true)}`,
+    `Показы: ${formatCompactNumber(totals.views)}`,
+    `Клики: ${formatNumber(totals.clicks)}`,
+    `Корзины: ${formatNumber(totals.atbs)}`,
+    `Заказы: ${formatNumber(totals.orders)}`,
+  ].join(" · ");
+}
+
 function applyCatalogChartMetricsToPayload(
   payload: CatalogResponse,
   chartData: CatalogChartResponse | null,
@@ -5418,7 +5443,7 @@ export function CatalogPage() {
     setChartCampaignTypesError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
 
-    const productRefs = sourcePayload.shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
+    let productRefs = catalogProductRefsFromPayload(sourcePayload);
 
     setChartProgress({
       cacheKey: chartSourceCacheKey,
@@ -5431,11 +5456,52 @@ export function CatalogPage() {
 
     try {
       setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
-      const knownArticlesByRef = await refreshCatalogRowsByShop(productRefs, {
-        signal: controller.signal,
-        scope: "catalog",
-        scopeLabel: "Обновление всех товаров",
-      });
+      setCatalogRefreshStep("Обновление всех товаров", "Все кабинеты: кабинеты, артикулы и базовые данные");
+      let knownArticlesByRef = new Map<string, CatalogArticle>();
+      try {
+        const freshCatalog = await fetchCatalog({
+          start: sourcePayload.range.current_start,
+          end: sourcePayload.range.current_end,
+          forceRefresh: true,
+          signal: controller.signal,
+        });
+        setCatalogPayloadOverride(freshCatalog);
+        productRefs = catalogProductRefsFromPayload(freshCatalog);
+        knownArticlesByRef = catalogArticleMapFromPayload(freshCatalog);
+        setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
+        setChartProgress({
+          cacheKey: chartSourceCacheKey,
+          selectionCount: productRefs.length,
+          loadedProductsCount: 0,
+          chunkCount: productRefs.length,
+          loadedChunkCount: 0,
+          errorCount: 0,
+        });
+        appendCatalogRefreshLogs({
+          status: "success",
+          scope: "catalog",
+          step: "Кабинеты и артикулы",
+          message: "Базовый каталог загружен",
+          detail: `Кабинетов: ${formatNumber(freshCatalog.total_shops)} · Артикулов: ${formatNumber(freshCatalog.total_articles)} · ${formatCatalogPayloadRefreshSummary(freshCatalog)}`,
+        });
+      } catch (error) {
+        if (isAbortError(error) || controller.signal.aborted) {
+          throw error;
+        }
+        const message = await readApiErrorMessage(error);
+        appendCatalogRefreshLogs({
+          status: "warning",
+          scope: "catalog",
+          step: "Кабинеты и артикулы",
+          message: "Полная базовая загрузка не прошла",
+          detail: `${message}. Пробую загрузку по кабинетам из текущего списка товаров.`,
+        });
+        knownArticlesByRef = await refreshCatalogRowsByShop(productRefs, {
+          signal: controller.signal,
+          scope: "catalog",
+          scopeLabel: "Обновление всех товаров",
+        });
+      }
 
       for (let index = 0; index < productRefs.length; index += 1) {
         const productRef = productRefs[index]!;
