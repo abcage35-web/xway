@@ -302,6 +302,9 @@ export async function fetchCatalogChart(options: {
   end?: string | null;
   includeCampaignTypes?: boolean;
   forceRefresh?: boolean;
+  cursor?: string | null;
+  limitProducts?: number | null;
+  deadlineMs?: number | null;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/catalog-chart", window.location.origin);
@@ -311,6 +314,15 @@ export async function fetchCatalogChart(options: {
   appendRange(url.searchParams, options.start, options.end);
   if (options.includeCampaignTypes) {
     url.searchParams.set("include_campaign_types", "1");
+  }
+  if (options.cursor) {
+    url.searchParams.set("cursor", options.cursor);
+  }
+  if (options.limitProducts) {
+    url.searchParams.set("limit_products", String(options.limitProducts));
+  }
+  if (options.deadlineMs) {
+    url.searchParams.set("deadline_ms", String(options.deadlineMs));
   }
   return requestCachedJson<CatalogChartResponse>(
     url,
@@ -328,6 +340,9 @@ export async function fetchCatalogIssues(options: {
   start?: string | null;
   end?: string | null;
   forceRefresh?: boolean;
+  cursor?: string | null;
+  limitProducts?: number | null;
+  deadlineMs?: number | null;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/catalog-issues", window.location.origin);
@@ -335,6 +350,15 @@ export async function fetchCatalogIssues(options: {
     url.searchParams.set("products", options.productRefs.join(","));
   }
   appendRange(url.searchParams, options.start, options.end);
+  if (options.cursor) {
+    url.searchParams.set("cursor", options.cursor);
+  }
+  if (options.limitProducts) {
+    url.searchParams.set("limit_products", String(options.limitProducts));
+  }
+  if (options.deadlineMs) {
+    url.searchParams.set("deadline_ms", String(options.deadlineMs));
+  }
   return requestCachedJson<CatalogIssuesResponse>(
     url,
     options.signal,

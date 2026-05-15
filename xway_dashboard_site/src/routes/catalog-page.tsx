@@ -102,6 +102,7 @@ const CATALOG_SUMMARY_METRICS_SETTINGS_VERSION = 2;
 const CATALOG_QUICK_VIEW_STORAGE_KEY = "xway-catalog-quick-view-v1";
 const CATALOG_QUICK_VIEW_SETTINGS_STORAGE_KEY = "xway-catalog-quick-view-settings-v1";
 const CATALOG_ISSUES_FETCH_CHUNK_SIZE = 20;
+const CATALOG_ISSUES_PAGE_SIZE = 4;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_CHART_FETCH_CHUNK_SIZE = 24;
@@ -110,8 +111,10 @@ const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
 const CATALOG_CHART_CHUNK_DELAY_MS = 650;
 const CATALOG_CHART_RETRY_DELAY_MS = 1600;
+const CATALOG_CHART_WORKER_DEADLINE_MS = 18000;
 const CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE = 1;
 const CATALOG_CAMPAIGN_TYPE_MAX_ATTEMPTS = 5;
+const CATALOG_ISSUES_WORKER_DEADLINE_MS = 18000;
 const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
 const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
 const CATALOG_LOW_CR_CLICKS_THRESHOLD_DEFAULT = 20;
@@ -1907,6 +1910,9 @@ function isCompleteCatalogChartResponse(response: CatalogChartResponse | null | 
   if (!response) {
     return false;
   }
+  if (response.complete === false) {
+    return false;
+  }
   return response.loaded_products_count >= response.selection_count && !response.errors.length;
 }
 
@@ -1922,9 +1928,6 @@ function readCatalogChartSourceCache(cacheKey: string) {
 }
 
 function writeCatalogChartSourceCache(cacheKey: string, entry: CatalogChartCacheEntry) {
-  if (!isCompleteCatalogChartCacheEntry(entry)) {
-    return;
-  }
   void writePersistentApiCache(catalogChartSourcePersistentCacheKey(cacheKey), entry);
 }
 
@@ -3166,14 +3169,30 @@ export function CatalogPage() {
     const fetchChunk = async (chunkRefs: string[]): Promise<CatalogChartResponse> => {
       let response: CatalogChartResponse;
       try {
-        response = await fetchCatalogChart({
-          productRefs: chunkRefs,
-          start: chartStart,
-          end: chartEnd,
-          includeCampaignTypes,
-          forceRefresh,
-          signal,
-        });
+        let cursor: string | null = null;
+        let mergedResponse: CatalogChartResponse | null = null;
+        do {
+          const pageResponse = await fetchCatalogChart({
+            productRefs: chunkRefs,
+            start: chartStart,
+            end: chartEnd,
+            includeCampaignTypes,
+            forceRefresh,
+            cursor,
+            limitProducts: includeCampaignTypes ? 1 : Math.max(1, Math.min(chunkRefs.length, safeChunkSize)),
+            deadlineMs: CATALOG_CHART_WORKER_DEADLINE_MS,
+            signal,
+          });
+          mergedResponse = mergeCatalogChartResponses(mergedResponse, pageResponse, safeSelectionCount);
+          cursor = pageResponse.next_cursor ?? null;
+          if (cursor && signal && !signal.aborted) {
+            await waitForCatalogRetry(Math.min(CATALOG_CHART_CHUNK_DELAY_MS, 250), signal);
+          }
+        } while (cursor && !signal?.aborted);
+        if (!mergedResponse) {
+          throw new Error("РќРµС‚ С‚РѕРІР°СЂРѕРІ РґР»СЏ Р·Р°РіСЂСѓР·РєРё РіСЂР°С„РёРєР°.");
+        }
+        response = mergedResponse;
       } catch (error) {
         if (chunkRefs.length <= 1 || !(await isWorkerSubrequestLimitError(error))) {
           throw error;
@@ -3779,21 +3798,33 @@ export function CatalogPage() {
           return;
         }
 
+        const persistedPartialResponse =
+          persistedEntry &&
+          persistedEntry.productRefsKey === chartSourceProductRefsKey &&
+          persistedEntry.rangeStart === chartSourceRangeStart &&
+          persistedEntry.rangeEnd === chartRangeEnd
+            ? persistedEntry.response
+            : null;
+        const persistedLoadedRefs = persistedPartialResponse ? catalogChartLoadedProductRefs(persistedPartialResponse) : new Set<string>();
+        const pendingChartRefs = persistedPartialResponse
+          ? chartSourceProductRefs.filter((ref) => !persistedLoadedRefs.has(ref))
+          : chartSourceProductRefs;
+
         setChartLoading(true);
         setChartError(null);
-        setChartSourceData(null);
-        const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CHART_FETCH_CHUNK_SIZE);
+        setChartSourceData(persistedPartialResponse);
+        const productChunks = chunkItems(pendingChartRefs, CATALOG_CHART_FETCH_CHUNK_SIZE);
         setChartProgress({
           cacheKey: chartSourceCacheKey,
           selectionCount: chartSourceSelectionCount,
-          loadedProductsCount: 0,
+          loadedProductsCount: persistedPartialResponse?.loaded_products_count ?? 0,
           chunkCount: productChunks.length,
           loadedChunkCount: 0,
-          errorCount: 0,
+          errorCount: persistedPartialResponse?.errors.length ?? 0,
         });
 
         try {
-          let nextResponse: CatalogChartResponse | null = null;
+          let nextResponse: CatalogChartResponse | null = persistedPartialResponse;
           for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
             const chunkResponse = await fetchCatalogChartWorkerSafe({
               productRefs: productChunks[chunkIndex]!,
@@ -4392,22 +4423,36 @@ export function CatalogPage() {
       }
 
       const fetchIssueRowsChunk = async (refs: string[]): Promise<CatalogIssueCacheEntry[]> => {
-        const response = await fetchCatalogIssues({
-          productRefs: refs,
-          start: yesterdayIso,
-          end: yesterdayIso,
-          signal: controller.signal,
-        });
-        return response.rows.map(mapCatalogIssuesRowToCacheEntry);
+        let cursor: string | null = null;
+        const rows: CatalogIssueCacheEntry[] = [];
+        do {
+          const response = await fetchCatalogIssues({
+            productRefs: refs,
+            start: yesterdayIso,
+            end: yesterdayIso,
+            cursor,
+            limitProducts: Math.min(CATALOG_ISSUES_PAGE_SIZE, Math.max(refs.length, 1)),
+            deadlineMs: CATALOG_ISSUES_WORKER_DEADLINE_MS,
+            signal: controller.signal,
+          });
+          rows.push(...response.rows.map(mapCatalogIssuesRowToCacheEntry));
+          cursor = response.next_cursor ?? null;
+          if (cursor && !controller.signal.aborted) {
+            await waitForCatalogIssuesRetry(Math.min(CATALOG_ISSUES_RETRY_DELAY_MS, 250), controller.signal);
+          }
+        } while (cursor && !controller.signal.aborted);
+        return rows;
       };
 
       const fetchIssueRowsAdaptive = async (refs: string[]): Promise<CatalogIssueFetchResult> => {
         try {
           const rows = await fetchIssueRowsChunk(refs);
+          const loadedRefs = [...new Set(rows.map((row) => row.product_ref))];
+          const failedRefs = refs.filter((ref) => !loadedRefs.includes(ref));
           return {
             rows,
-            loadedRefs: refs,
-            failedRefs: [],
+            loadedRefs,
+            failedRefs,
           };
         } catch (error) {
           if (refs.length > 1 && (await isWorkerSubrequestLimitError(error))) {

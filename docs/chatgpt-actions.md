@@ -167,6 +167,8 @@ Supported grouping dimensions are `day`, `category`, `article`, `shop` and `camp
 
 `getAggregatedAdMetrics` retries incomplete catalog-chart loads by default. If `selection.remaining_product_refs` is not empty after the built-in retries, call the returned `retry.recommended_next_request` to load the missing products separately and merge the result in the answer. For repeated source-limit errors, prefer `chunk_size: 1`, `max_retry_rounds: 3` and a larger `retry_delay_ms`.
 
+The dashboard catalog uses the same resumable pattern internally for heavy chart and issue loads. `/api/catalog-chart` and `/api/catalog-issues` accept `cursor`, `limit_products` and `deadline_ms`; when the response has `complete: false`, the caller should request `next_cursor` and merge the returned rows. This keeps each Cloudflare invocation short while preserving full data coverage.
+
 For the in-dashboard AI chat, prefer `sendDashboardChatMessage` when the user expects the assistant to decide the data-loading path autonomously. That endpoint runs server-side collection first, retries remaining product refs, merges continuation loads, compacts campaign/cluster context and only then calls the LLM.
 
 ## MPVibe endpoints used

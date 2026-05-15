@@ -4,6 +4,7 @@ const DEFAULT_CHART_CHUNK_SIZE = 12;
 const MAX_GROUP_ROWS_DEFAULT = 5000;
 const DEFAULT_RETRY_ROUNDS = 3;
 const DEFAULT_RETRY_DELAY_MS = 350;
+const DEFAULT_CHART_DEADLINE_MS = 18000;
 const GROUP_DIMENSIONS = new Set(["day", "category", "article", "shop", "campaign_type"]);
 
 async function readJsonRequest(request) {
@@ -263,6 +264,8 @@ async function collectChartChunks(context, productRefs, range, includeCampaignTy
           end: range.current_end,
           include_campaign_types: includeCampaignTypes ? "1" : "",
           force_refresh: forceRefresh ? "1" : "",
+          limit_products: chunkSize,
+          deadline_ms: DEFAULT_CHART_DEADLINE_MS,
         }),
       );
     } catch (error) {

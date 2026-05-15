@@ -39,6 +39,15 @@ function withSourceHeader(response, source) {
   });
 }
 
+function searchParamsInteger(url, key) {
+  const value = searchParamsValue(url, key);
+  if (!value) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function proxyRequest(context, apiOrigin) {
   if (!apiOrigin) {
     return errorResponse(500, "API_ORIGIN is not configured.");
@@ -118,6 +127,9 @@ async function handleNativeRequest(context, pathname) {
         end: searchParamsValue(requestUrl, "end"),
         includeCampaignTypes: requestUrl.searchParams.get("include_campaign_types") === "1",
         forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+        cursor: searchParamsValue(requestUrl, "cursor"),
+        limitProducts: searchParamsInteger(requestUrl, "limit_products"),
+        deadlineMs: searchParamsInteger(requestUrl, "deadline_ms"),
       }),
     );
   }
@@ -133,6 +145,9 @@ async function handleNativeRequest(context, pathname) {
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
         forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+        cursor: searchParamsValue(requestUrl, "cursor"),
+        limitProducts: searchParamsInteger(requestUrl, "limit_products"),
+        deadlineMs: searchParamsInteger(requestUrl, "deadline_ms"),
       }),
     );
   }

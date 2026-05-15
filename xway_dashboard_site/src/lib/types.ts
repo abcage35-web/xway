@@ -697,6 +697,7 @@ export interface CatalogIssuesRow {
   product_ref: string;
   issues: CatalogIssuesIssue[];
   campaigns: CatalogIssuesIssueCampaign[];
+  error?: string | null;
 }
 
 export interface CatalogIssuesResponse {
@@ -706,6 +707,10 @@ export interface CatalogIssuesResponse {
   rows: CatalogIssuesRow[];
   requested_products: string[];
   loaded_products_count: number;
+  processed_products_count?: number;
+  remaining_products_count?: number;
+  complete?: boolean;
+  next_cursor?: string | null;
 }
 
 export interface CatalogChartResponse {
@@ -714,6 +719,11 @@ export interface CatalogChartResponse {
   range: DateRange;
   selection_count: number;
   loaded_products_count: number;
+  processed_products_count?: number;
+  remaining_products_count?: number;
+  complete?: boolean;
+  next_cursor?: string | null;
+  requested_products?: string[];
   rows: CatalogChartRow[];
   product_rows?: CatalogChartProductRows[];
   campaign_type_meta?: Record<string, { label: string; color: string; order: number }>;

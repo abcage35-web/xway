@@ -85,6 +85,8 @@ const CATALOG_SHOP_FETCH_CONCURRENCY = 2;
 const CATALOG_PRODUCT_AUX_CONCURRENCY = 2;
 const CATALOG_CHART_PRODUCT_CONCURRENCY = 4;
 const CATALOG_CHART_CAMPAIGN_TYPE_CONCURRENCY = 2;
+const CATALOG_CHART_DEFAULT_DEADLINE_MS = 22000;
+const CATALOG_CHART_MIN_PROCESSED_BEFORE_DEADLINE = 1;
 const CATALOG_CHART_CAMPAIGN_TYPE_META = {
   "cpm-manual": { label: "CPM · Ручная", color: "#2ea36f", order: 1 },
   "cpm-unified": { label: "CPM · Единая", color: "#4b7bff", order: 2 },
@@ -945,6 +947,30 @@ function catalogProductRefsByShop(productRefs = []) {
   return refsByShop;
 }
 
+function normalizeCatalogCursor(value, total) {
+  const parsed = Number.parseInt(String(value ?? "0"), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.min(parsed, Math.max(total, 0));
+}
+
+function normalizeCatalogLimit(value, fallback, max) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(parsed, max));
+}
+
+function normalizeDeadlineMs(value, fallback = CATALOG_CHART_DEFAULT_DEADLINE_MS) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.max(3000, Math.min(parsed, 25000));
+}
+
 export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false, productRefs = [] } = {}) {
   const normalizedMode = String(mode || "").toLowerCase() === "full" ? "full" : "compact";
   const includeExtended = normalizedMode === "full";
@@ -1104,15 +1130,26 @@ function buildCatalogChartTotals(rows) {
   };
 }
 
-export async function collectCatalogChart(env, { productRefs = [], start = null, end = null, includeCampaignTypes = false, forceRefresh = false } = {}) {
+export async function collectCatalogChart(
+  env,
+  { productRefs = [], start = null, end = null, includeCampaignTypes = false, forceRefresh = false, cursor = null, limitProducts = null, deadlineMs = null } = {},
+) {
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const parsedRefs = parseCatalogChartProductRefs(productRefs);
+  const cursorIndex = normalizeCatalogCursor(cursor, parsedRefs.length);
+  const remainingRefs = parsedRefs.slice(cursorIndex);
+  const maxProducts = normalizeCatalogLimit(limitProducts, remainingRefs.length, remainingRefs.length || 1);
+  const targetRefs = remainingRefs.slice(0, maxProducts);
+  const normalizedDeadlineMs = normalizeDeadlineMs(deadlineMs);
+  const startedAt = Date.now();
+  const productConcurrency = includeCampaignTypes ? CATALOG_CHART_CAMPAIGN_TYPE_CONCURRENCY : CATALOG_CHART_PRODUCT_CONCURRENCY;
   const days = iterIsoDays(client.range.current_start, client.range.current_end);
   const rowsByDay = new Map(days.map((day) => [day, createEmptyCatalogChartRow(day)]));
   const productRows = [];
   const errors = [];
+  let processedProductsCount = 0;
 
-  await mapWithConcurrency(parsedRefs, includeCampaignTypes ? CATALOG_CHART_CAMPAIGN_TYPE_CONCURRENCY : CATALOG_CHART_PRODUCT_CONCURRENCY, async ([shopId, productId]) => {
+  const collectProduct = async ([shopId, productId]) => {
     const productRef = `${shopId}:${productId}`;
     try {
       const rows = await client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end);
@@ -1214,15 +1251,35 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
         error: String(error?.message || error || "Unknown error"),
       });
     }
-  });
+  };
+
+  for (let index = 0; index < targetRefs.length; index += productConcurrency) {
+    const batch = targetRefs.slice(index, index + productConcurrency);
+    await mapWithConcurrency(batch, productConcurrency, collectProduct);
+    processedProductsCount += batch.length;
+    if (
+      processedProductsCount >= CATALOG_CHART_MIN_PROCESSED_BEFORE_DEADLINE &&
+      Date.now() - startedAt >= normalizedDeadlineMs &&
+      cursorIndex + processedProductsCount < parsedRefs.length
+    ) {
+      break;
+    }
+  }
 
   const rows = days.map((day) => finalizeCatalogChartRow(rowsByDay.get(day)));
   productRows.sort((left, right) => left.product_ref.localeCompare(right.product_ref));
+  const nextIndex = cursorIndex + processedProductsCount;
+  const complete = nextIndex >= parsedRefs.length;
   return {
     generated_at: new Date().toISOString().slice(0, 10),
     range: client.range,
     selection_count: parsedRefs.length,
-    loaded_products_count: Math.max(parsedRefs.length - errors.length, 0),
+    loaded_products_count: productRows.length,
+    processed_products_count: processedProductsCount,
+    remaining_products_count: Math.max(parsedRefs.length - nextIndex, 0),
+    complete,
+    next_cursor: complete ? null : String(nextIndex),
+    requested_products: parsedRefs.map(([shopId, productId]) => `${shopId}:${productId}`),
     rows,
     product_rows: productRows,
     campaign_type_meta: CATALOG_CHART_CAMPAIGN_TYPE_META,

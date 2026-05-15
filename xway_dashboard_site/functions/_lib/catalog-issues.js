@@ -3,6 +3,9 @@ import { XwayApiClient } from "./xway-client.js";
 import { mapWithConcurrency, parseCatalogChartProductRefs } from "./utils.js";
 
 const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "schedule_setup"];
+const CATALOG_ISSUES_FETCH_CONCURRENCY = 2;
+const CATALOG_ISSUES_DEFAULT_DEADLINE_MS = 22000;
+const CATALOG_ISSUES_MIN_PROCESSED_BEFORE_DEADLINE = 1;
 
 function toNumber(value) {
   if (value === null || value === undefined || value === "") {
@@ -443,6 +446,30 @@ function resolveCampaignDisplayStatus(statusCode) {
   return "muted";
 }
 
+function normalizeCursor(value, total) {
+  const parsed = Number.parseInt(String(value ?? "0"), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.min(parsed, Math.max(total, 0));
+}
+
+function normalizeLimit(value, fallback, max) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(parsed, max));
+}
+
+function normalizeDeadlineMs(value, fallback = CATALOG_ISSUES_DEFAULT_DEADLINE_MS) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.max(3000, Math.min(parsed, 25000));
+}
+
 function isCampaignScheduleSetupIssue(campaign) {
   const statusCode = normalizeCampaignStatusCode(campaign);
   const displayStatus = resolveCampaignDisplayStatus(statusCode);
@@ -663,10 +690,46 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
   };
 }
 
-export async function collectCatalogIssues(env, { productRefs = [], start = null, end = null, forceRefresh = false } = {}) {
+export async function collectCatalogIssues(env, { productRefs = [], start = null, end = null, forceRefresh = false, cursor = null, limitProducts = null, deadlineMs = null } = {}) {
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const parsedRefs = parseCatalogChartProductRefs(productRefs);
-  const rows = await mapWithConcurrency(parsedRefs, 2, async (ref) => collectSingleCatalogIssue(client, ref));
+  const cursorIndex = normalizeCursor(cursor, parsedRefs.length);
+  const remainingRefs = parsedRefs.slice(cursorIndex);
+  const maxProducts = normalizeLimit(limitProducts, remainingRefs.length, remainingRefs.length || 1);
+  const targetRefs = remainingRefs.slice(0, maxProducts);
+  const normalizedDeadlineMs = normalizeDeadlineMs(deadlineMs);
+  const startedAt = Date.now();
+  const rows = [];
+  let processedProductsCount = 0;
+
+  for (let index = 0; index < targetRefs.length; index += CATALOG_ISSUES_FETCH_CONCURRENCY) {
+    const batch = targetRefs.slice(index, index + CATALOG_ISSUES_FETCH_CONCURRENCY);
+    const batchRows = await mapWithConcurrency(batch, CATALOG_ISSUES_FETCH_CONCURRENCY, async (ref) => {
+      try {
+        return await collectSingleCatalogIssue(client, ref);
+      } catch (error) {
+        const [shopId, productId] = ref;
+        return {
+          product_ref: `${shopId}:${productId}`,
+          issues: [],
+          campaigns: [],
+          error: error instanceof Error ? error.message : String(error || "Unknown error"),
+        };
+      }
+    });
+    rows.push(...batchRows);
+    processedProductsCount += batch.length;
+    if (
+      processedProductsCount >= CATALOG_ISSUES_MIN_PROCESSED_BEFORE_DEADLINE &&
+      Date.now() - startedAt >= normalizedDeadlineMs &&
+      cursorIndex + processedProductsCount < parsedRefs.length
+    ) {
+      break;
+    }
+  }
+
+  const nextIndex = cursorIndex + processedProductsCount;
+  const complete = nextIndex >= parsedRefs.length;
 
   return {
     ok: true,
@@ -675,5 +738,9 @@ export async function collectCatalogIssues(env, { productRefs = [], start = null
     rows,
     requested_products: parsedRefs.map(([shopId, productId]) => `${shopId}:${productId}`),
     loaded_products_count: rows.length,
+    processed_products_count: processedProductsCount,
+    remaining_products_count: Math.max(parsedRefs.length - nextIndex, 0),
+    complete,
+    next_cursor: complete ? null : String(nextIndex),
   };
 }
