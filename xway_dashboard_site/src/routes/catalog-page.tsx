@@ -3748,10 +3748,15 @@ function formatCatalogCampaignLimitSummary(article: CatalogArticle | null | unde
 
 function formatCatalogBestOrderTimeSummary(article: CatalogArticle | null | undefined) {
   const ranges = article?.best_order_time?.ranges || [];
+  const hourlyRows = article?.best_order_time?.by_hour || [];
+  const hourlyOrders = hourlyRows.reduce((sum, row) => sum + (toNumber(row.orders) ?? 0), 0);
+  const hourlyText = hourlyRows.length
+    ? `График по часам: ${formatNumber(hourlyRows.length)} ч, заказов ${formatNumber(hourlyOrders)}`
+    : "График по часам не вернулся";
   if (!ranges.length) {
-    return "Лучшие часы не найдены или заказов недостаточно.";
+    return `Лучшие часы не найдены или заказов недостаточно. ${hourlyText}.`;
   }
-  return ranges.map((range) => `${range.label}: ${formatNumber(range.orders)} заказов`).join(" · ");
+  return `${ranges.map((range) => `${range.label}: ${formatNumber(range.orders)} заказов`).join(" · ")} · ${hourlyText}`;
 }
 
 function formatCatalogCampaignTypeMetricsSummary(rows: CatalogChartResponse["rows"]) {
@@ -5777,6 +5782,7 @@ export function CatalogPage() {
       mode?: "full" | "deep";
       campaignChartMode?: "exact" | "deferred";
       forceDeepDetailsRefresh?: boolean;
+      forceBestTimeRefresh?: boolean;
     } = {},
   ) => {
     const refs = [...new Set(productRefs)];
@@ -5844,6 +5850,7 @@ export function CatalogPage() {
       detailOptions: {
         includeCampaignDetails?: boolean;
         includeBestTime?: boolean;
+        forceRefresh?: boolean;
         warningFields: Array<keyof NonNullable<CatalogProductDetailRow["errors"]>>;
       },
     ) => {
@@ -5854,7 +5861,7 @@ export function CatalogPage() {
           productRefs: [ref],
           start: sourcePayload.range.current_start,
           end: sourcePayload.range.current_end,
-          forceRefresh: options.forceDeepDetailsRefresh !== false || attempt > 0,
+          forceRefresh: (detailOptions.forceRefresh ?? (options.forceDeepDetailsRefresh !== false)) || attempt > 0,
           includeCampaignDetails: detailOptions.includeCampaignDetails,
           includeBestTime: detailOptions.includeBestTime,
           signal: options.signal,
@@ -6092,6 +6099,7 @@ export function CatalogPage() {
             const { row: bestTimeRow, detailErrors } = await fetchCatalogProductDetailsWithWarningRetry(ref, {
               includeCampaignDetails: false,
               includeBestTime: true,
+              forceRefresh: options.forceBestTimeRefresh,
               warningFields: ["best_order_time"],
             });
             if (bestTimeRow) {
@@ -6533,6 +6541,7 @@ export function CatalogPage() {
       updateChartProgress?: boolean;
       campaignChartMode?: "exact" | "deferred";
       forceDeepDetailsRefresh?: boolean;
+      forceBestTimeRefresh?: boolean;
       refreshIssuesBatch?: boolean;
       refreshIssues?: boolean;
     },
@@ -6604,6 +6613,7 @@ export function CatalogPage() {
             mode: "deep",
             campaignChartMode: options.campaignChartMode ?? "deferred",
             forceDeepDetailsRefresh: options.forceDeepDetailsRefresh ?? false,
+            forceBestTimeRefresh: options.forceBestTimeRefresh ?? false,
           });
           completed = true;
         } finally {
@@ -6741,6 +6751,7 @@ export function CatalogPage() {
         updateChartProgress: true,
         campaignChartMode: "deferred",
         forceDeepDetailsRefresh: false,
+        forceBestTimeRefresh: true,
         refreshIssuesBatch: true,
       });
     } catch (error) {
