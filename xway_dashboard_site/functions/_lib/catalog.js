@@ -1109,6 +1109,7 @@ export async function collectCatalogProductDetails(
       if (stataResult.status === "fulfilled") {
         const campaigns = Array.isArray(stataResult.value?.campaign_wb) ? stataResult.value.campaign_wb : [];
         campaignStates = normalizeCatalogCampaignStates({}, [{ campaign_wb: campaigns }]);
+        campaignTypeTotals = buildCatalogCampaignTypeTotalsFromCampaigns(campaigns);
       } else {
         rowErrors.campaign_details = catalogErrorMessage(stataResult.reason);
         errors.push({ product: productRef, source: "campaign_details", error: rowErrors.campaign_details });
