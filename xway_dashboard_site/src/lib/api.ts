@@ -58,6 +58,11 @@ function normalizeCacheUrl(input: URL) {
     url.searchParams.set("products", products.split(",").filter(Boolean).sort().join(","));
   }
 
+  const shops = url.searchParams.get("shops");
+  if (shops) {
+    url.searchParams.set("shops", shops.split(",").filter(Boolean).sort().join(","));
+  }
+
   const params = [...url.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) => {
     const keyResult = leftKey.localeCompare(rightKey);
     return keyResult || leftValue.localeCompare(rightValue);
@@ -96,7 +101,9 @@ function sumCatalogArticles(shops: CatalogResponse["shops"]) {
 async function mergeCatalogProductResponseIntoFullCache(url: URL, productResponse: CatalogResponse) {
   const fullUrl = new URL(url.toString());
   fullUrl.searchParams.delete("products");
+  fullUrl.searchParams.delete("shops");
   fullUrl.searchParams.delete("refresh");
+  fullUrl.searchParams.delete("force_refresh");
   const fullCacheKey = apiResponseCacheKey("catalog", fullUrl);
   const cachedFullResponse = await readPersistentApiCache<CatalogResponse>(fullCacheKey);
   if (!cachedFullResponse) {
@@ -145,6 +152,75 @@ async function mergeCatalogProductResponseIntoFullCache(url: URL, productRespons
     totals: sumCatalogArticles(shops),
     shops,
   });
+}
+
+function mergeCatalogShopResponse(baseResponse: CatalogResponse, shopResponse: CatalogResponse) {
+  const replacementShopById = new Map(shopResponse.shops.map((shop) => [String(shop.id), shop]));
+  const seenShopIds = new Set<string>();
+  let changed = false;
+
+  const shops = baseResponse.shops.map((shop) => {
+    const shopId = String(shop.id);
+    seenShopIds.add(shopId);
+    const replacement = replacementShopById.get(shopId);
+    if (!replacement) {
+      return shop;
+    }
+    changed = true;
+    return replacement;
+  });
+
+  shopResponse.shops.forEach((shop) => {
+    const shopId = String(shop.id);
+    if (!seenShopIds.has(shopId)) {
+      shops.push(shop);
+      seenShopIds.add(shopId);
+      changed = true;
+    }
+  });
+
+  if (!changed) {
+    return null;
+  }
+
+  return {
+    ...baseResponse,
+    generated_at: shopResponse.generated_at,
+    total_shops: shops.length,
+    total_articles: shops.reduce((total, shop) => total + shop.articles.length, 0),
+    totals: sumCatalogArticles(shops),
+    shops,
+  };
+}
+
+async function mergeCatalogShopResponseIntoFullCache(url: URL, shopResponse: CatalogResponse) {
+  if (!shopResponse.shops.length) {
+    return;
+  }
+
+  const fullUrl = new URL(url.toString());
+  fullUrl.searchParams.delete("products");
+  fullUrl.searchParams.delete("shops");
+  fullUrl.searchParams.delete("refresh");
+  fullUrl.searchParams.delete("force_refresh");
+  const fullCacheKey = apiResponseCacheKey("catalog", fullUrl);
+  const cachedFullResponse = await readPersistentApiCache<CatalogResponse>(fullCacheKey);
+  if (!cachedFullResponse) {
+    await writePersistentApiCache<CatalogResponse>(fullCacheKey, {
+      ...shopResponse,
+      total_shops: shopResponse.shops.length,
+      total_articles: shopResponse.shops.reduce((total, shop) => total + shop.articles.length, 0),
+      totals: sumCatalogArticles(shopResponse.shops),
+    });
+    return;
+  }
+
+  const mergedResponse = mergeCatalogShopResponse(cachedFullResponse, shopResponse);
+  if (!mergedResponse) {
+    return;
+  }
+
+  await writePersistentApiCache<CatalogResponse>(fullCacheKey, mergedResponse);
 }
 
 async function requestCachedJson<T>(
@@ -299,7 +375,11 @@ export async function fetchCatalog(options: {
     {
       namespace: "catalog",
       bypassRead: options.forceRefresh,
-      afterWrite: options.productRefs?.length && options.includeAux !== false ? (response) => mergeCatalogProductResponseIntoFullCache(url, response) : undefined,
+      afterWrite: options.shopIds?.length
+        ? (response) => mergeCatalogShopResponseIntoFullCache(url, response)
+        : options.productRefs?.length && options.includeAux !== false
+          ? (response) => mergeCatalogProductResponseIntoFullCache(url, response)
+          : undefined,
     },
   );
 }
