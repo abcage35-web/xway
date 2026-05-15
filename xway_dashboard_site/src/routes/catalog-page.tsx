@@ -465,6 +465,54 @@ function mergeCatalogProductDetailRow(
   };
 }
 
+const CATALOG_CAMPAIGN_DETAIL_FIELDS: Array<keyof Pick<
+  CatalogCampaignState,
+  "budget_limit" | "budget_spent_today" | "budget_rule_active" | "spend_limit" | "spend_spent_today" | "spend_limit_active"
+>> = [
+  "budget_limit",
+  "budget_spent_today",
+  "budget_rule_active",
+  "spend_limit",
+  "spend_spent_today",
+  "spend_limit_active",
+];
+
+function hasKnownCatalogCampaignDetailValue(value: unknown) {
+  return value !== null && value !== undefined;
+}
+
+function mergeCatalogCampaignStatesPreservingDetails(baseStates: CatalogCampaignState[] = [], incomingStates: CatalogCampaignState[] = []) {
+  if (!incomingStates.length) {
+    return baseStates;
+  }
+  const baseByKey = new Map(baseStates.map((state) => [state.key, state]));
+  return incomingStates.map((incomingState) => {
+    const baseState = baseByKey.get(incomingState.key);
+    if (!baseState) {
+      return incomingState;
+    }
+    const mergedState = { ...baseState, ...incomingState };
+    CATALOG_CAMPAIGN_DETAIL_FIELDS.forEach((field) => {
+      if (!hasKnownCatalogCampaignDetailValue(incomingState[field]) && hasKnownCatalogCampaignDetailValue(baseState[field])) {
+        mergedState[field] = baseState[field] as never;
+      }
+    });
+    return mergedState;
+  });
+}
+
+function mergeCatalogArticlePreservingDetails(baseArticle: CatalogArticle | null | undefined, incomingArticle: CatalogArticle): CatalogArticle {
+  if (!baseArticle) {
+    return incomingArticle;
+  }
+  return {
+    ...incomingArticle,
+    campaign_states: mergeCatalogCampaignStatesPreservingDetails(baseArticle.campaign_states, incomingArticle.campaign_states),
+    campaign_type_totals: incomingArticle.campaign_type_totals ?? baseArticle.campaign_type_totals,
+    best_order_time: incomingArticle.best_order_time ?? baseArticle.best_order_time ?? null,
+  };
+}
+
 function catalogProductRefsFromPayload(payload: CatalogResponse) {
   return payload.shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
 }
@@ -479,16 +527,34 @@ function catalogProductRefsFromPayloads(payloads: CatalogResponse[]) {
 
 function mergeCatalogPayloadWithShopResponse(basePayload: CatalogResponse, shopResponse: CatalogResponse) {
   const incomingById = new Map(shopResponse.shops.map((shop) => [String(shop.id), shop]));
+  const baseByShopId = new Map(basePayload.shops.map((shop) => [String(shop.id), shop]));
   const seenShopIds = new Set<string>();
   const shops = basePayload.shops.map((shop) => {
     const shopId = String(shop.id);
     seenShopIds.add(shopId);
-    return incomingById.get(shopId) ?? shop;
+    const incomingShop = incomingById.get(shopId);
+    if (!incomingShop) {
+      return shop;
+    }
+    const baseArticlesByRef = new Map(shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article]));
+    return {
+      ...incomingShop,
+      articles: incomingShop.articles.map((article) =>
+        mergeCatalogArticlePreservingDetails(baseArticlesByRef.get(`${incomingShop.id}:${article.product_id}`), article),
+      ),
+    };
   });
   shopResponse.shops.forEach((shop) => {
     const shopId = String(shop.id);
     if (!seenShopIds.has(shopId)) {
-      shops.push(shop);
+      const baseShop = baseByShopId.get(shopId);
+      const baseArticlesByRef = new Map((baseShop?.articles ?? []).map((article) => [`${shop.id}:${article.product_id}`, article]));
+      shops.push({
+        ...shop,
+        articles: shop.articles.map((article) =>
+          mergeCatalogArticlePreservingDetails(baseArticlesByRef.get(`${shop.id}:${article.product_id}`), article),
+        ),
+      });
       seenShopIds.add(shopId);
     }
   });
@@ -5171,7 +5237,13 @@ export function CatalogPage() {
           refreshedProductRefs.push(...loadedRefs);
           loadedRefs.forEach((ref) => knownArticlesByRef.set(ref, articleOverrides[ref]!));
           setCatalogPayloadOverride((current) => mergeCatalogPayloadWithShopResponse(current ?? sourcePayload, currentCatalog));
-          setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+          setCatalogArticleOverridesByRef((current) => {
+            const next = { ...current };
+            Object.entries(articleOverrides).forEach(([ref, article]) => {
+              next[ref] = mergeCatalogArticlePreservingDetails(current[ref] ?? catalogArticleByRef.get(ref), article);
+            });
+            return next;
+          });
         }
 
         appendCatalogRefreshLogs({
@@ -5440,7 +5512,13 @@ export function CatalogPage() {
             const loadedRefs = Object.keys(articleOverrides);
             if (loadedRefs.length) {
               loadedRefs.forEach((loadedRef) => refreshedArticlesByRef.set(loadedRef, articleOverrides[loadedRef]!));
-              setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+              setCatalogArticleOverridesByRef((current) => {
+                const next = { ...current };
+                Object.entries(articleOverrides).forEach(([loadedRef, article]) => {
+                  next[loadedRef] = mergeCatalogArticlePreservingDetails(current[loadedRef] ?? catalogArticleByRef.get(loadedRef), article);
+                });
+                return next;
+              });
             }
             if (loadedRefs.length) {
               appendCatalogRefreshLogsForRefs(loadedRefs, {

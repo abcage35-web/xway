@@ -1,4 +1,4 @@
-import type { AiChatMessage, AiChatResponse, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
@@ -98,6 +98,77 @@ function sumCatalogArticles(shops: CatalogResponse["shops"]) {
   );
 }
 
+const CATALOG_CAMPAIGN_DETAIL_FIELDS: Array<keyof Pick<
+  CatalogCampaignState,
+  "budget_limit" | "budget_spent_today" | "budget_rule_active" | "spend_limit" | "spend_spent_today" | "spend_limit_active"
+>> = [
+  "budget_limit",
+  "budget_spent_today",
+  "budget_rule_active",
+  "spend_limit",
+  "spend_spent_today",
+  "spend_limit_active",
+];
+
+function hasKnownCatalogCampaignDetailValue(value: unknown) {
+  return value !== null && value !== undefined;
+}
+
+function mergeCatalogCampaignStatesPreservingDetails(baseStates: CatalogCampaignState[] = [], incomingStates: CatalogCampaignState[] = []) {
+  if (!incomingStates.length) {
+    return baseStates;
+  }
+  const baseByKey = new Map(baseStates.map((state) => [state.key, state]));
+  return incomingStates.map((incomingState) => {
+    const baseState = baseByKey.get(incomingState.key);
+    if (!baseState) {
+      return incomingState;
+    }
+    const mergedState = { ...baseState, ...incomingState };
+    CATALOG_CAMPAIGN_DETAIL_FIELDS.forEach((field) => {
+      if (!hasKnownCatalogCampaignDetailValue(incomingState[field]) && hasKnownCatalogCampaignDetailValue(baseState[field])) {
+        mergedState[field] = baseState[field] as never;
+      }
+    });
+    return mergedState;
+  });
+}
+
+function mergeCatalogArticlePreservingDetails(baseArticle: CatalogArticle | null | undefined, incomingArticle: CatalogArticle) {
+  if (!baseArticle) {
+    return incomingArticle;
+  }
+  return {
+    ...incomingArticle,
+    campaign_states: mergeCatalogCampaignStatesPreservingDetails(baseArticle.campaign_states, incomingArticle.campaign_states),
+    campaign_type_totals: incomingArticle.campaign_type_totals ?? baseArticle.campaign_type_totals,
+    best_order_time: incomingArticle.best_order_time ?? baseArticle.best_order_time ?? null,
+  };
+}
+
+function mergeCatalogCampaignStatesFromDetails(baseStates: CatalogCampaignState[] = [], detailStates: CatalogCampaignState[] = []) {
+  if (!detailStates.length) {
+    return baseStates;
+  }
+  const statesByKey = new Map(baseStates.map((state) => [state.key, state]));
+  detailStates.forEach((detailState) => {
+    const current = statesByKey.get(detailState.key);
+    statesByKey.set(detailState.key, current ? { ...current, ...detailState } : detailState);
+  });
+  return [...statesByKey.values()];
+}
+
+function mergeCatalogArticleDetailRow(article: CatalogArticle, detailRow: CatalogProductDetailRow) {
+  const hasCampaignError = Boolean(detailRow.errors?.campaign_details);
+  const hasBestTimeError = Boolean(detailRow.errors?.best_order_time);
+  return {
+    ...article,
+    campaign_states: hasCampaignError ? article.campaign_states : mergeCatalogCampaignStatesFromDetails(article.campaign_states, detailRow.campaign_states ?? []),
+    campaign_type_totals: hasCampaignError ? article.campaign_type_totals : detailRow.campaign_type_totals ?? article.campaign_type_totals,
+    best_order_time: hasBestTimeError ? article.best_order_time ?? null : detailRow.best_order_time ?? article.best_order_time ?? null,
+  };
+}
+
 async function mergeCatalogProductResponseIntoFullCache(url: URL, productResponse: CatalogResponse) {
   const fullUrl = new URL(url.toString());
   fullUrl.searchParams.delete("products");
@@ -126,7 +197,7 @@ async function mergeCatalogProductResponseIntoFullCache(url: URL, productRespons
       }
       changed = true;
       shopChanged = true;
-      return replacement;
+      return mergeCatalogArticlePreservingDetails(article, replacement);
     });
     if (!replacementShop) {
       return shopChanged ? { ...shop, articles } : shop;
@@ -156,6 +227,7 @@ async function mergeCatalogProductResponseIntoFullCache(url: URL, productRespons
 
 function mergeCatalogShopResponse(baseResponse: CatalogResponse, shopResponse: CatalogResponse) {
   const replacementShopById = new Map(shopResponse.shops.map((shop) => [String(shop.id), shop]));
+  const baseShopById = new Map(baseResponse.shops.map((shop) => [String(shop.id), shop]));
   const seenShopIds = new Set<string>();
   let changed = false;
 
@@ -167,13 +239,26 @@ function mergeCatalogShopResponse(baseResponse: CatalogResponse, shopResponse: C
       return shop;
     }
     changed = true;
-    return replacement;
+    const baseArticlesByRef = new Map(shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article]));
+    return {
+      ...replacement,
+      articles: replacement.articles.map((article) =>
+        mergeCatalogArticlePreservingDetails(baseArticlesByRef.get(`${replacement.id}:${article.product_id}`), article),
+      ),
+    };
   });
 
   shopResponse.shops.forEach((shop) => {
     const shopId = String(shop.id);
     if (!seenShopIds.has(shopId)) {
-      shops.push(shop);
+      const baseShop = baseShopById.get(shopId);
+      const baseArticlesByRef = new Map((baseShop?.articles ?? []).map((article) => [`${shop.id}:${article.product_id}`, article]));
+      shops.push({
+        ...shop,
+        articles: shop.articles.map((article) =>
+          mergeCatalogArticlePreservingDetails(baseArticlesByRef.get(`${shop.id}:${article.product_id}`), article),
+        ),
+      });
       seenShopIds.add(shopId);
       changed = true;
     }
@@ -221,6 +306,52 @@ async function mergeCatalogShopResponseIntoFullCache(url: URL, shopResponse: Cat
   }
 
   await writePersistentApiCache<CatalogResponse>(fullCacheKey, mergedResponse);
+}
+
+async function mergeCatalogProductDetailsIntoFullCache(url: URL, detailsResponse: CatalogProductDetailsResponse) {
+  if (!detailsResponse.rows.length) {
+    return;
+  }
+
+  const fullUrl = new URL(url.toString());
+  fullUrl.pathname = "/api/catalog";
+  fullUrl.searchParams.set("mode", "compact");
+  fullUrl.searchParams.set("aux", "0");
+  fullUrl.searchParams.delete("products");
+  fullUrl.searchParams.delete("refresh");
+  fullUrl.searchParams.delete("force_refresh");
+  fullUrl.searchParams.delete("best_time");
+  fullUrl.searchParams.delete("campaign_details");
+  fullUrl.searchParams.delete("include_campaign_details");
+  const fullCacheKey = apiResponseCacheKey("catalog", fullUrl);
+  const cachedFullResponse = await readPersistentApiCache<CatalogResponse>(fullCacheKey);
+  if (!cachedFullResponse) {
+    return;
+  }
+
+  const detailsByRef = new Map(detailsResponse.rows.map((row) => [row.product_ref, row]));
+  let changed = false;
+  const shops = cachedFullResponse.shops.map((shop) => ({
+    ...shop,
+    articles: shop.articles.map((article) => {
+      const detailRow = detailsByRef.get(`${shop.id}:${article.product_id}`);
+      if (!detailRow) {
+        return article;
+      }
+      changed = true;
+      return mergeCatalogArticleDetailRow(article, detailRow);
+    }),
+  }));
+
+  if (!changed) {
+    return;
+  }
+
+  await writePersistentApiCache<CatalogResponse>(fullCacheKey, {
+    ...cachedFullResponse,
+    generated_at: detailsResponse.generated_at,
+    shops,
+  });
 }
 
 async function requestCachedJson<T>(
@@ -446,7 +577,7 @@ export async function fetchCatalogProductDetails(options: {
   if (options.forceRefresh) {
     url.searchParams.set("refresh", "1");
   }
-  return requestCachedJson<CatalogProductDetailsResponse>(
+  const response = await requestCachedJson<CatalogProductDetailsResponse>(
     url,
     options.signal,
     { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
@@ -455,6 +586,8 @@ export async function fetchCatalogProductDetails(options: {
       bypassRead: options.forceRefresh,
     },
   );
+  await mergeCatalogProductDetailsIntoFullCache(url, response);
+  return response;
 }
 
 export async function fetchCatalogIssues(options: {
