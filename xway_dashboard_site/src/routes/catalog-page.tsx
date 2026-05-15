@@ -6838,6 +6838,16 @@ export function CatalogPage() {
     const controller = new AbortController();
     catalogRefreshAbortRef.current = controller;
     setCatalogRefreshError(null);
+    setChartCollapsed(false);
+    setChartError(null);
+    setChartProgress({
+      cacheKey: chartSourceCacheKey,
+      selectionCount: chartSourceSelectionCount,
+      loadedProductsCount: 0,
+      chunkCount: productRefs.length,
+      loadedChunkCount: 0,
+      errorCount: 0,
+    });
     setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
 
     try {
@@ -6919,6 +6929,16 @@ export function CatalogPage() {
     const controller = new AbortController();
     catalogRefreshAbortRef.current = controller;
     setCatalogRefreshError(null);
+    setChartCollapsed(false);
+    setChartError(null);
+    setChartProgress({
+      cacheKey: chartSourceCacheKey,
+      selectionCount: chartSourceSelectionCount,
+      loadedProductsCount: 0,
+      chunkCount: productRefs.length,
+      loadedChunkCount: 0,
+      errorCount: 0,
+    });
     setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
 
     try {
