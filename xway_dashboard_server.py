@@ -173,6 +173,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             _, start, end, _, _ = self._request_params()
             catalog_mode = (query.get("mode", ["compact"])[0] or "compact").strip().lower()
             force_refresh = query.get("refresh", ["0"])[0] == "1" or query.get("force_refresh", ["0"])[0] == "1"
+            include_aux = query.get("aux", ["1"])[0] != "0" and query.get("include_aux", ["1"])[0] != "0"
             product_refs = tuple(
                 item.strip()
                 for item in query.get("products", [""])[0].split(",")
@@ -186,6 +187,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     mode=catalog_mode,
                     force_refresh=force_refresh,
                     product_refs=product_refs,
+                    include_aux=include_aux,
                 )
             except Exception as exc:
                 self._write_json(

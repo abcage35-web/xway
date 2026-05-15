@@ -3357,6 +3357,7 @@ def _collect_shop_catalog(
     include_extended: bool = False,
     force_refresh: bool = False,
     product_ids: Optional[set] = None,
+    include_aux: bool = True,
 ) -> Dict[str, Any]:
     shop_id = int(shop["id"])
     api = XwayApi(storage_state_path, start=start, end=end, force_refresh=force_refresh)
@@ -3393,8 +3394,12 @@ def _collect_shop_catalog(
                 filtered_products.append(product)
         products = filtered_products
     stat_map = (listing.get("list_stat") or {}).get("products_wb") or {}
-    campaign_detail_sources, campaign_detail_error_count = _collect_catalog_campaign_detail_sources(api, shop_id, products, stat_map)
-    best_order_times, best_order_time_error_count = _collect_catalog_best_order_times(api, shop_id, products, stat_map)
+    if include_aux:
+        campaign_detail_sources, campaign_detail_error_count = _collect_catalog_campaign_detail_sources(api, shop_id, products, stat_map)
+        best_order_times, best_order_time_error_count = _collect_catalog_best_order_times(api, shop_id, products, stat_map)
+    else:
+        campaign_detail_sources, campaign_detail_error_count = {}, 0
+        best_order_times, best_order_time_error_count = {}, 0
     shop_articles: List[Dict[str, Any]] = []
     for product in products:
         article = str(product.get("external_id") or "").strip()
@@ -3544,6 +3549,7 @@ def collect_catalog(
     mode: str = "compact",
     force_refresh: bool = False,
     product_refs: Optional[Iterable[str]] = None,
+    include_aux: bool = True,
 ) -> Dict[str, Any]:
     normalized_mode = "full" if str(mode).lower() == "full" else "compact"
     include_extended = normalized_mode == "full"
@@ -3552,7 +3558,7 @@ def collect_catalog(
     refs_by_shop = _catalog_product_refs_by_shop(product_refs)
     is_partial = bool(refs_by_shop)
     cache_key = _catalog_cache_key(storage_state_path, range_payload, normalized_mode)
-    cached = None if force_refresh or is_partial else _get_cached_catalog(cache_key)
+    cached = None if force_refresh or is_partial or not include_aux else _get_cached_catalog(cache_key)
     if cached is not None:
         return cached
 
@@ -3572,6 +3578,7 @@ def collect_catalog(
                 include_extended=include_extended,
                 force_refresh=force_refresh,
                 product_ids=refs_by_shop.get(int(shop["id"])) if refs_by_shop else None,
+                include_aux=include_aux,
             )
             for shop in shops
         ]
@@ -3608,7 +3615,7 @@ def collect_catalog(
         "totals": totals,
         "shops": catalog_shops,
     }
-    if not is_partial:
+    if not is_partial and include_aux:
         _set_cached_catalog(cache_key, payload)
     return payload
 

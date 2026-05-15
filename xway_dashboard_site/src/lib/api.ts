@@ -274,11 +274,15 @@ export async function fetchCatalog(options: {
   signal?: AbortSignal;
   forceRefresh?: boolean;
   productRefs?: string[];
+  includeAux?: boolean;
 }) {
   const url = new URL("/api/catalog", buildBaseUrl(options.request));
   url.searchParams.set("mode", "compact");
   if (options.productRefs?.length) {
     url.searchParams.set("products", options.productRefs.join(","));
+  }
+  if (options.includeAux === false) {
+    url.searchParams.set("aux", "0");
   }
   appendRange(url.searchParams, options.start, options.end);
   if (options.forceRefresh) {
@@ -291,7 +295,7 @@ export async function fetchCatalog(options: {
     {
       namespace: "catalog",
       bypassRead: options.forceRefresh,
-      afterWrite: options.productRefs?.length ? (response) => mergeCatalogProductResponseIntoFullCache(url, response) : undefined,
+      afterWrite: options.productRefs?.length && options.includeAux !== false ? (response) => mergeCatalogProductResponseIntoFullCache(url, response) : undefined,
     },
   );
 }

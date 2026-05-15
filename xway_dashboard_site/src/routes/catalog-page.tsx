@@ -5008,6 +5008,7 @@ export function CatalogPage() {
           start: sourcePayload.range.current_start,
           end: sourcePayload.range.current_end,
           forceRefresh: true,
+          includeAux: false,
           signal: options.signal,
         });
         const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, shopRefs);
@@ -5225,6 +5226,49 @@ export function CatalogPage() {
         }
       }
       currentStepErrorRefs = refs;
+
+      if (options.skipCatalogRowRefresh) {
+        const detailRefs = refs.filter((ref) => !isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
+        if (detailRefs.length) {
+          setCatalogRefreshStep(scopeLabel, `${targetLabel}: детали РК и лучшие часы`, activityRef);
+        }
+        for (const ref of detailRefs) {
+          currentStepErrorRefs = [ref];
+          try {
+            const detailCatalog = await fetchCatalog({
+              productRefs: [ref],
+              start: sourcePayload.range.current_start,
+              end: sourcePayload.range.current_end,
+              forceRefresh: true,
+              signal: options.signal,
+            });
+            const articleOverrides = catalogArticleOverridesFromPayload(detailCatalog, [ref]);
+            const article = articleOverrides[ref];
+            if (article) {
+              refreshedArticlesByRef.set(ref, article);
+              setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+              appendCatalogRefreshLogsForRefs([ref], {
+                status: "success",
+                scope,
+                step: "Данные РК: детали",
+                message: "Детали РК загружены",
+                detail: `${formatCatalogCampaignLimitSummary(article)} · ${formatCatalogBestOrderTimeSummary(article)}`,
+              });
+            } else {
+              appendCatalogRefreshLogsForRefs([ref], {
+                status: "warning",
+                scope,
+                step: "Данные РК: детали",
+                message: "Товар не найден в ответе деталей",
+                detail: "API ответил без строки этого товара.",
+              });
+            }
+          } catch (error) {
+            await logStepError("Данные РК: детали", error, [ref]);
+          }
+        }
+        currentStepErrorRefs = refs;
+      }
 
       const disabledChartRefs = refs.filter((ref) => isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
       if (disabledChartRefs.length) {
@@ -5463,6 +5507,7 @@ export function CatalogPage() {
           start: sourcePayload.range.current_start,
           end: sourcePayload.range.current_end,
           forceRefresh: true,
+          includeAux: false,
           signal: controller.signal,
         });
         setCatalogPayloadOverride(freshCatalog);

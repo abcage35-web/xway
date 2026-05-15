@@ -111,6 +111,7 @@ async function handleNativeRequest(context, pathname) {
         mode: searchParamsValue(requestUrl, "mode") || "compact",
         forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
         productRefs,
+        includeAux: requestUrl.searchParams.get("aux") !== "0" && requestUrl.searchParams.get("include_aux") !== "0",
       }),
     );
   }

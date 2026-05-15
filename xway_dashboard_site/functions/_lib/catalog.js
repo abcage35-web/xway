@@ -781,7 +781,7 @@ async function collectCatalogCampaignDetailSources(shopId, products, statMap, cl
   return { detailByProductId, loadedCount: detailByProductId.size, errorCount };
 }
 
-async function collectShopCatalog(shop, client, includeExtended, productIds = null) {
+async function collectShopCatalog(shop, client, includeExtended, productIds = null, includeAux = true) {
   const shopId = Number(shop.id);
   const [listingResult, shopDetailResult] = await Promise.allSettled([
     client.shopListing(shopId, client.range.current_start, client.range.current_end),
@@ -808,10 +808,15 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
     ? (listWo.products_wb || []).filter((product) => product?.id !== null && product?.id !== undefined && productIds.has(Number(product.id)))
     : listWo.products_wb || [];
   const statMap = listStat.products_wb || {};
-  const [campaignDetailSources, bestOrderTimes] = await Promise.all([
-    collectCatalogCampaignDetailSources(shopId, products, statMap, client),
-    collectCatalogBestOrderTimes(shopId, products, statMap, client),
-  ]);
+  const [campaignDetailSources, bestOrderTimes] = includeAux
+    ? await Promise.all([
+        collectCatalogCampaignDetailSources(shopId, products, statMap, client),
+        collectCatalogBestOrderTimes(shopId, products, statMap, client),
+      ])
+    : [
+        { detailByProductId: new Map(), loadedCount: 0, errorCount: 0 },
+        { bestTimeByProductId: new Map(), loadedCount: 0, errorCount: 0 },
+      ];
 
   const shopArticles = [];
   for (const product of products) {
@@ -995,14 +1000,14 @@ function normalizeDeadlineMs(value, fallback = CATALOG_CHART_DEFAULT_DEADLINE_MS
   return Math.max(3000, Math.min(parsed, 25000));
 }
 
-export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false, productRefs = [] } = {}) {
+export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false, productRefs = [], includeAux = true } = {}) {
   const normalizedMode = String(mode || "").toLowerCase() === "full" ? "full" : "compact";
   const includeExtended = normalizedMode === "full";
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const refsByShop = catalogProductRefsByShop(productRefs);
   const shops = (await client.listShops()).filter((shop) => !refsByShop.size || refsByShop.has(Number(shop?.id)));
   const catalogShops = await mapWithConcurrency(shops, CATALOG_SHOP_FETCH_CONCURRENCY, (shop) =>
-    collectShopCatalog(shop, client, includeExtended, refsByShop.get(Number(shop?.id)) || null),
+    collectShopCatalog(shop, client, includeExtended, refsByShop.get(Number(shop?.id)) || null, includeAux),
   );
 
   const totals = {
