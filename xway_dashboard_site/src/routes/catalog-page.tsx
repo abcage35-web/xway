@@ -330,12 +330,12 @@ const CATALOG_SORT_FIELD_OPTIONS: Array<{ value: CatalogSortField; label: string
   { value: "clicks", label: "Клики" },
   { value: "atbs", label: "Корзины" },
   { value: "orders", label: "Заказы" },
-  { value: "totalOrders", label: "Общее кол-во заказов" },
+  { value: "totalOrders", label: "Заказы (всего)" },
   { value: "ctr", label: "CTR" },
   { value: "cr1", label: "CR1" },
   { value: "cr2", label: "CR2" },
   { value: "drr", label: "ДРР" },
-  { value: "drrTotal", label: "ДРР общих заказов" },
+  { value: "drrTotal", label: "ДРР (всего)" },
   { value: "categoryAvgCr", label: "Ср. CR категории" },
   { value: "article", label: "Артикул" },
   { value: "name", label: "Название" },
@@ -384,6 +384,7 @@ interface CatalogRefreshLogEntry {
   detail?: string;
   productRef?: string;
   productLabel?: string;
+  durationMs?: number;
 }
 
 type CatalogRefreshLogInput = Omit<CatalogRefreshLogEntry, "id" | "createdAt">;
@@ -394,6 +395,22 @@ interface CatalogRefreshActivity {
   productRef?: string;
 }
 
+type CatalogRefreshLogDisplayStatus = CatalogRefreshLogStatus | "active";
+
+type CatalogRefreshLogDisplayEntry = CatalogRefreshLogEntry & {
+  displayStatus?: CatalogRefreshLogDisplayStatus;
+  pending?: boolean;
+};
+
+interface CatalogRefreshLogGroup {
+  key: string;
+  label: string;
+  scopeLabel: string;
+  status: CatalogRefreshLogDisplayStatus;
+  latestAt: number;
+  entries: CatalogRefreshLogDisplayEntry[];
+}
+
 const CATALOG_REFRESH_LOG_STATUS_LABELS: Record<CatalogRefreshLogStatus, string> = {
   success: "ОК",
   error: "Ошибка",
@@ -401,6 +418,12 @@ const CATALOG_REFRESH_LOG_STATUS_LABELS: Record<CatalogRefreshLogStatus, string>
   info: "Инфо",
   cancelled: "Отмена",
 };
+const CATALOG_REFRESH_LOG_DISPLAY_STATUS_LABELS: Record<CatalogRefreshLogDisplayStatus, string> = {
+  ...CATALOG_REFRESH_LOG_STATUS_LABELS,
+  active: "Идёт",
+};
+const CATALOG_REFRESH_STEP_CURRENT_KEY = "__current__";
+const CATALOG_REFRESH_STEP_GLOBAL_REF = "__global__";
 
 function applyCatalogArticleOverrides(payload: CatalogResponse, overridesByRef: Record<string, CatalogArticle>): CatalogResponse {
   if (!Object.keys(overridesByRef).length) {
@@ -599,6 +622,58 @@ function formatCatalogRefreshLogTime(value: string) {
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
+}
+
+function formatCatalogRefreshLogDuration(durationMs: number | null | undefined) {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${formatNumber(minutes)}м ${String(seconds).padStart(2, "0")}с`;
+}
+
+function resolveCatalogRefreshLogDisplayStatus(entry: CatalogRefreshLogDisplayEntry): CatalogRefreshLogDisplayStatus {
+  return entry.displayStatus ?? (entry.pending ? "active" : entry.status);
+}
+
+function resolveCatalogRefreshLogTaskIcon(status: CatalogRefreshLogDisplayStatus) {
+  if (status === "success") {
+    return "✓";
+  }
+  if (status === "error") {
+    return "!";
+  }
+  if (status === "warning") {
+    return "!";
+  }
+  if (status === "cancelled") {
+    return "–";
+  }
+  if (status === "active") {
+    return "";
+  }
+  return "i";
+}
+
+function resolveCatalogRefreshLogGroupStatus(entries: CatalogRefreshLogDisplayEntry[]): CatalogRefreshLogDisplayStatus {
+  if (entries.some((entry) => resolveCatalogRefreshLogDisplayStatus(entry) === "active")) {
+    return "active";
+  }
+  if (entries.some((entry) => entry.status === "error")) {
+    return "error";
+  }
+  if (entries.some((entry) => entry.status === "warning")) {
+    return "warning";
+  }
+  if (entries.some((entry) => entry.status === "cancelled")) {
+    return "cancelled";
+  }
+  if (entries.every((entry) => entry.status === "success")) {
+    return "success";
+  }
+  return "info";
 }
 
 function mapCatalogIssuesRowToCacheEntry(row: CatalogIssuesRow): CatalogIssueCacheEntry {
@@ -1323,6 +1398,13 @@ function resolveCatalogIssueKindShortLabel(kind: CatalogIssueKind) {
   return "Оборач.";
 }
 
+function getCatalogIssueCampaignCount(issue: CatalogArticleYesterdayIssues["issues"][number]) {
+  const ids = new Set<string>();
+  issue.campaigns.forEach((campaign) => ids.add(String(campaign.id)));
+  issue.campaignIds.forEach((campaignId) => ids.add(String(campaignId)));
+  return ids.size || issue.campaigns.length || issue.campaignIds.length;
+}
+
 function getArticleIssueEstimatedGapTotal(item: CatalogIssueDisplayRow) {
   return item.issues.reduce((sum, issue) => sum + (issue.estimatedGap ?? 0), 0);
 }
@@ -1331,6 +1413,18 @@ function formatCatalogIssueInlineText(issue: CatalogArticleYesterdayIssues["issu
   if (issue.kind === "turnover") {
     const turnoverText = issue.turnoverDays !== undefined && issue.turnoverDays !== null ? formatTurnoverDays(issue.turnoverDays) : null;
     return turnoverText ? `${resolveCatalogIssueKindShortLabel(issue.kind)} · ${turnoverText}` : resolveCatalogIssueKindShortLabel(issue.kind);
+  }
+
+  if (issue.kind === "schedule_setup") {
+    const campaignCount = getCatalogIssueCampaignCount(issue);
+    const parts = [resolveCatalogIssueKindShortLabel(issue.kind)];
+    if (campaignCount > 0) {
+      parts.push(`${formatNumber(campaignCount)} РК`);
+    }
+    if (issue.hours > 0) {
+      parts.push(`${formatNumber(issue.hours, 1)} ч`);
+    }
+    return parts.join(" · ");
   }
 
   if (issue.hours > 0) {
@@ -2688,6 +2782,85 @@ function formatCatalogBestOrderTimeTitle(article: CatalogArticle) {
     .join("\n");
 }
 
+function formatCatalogBestTimeHourLabel(hour: number) {
+  return `${String(((hour % 24) + 24) % 24).padStart(2, "0")}:00`;
+}
+
+function normalizeCatalogBestOrderTimeHourPoints(bestTime: CatalogArticle["best_order_time"]) {
+  const byHour = new Map<number, number>();
+  (bestTime?.by_hour || []).forEach((row, index) => {
+    const hourValue = toNumber(row.hour);
+    const hour = hourValue !== null ? Math.trunc(hourValue) : index;
+    if (hour < 0 || hour > 23) {
+      return;
+    }
+    byHour.set(hour, Math.max(0, toNumber(row.orders) ?? 0));
+  });
+  if (!byHour.size) {
+    return [];
+  }
+  return Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    orders: byHour.get(hour) ?? 0,
+  }));
+}
+
+function CatalogBestOrderTimeMiniChart({ bestTime }: { bestTime: CatalogArticle["best_order_time"] }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const points = useMemo(() => normalizeCatalogBestOrderTimeHourPoints(bestTime), [bestTime]);
+  const maxOrders = points.length ? Math.max(...points.map((point) => point.orders)) : 0;
+  if (!points.length || maxOrders <= 0) {
+    return null;
+  }
+
+  const width = 118;
+  const height = 46;
+  const paddingX = 4;
+  const paddingY = 5;
+  const step = (width - paddingX * 2) / Math.max(points.length - 1, 1);
+  const coords = points.map((point, index) => {
+    const x = paddingX + index * step;
+    const y = paddingY + (1 - point.orders / maxOrders) * (height - paddingY * 2);
+    return { ...point, x, y };
+  });
+  const linePath = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+  const firstPoint = coords[0]!;
+  const lastPoint = coords[coords.length - 1]!;
+  const areaPath = `${linePath} L ${lastPoint.x.toFixed(2)} ${height - paddingY} L ${firstPoint.x.toFixed(2)} ${height - paddingY} Z`;
+  const activePoint = activeIndex !== null ? coords[activeIndex] ?? null : null;
+  const activeLeft = activePoint ? Math.max(20, Math.min(width - 20, activePoint.x)) : 0;
+
+  return (
+    <div className="catalog-best-time-mini-chart" onPointerLeave={() => setActiveIndex(null)} onBlur={(event) => !event.currentTarget.contains(event.relatedTarget) && setActiveIndex(null)}>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+        <path className="catalog-best-time-chart-area" d={areaPath} />
+        <path className="catalog-best-time-chart-line" d={linePath} />
+        {activePoint ? <circle className="catalog-best-time-chart-dot" cx={activePoint.x} cy={activePoint.y} r="2.6" /> : null}
+        {coords.map((point, index) => (
+          <rect
+            key={`best-hour-${point.hour}`}
+            className="catalog-best-time-chart-hit"
+            x={Math.max(0, point.x - step / 2)}
+            y={0}
+            width={index === 0 || index === points.length - 1 ? step / 2 + paddingX : step}
+            height={height}
+            tabIndex={0}
+            aria-label={`${formatCatalogBestTimeHourLabel(point.hour)} · ${formatNumber(point.orders)} заказов`}
+            onPointerEnter={() => setActiveIndex(index)}
+            onFocus={() => setActiveIndex(index)}
+          />
+        ))}
+      </svg>
+      {activePoint ? (
+        <div className="catalog-best-time-tooltip" style={{ left: `${activeLeft}px` }}>
+          <span>{formatCatalogBestTimeHourLabel(activePoint.hour)}</span>
+          <strong>{formatNumber(activePoint.orders)} заказов</strong>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function buildCategoryAverageCrMap(articles: CatalogArticle[]) {
   const byCategory = new Map<string, { totalCr: number; count: number }>();
 
@@ -3735,6 +3908,7 @@ export function CatalogPage() {
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
   const articleIssuesCopyResetRef = useRef<number | null>(null);
+  const catalogRefreshStepStartedAtRef = useRef<Map<string, number>>(new Map());
   const rememberCatalogChartCacheEntry = (cacheKey: string, entry: CatalogChartCacheEntry) => {
     chartCacheRef.current.set(cacheKey, entry);
     writeCatalogChartSourceCache(cacheKey, entry);
@@ -3774,15 +3948,50 @@ export function CatalogPage() {
     catalogRefreshAbortRef.current?.abort();
   };
   const resolveCatalogRefreshProductLabel = (productRef: string) => catalogArticleMetaByRef.get(productRef)?.label ?? productRef;
+  const catalogRefreshStepStartKey = (productRef: string | null | undefined, step: string) =>
+    `${productRef || CATALOG_REFRESH_STEP_GLOBAL_REF}::${step}`;
+  const markCatalogRefreshLogStepStart = (step: string, productRef?: string | null) => {
+    const startedAt = performance.now();
+    const starts = catalogRefreshStepStartedAtRef.current;
+    starts.set(catalogRefreshStepStartKey(null, CATALOG_REFRESH_STEP_CURRENT_KEY), startedAt);
+    starts.set(catalogRefreshStepStartKey(null, step), startedAt);
+    if (productRef) {
+      starts.set(catalogRefreshStepStartKey(productRef, CATALOG_REFRESH_STEP_CURRENT_KEY), startedAt);
+      starts.set(catalogRefreshStepStartKey(productRef, step), startedAt);
+    }
+  };
+  const resolveCatalogRefreshLogDurationMs = (entry: CatalogRefreshLogInput, createdAtMs: number) => {
+    if (typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs) && entry.durationMs >= 0) {
+      return entry.durationMs;
+    }
+    const starts = catalogRefreshStepStartedAtRef.current;
+    const startedAt =
+      (entry.productRef ? starts.get(catalogRefreshStepStartKey(entry.productRef, entry.step)) : undefined) ??
+      (entry.productRef ? starts.get(catalogRefreshStepStartKey(entry.productRef, CATALOG_REFRESH_STEP_CURRENT_KEY)) : undefined) ??
+      starts.get(catalogRefreshStepStartKey(null, entry.step)) ??
+      starts.get(catalogRefreshStepStartKey(null, CATALOG_REFRESH_STEP_CURRENT_KEY));
+    if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) {
+      return undefined;
+    }
+    const durationMs = createdAtMs - startedAt;
+    if (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > 6 * 60 * 60 * 1000) {
+      return undefined;
+    }
+    return durationMs;
+  };
   const appendCatalogRefreshLogs = (entries: CatalogRefreshLogInput | CatalogRefreshLogInput[]) => {
-    const nextEntries = (Array.isArray(entries) ? entries : [entries]).map((entry, index) => ({
-      ...entry,
-      message: normalizeApiErrorMessage(entry.message),
-      detail: entry.detail ? normalizeApiErrorMessage(entry.detail) : entry.detail,
-      id: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
-      createdAt: new Date().toISOString(),
-      productLabel: entry.productRef ? (entry.productLabel ?? resolveCatalogRefreshProductLabel(entry.productRef)) : entry.productLabel,
-    }));
+    const nextEntries = (Array.isArray(entries) ? entries : [entries]).map((entry, index) => {
+      const createdAtMs = performance.now();
+      return {
+        ...entry,
+        message: normalizeApiErrorMessage(entry.message),
+        detail: entry.detail ? normalizeApiErrorMessage(entry.detail) : entry.detail,
+        durationMs: resolveCatalogRefreshLogDurationMs(entry, createdAtMs),
+        id: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+        createdAt: new Date().toISOString(),
+        productLabel: entry.productRef ? (entry.productLabel ?? resolveCatalogRefreshProductLabel(entry.productRef)) : entry.productLabel,
+      };
+    });
     setCatalogRefreshLogs((current) => [...current, ...nextEntries].slice(-5000));
   };
   const appendCatalogRefreshLogsForRefs = (
@@ -3800,6 +4009,7 @@ export function CatalogPage() {
     );
   };
   const setCatalogRefreshStep = (title: string, detail: string, productRef?: string) => {
+    markCatalogRefreshLogStepStart(detail, productRef);
     setCatalogRefreshActivity({
       title,
       detail,
@@ -6794,7 +7004,53 @@ export function CatalogPage() {
   const latestCatalogRefreshLog = catalogRefreshLogs[catalogRefreshLogs.length - 1] ?? null;
   const catalogRefreshLogErrorCount = catalogRefreshLogs.filter((entry) => entry.status === "error").length;
   const catalogRefreshLogWarningCount = catalogRefreshLogs.filter((entry) => entry.status === "warning").length;
-  const displayedCatalogRefreshLogs = [...visibleCatalogRefreshLogs].slice(-80).reverse();
+  const displayedCatalogRefreshLogGroups = (() => {
+    const groups = new Map<string, CatalogRefreshLogGroup>();
+    const sourceEntries: CatalogRefreshLogDisplayEntry[] = visibleCatalogRefreshLogs.slice(-240);
+    if (catalogRefreshing && catalogRefreshActivity && (!selectedCatalogRefreshLogRef || catalogRefreshActivity.productRef === selectedCatalogRefreshLogRef)) {
+      sourceEntries.push({
+        id: "active-catalog-refresh-log",
+        createdAt: new Date().toISOString(),
+        status: "info",
+        displayStatus: "active",
+        pending: true,
+        scope: catalogRefreshActivity.productRef ? "product" : "catalog",
+        step: catalogRefreshActivity.title,
+        message: catalogRefreshActivity.detail,
+        productRef: catalogRefreshActivity.productRef,
+        productLabel: catalogRefreshActivity.productRef ? resolveCatalogRefreshProductLabel(catalogRefreshActivity.productRef) : undefined,
+      });
+    }
+    sourceEntries.forEach((entry) => {
+      const groupKey = entry.productRef
+        ? `product:${entry.productRef}`
+        : entry.scope === "shop"
+          ? `shop:${entry.productLabel || entry.detail || entry.message || entry.step}`
+          : `scope:${entry.scope}`;
+      const scopeLabel = entry.productRef ? "Товар" : entry.scope === "shop" ? "Кабинет" : "Каталог";
+      const label =
+        entry.productLabel ||
+        (entry.scope === "shop" ? entry.detail || entry.message || entry.step : entry.scope === "catalog" ? entry.step || "Каталог" : entry.message || entry.step);
+      const createdAt = new Date(entry.createdAt).getTime();
+      const latestAt = Number.isFinite(createdAt) ? createdAt : Date.now();
+      const group =
+        groups.get(groupKey) ||
+        {
+          key: groupKey,
+          label,
+          scopeLabel,
+          status: "info" as CatalogRefreshLogDisplayStatus,
+          latestAt,
+          entries: [] as CatalogRefreshLogDisplayEntry[],
+        };
+      group.label = entry.productLabel ? entry.productLabel : group.label || label;
+      group.latestAt = Math.max(group.latestAt, latestAt);
+      group.entries.push(entry);
+      group.status = resolveCatalogRefreshLogGroupStatus(group.entries);
+      groups.set(groupKey, group);
+    });
+    return [...groups.values()].sort((left, right) => right.latestAt - left.latestAt).slice(0, 60);
+  })();
 
   return (
     <div className="space-y-6">
@@ -7543,8 +7799,8 @@ export function CatalogPage() {
                         key: "totalOrders",
                         header: (
                           <span className="inline-flex min-w-[104px] flex-col leading-[1.05]">
-                            <span>Общее</span>
-                            <span>кол-во заказов</span>
+                            <span>Заказы</span>
+                            <span>(всего)</span>
                           </span>
                         ),
                         align: "right",
@@ -7556,7 +7812,7 @@ export function CatalogPage() {
                         header: (
                           <span className="inline-flex flex-col leading-[1.05]">
                             <span>ДРР</span>
-                            <span>общ.</span>
+                            <span>(всего)</span>
                           </span>
                         ),
                         align: "right",
@@ -7629,15 +7885,16 @@ export function CatalogPage() {
                             );
                           }
                           return (
-                            <div className="flex max-w-[128px] flex-col items-start gap-1" title={formatCatalogBestOrderTimeTitle(article)}>
+                            <div className="catalog-best-time-cell" title={formatCatalogBestOrderTimeTitle(article)}>
                               {ranges.map((range) => (
                                 <span
                                   key={`${article.article}-${range.start_hour}-${range.end_hour}`}
-                                  className="inline-flex max-w-full items-center rounded-full bg-[rgba(139,100,246,0.14)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[#bfa9ff]"
+                                  className="catalog-best-time-chip"
                                 >
                                   {range.label}
                                 </span>
                               ))}
+                              <CatalogBestOrderTimeMiniChart bestTime={article.best_order_time ?? null} />
                             </div>
                           );
                         },
@@ -7905,7 +8162,13 @@ export function CatalogPage() {
                   Все
                 </button>
               ) : null}
-              <button type="button" onClick={() => setCatalogRefreshLogs([])}>
+              <button
+                type="button"
+                onClick={() => {
+                  catalogRefreshStepStartedAtRef.current.clear();
+                  setCatalogRefreshLogs([]);
+                }}
+              >
                 Очистить
               </button>
               <button type="button" onClick={() => setCatalogRefreshPanelOpen(false)} aria-label="Закрыть логи обновления">
@@ -7930,17 +8193,50 @@ export function CatalogPage() {
           </div>
 
           <div className="catalog-refresh-log-list">
-            {displayedCatalogRefreshLogs.length ? (
-              displayedCatalogRefreshLogs.map((entry) => (
-                <div key={entry.id} className={cn("catalog-refresh-log-entry", `is-${entry.status}`)}>
-                  <div className="catalog-refresh-log-entry-top">
-                    <span>{formatCatalogRefreshLogTime(entry.createdAt)}</span>
-                    <span className={cn("catalog-refresh-log-status", `is-${entry.status}`)}>{CATALOG_REFRESH_LOG_STATUS_LABELS[entry.status]}</span>
+            {displayedCatalogRefreshLogGroups.length ? (
+              displayedCatalogRefreshLogGroups.map((group) => (
+                <div key={group.key} className={cn("catalog-refresh-log-tile", `is-${group.status}`)}>
+                  <div className="catalog-refresh-log-tile-head">
+                    <div className="min-w-0">
+                      <span>{group.scopeLabel}</span>
+                      <strong title={group.label}>{group.label}</strong>
+                    </div>
+                    <div className="catalog-refresh-log-tile-badges">
+                      <span className={cn("catalog-refresh-log-status", `is-${group.status}`)}>
+                        {CATALOG_REFRESH_LOG_DISPLAY_STATUS_LABELS[group.status]}
+                      </span>
+                      <small>
+                        {formatNumber(group.entries.filter((entry) => entry.status === "success").length)}/{formatNumber(group.entries.length)}
+                      </small>
+                    </div>
                   </div>
-                  <strong>{entry.step}</strong>
-                  <p>{entry.message}</p>
-                  {entry.productLabel ? <small>{entry.productLabel}</small> : null}
-                  {entry.detail ? <em>{normalizeApiErrorMessage(entry.detail)}</em> : null}
+                  <ol className="catalog-refresh-log-task-list">
+                    {group.entries.slice(-14).map((entry) => {
+                      const status = resolveCatalogRefreshLogDisplayStatus(entry);
+                      const duration = formatCatalogRefreshLogDuration(entry.durationMs);
+                      return (
+                        <li key={entry.id} className={cn("catalog-refresh-log-task", `is-${status}`)}>
+                          <span className={cn("catalog-refresh-log-task-check", `is-${status}`)} aria-hidden="true">
+                            {resolveCatalogRefreshLogTaskIcon(status)}
+                          </span>
+                          <div className="catalog-refresh-log-task-body">
+                            <div className="catalog-refresh-log-task-main">
+                              <strong>{entry.step}</strong>
+                              <span>
+                                {formatCatalogRefreshLogTime(entry.createdAt)}
+                                {duration ? ` (${duration})` : null}
+                              </span>
+                            </div>
+                            <p>{entry.message}</p>
+                            {entry.detail ? <em>{normalizeApiErrorMessage(entry.detail)}</em> : null}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  {group.entries.length > 14 ? (
+                    <div className="catalog-refresh-log-task-more">Ещё {formatNumber(group.entries.length - 14)} задач выше по логу</div>
+                  ) : null}
                 </div>
               ))
             ) : (

@@ -2732,6 +2732,7 @@ def _build_catalog_best_order_time_summary(payload: Optional[Dict[str, Any]]) ->
         "max_orders": max_orders,
         "total_orders": total_orders,
         "target_orders": target_orders,
+        "by_hour": [{"hour": hour, "orders": orders} for hour, orders in enumerate(orders_by_hour)],
         "ranges": result_ranges,
     }
 

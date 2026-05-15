@@ -4,9 +4,27 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 import { cn, formatCompactNumber, formatMoney, formatNumber, formatPercent } from "../lib/format";
 import type { CatalogChartRow, CatalogChartTotals } from "../lib/types";
 
-type CatalogSeriesKey = "views" | "clicks" | "atbs" | "orders" | "expense_sum" | "ctr" | "cr1" | "cr2" | "crf";
+type CatalogSeriesKey =
+  | "views"
+  | "clicks"
+  | "atbs"
+  | "orders"
+  | "ordered_total"
+  | "expense_sum"
+  | "ctr"
+  | "cr1"
+  | "cr2"
+  | "crf";
 type CatalogDrrSeriesKey = "drr_total" | "drr_ads";
-type CatalogTooltipSeriesKey = CatalogSeriesKey | CatalogDrrSeriesKey;
+type CatalogOrdersSplitSeriesKey = "orders_ads" | "orders_organic";
+type CatalogTooltipSeriesKey = CatalogSeriesKey | CatalogDrrSeriesKey | CatalogOrdersSplitSeriesKey;
+type CatalogSeriesKind = "count" | "money" | "rate";
+type CatalogSeriesMeta<TKey extends string> = {
+  key: TKey;
+  label: string;
+  color: string;
+  kind: CatalogSeriesKind;
+};
 type ChartMode = "combined" | "split";
 type SplitPanelKey = "views" | "clicks" | "atbs" | "orders" | "crf";
 type CrfRenderMode = "line" | "bar";
@@ -83,32 +101,43 @@ function formatChartDateLabel(value: string | null | undefined) {
   }
   return rawValue;
 }
-const CATALOG_SERIES: Array<{
-  key: CatalogSeriesKey;
-  label: string;
-  color: string;
-  kind: "count" | "money" | "rate";
-}> = [
+const CATALOG_SERIES: Array<CatalogSeriesMeta<CatalogSeriesKey>> = [
   { key: "views", label: "Просмотры", color: "#4b7bff", kind: "count" },
   { key: "clicks", label: "Клики", color: "#8b64f6", kind: "count" },
   { key: "atbs", label: "Корзины", color: "#14a6a1", kind: "count" },
-  { key: "orders", label: "Заказы", color: "#4ba66f", kind: "count" },
+  { key: "ordered_total", label: "Заказы (всего)", color: "#18b981", kind: "count" },
+  { key: "orders", label: "Заказы (РК)", color: "#4ba66f", kind: "count" },
   { key: "expense_sum", label: "Расход", color: "#f17828", kind: "money" },
   { key: "ctr", label: "CTR", color: "#3158c9", kind: "rate" },
   { key: "cr1", label: "CR1", color: "#2998df", kind: "rate" },
   { key: "cr2", label: "CR2", color: "#a855f7", kind: "rate" },
   { key: "crf", label: "CRF", color: "#f04c7c", kind: "rate" },
 ];
-const CATALOG_DRR_SERIES: Array<{
-  key: CatalogDrrSeriesKey;
-  label: string;
-  color: string;
-  kind: "rate";
-}> = [
+const CATALOG_DRR_SERIES: Array<CatalogSeriesMeta<CatalogDrrSeriesKey>> = [
   { key: "drr_total", label: "ДРР общ.", color: "#ff6b8a", kind: "rate" },
   { key: "drr_ads", label: "ДРР РК", color: "#f17828", kind: "rate" },
 ];
-const CATALOG_TOOLTIP_SERIES = [...CATALOG_SERIES, ...CATALOG_DRR_SERIES];
+const ORDER_ADS_SERIES: CatalogSeriesMeta<"orders_ads"> = {
+  key: "orders_ads",
+  label: "Заказы (РК)",
+  color: "#4ba66f",
+  kind: "count",
+};
+const ORDER_ORGANIC_SERIES: CatalogSeriesMeta<"orders_organic"> = {
+  key: "orders_organic",
+  label: "Заказы (органика)",
+  color: "#2f80ed",
+  kind: "count",
+};
+const CATALOG_ORDER_SPLIT_SERIES: Array<CatalogSeriesMeta<CatalogOrdersSplitSeriesKey>> = [
+  ORDER_ADS_SERIES,
+  ORDER_ORGANIC_SERIES,
+];
+const CATALOG_TOOLTIP_SERIES: Array<CatalogSeriesMeta<CatalogTooltipSeriesKey>> = [
+  ...CATALOG_SERIES,
+  ...CATALOG_ORDER_SPLIT_SERIES,
+  ...CATALOG_DRR_SERIES,
+];
 const SPLIT_CHARTS: SplitChartConfig[] = [
   { panel: "views", title: "Просмотры / расход", primaryKey: "views" },
   { panel: "clicks", title: "Клики / расход / CTR", primaryKey: "clicks", rateKey: "ctr" },
@@ -146,8 +175,8 @@ function formatLegendValue(key: CatalogSeriesKey, totals: CatalogChartTotals | n
   if (key === "expense_sum") {
     return formatMoney(totals.expense_sum, true);
   }
-  if (key === "orders") {
-    return formatNumber(totals.orders);
+  if (key === "orders" || key === "ordered_total") {
+    return formatNumber(totals[key]);
   }
   if (key === "views" || key === "clicks" || key === "atbs") {
     return formatCompactNumber(totals[key]);
@@ -414,6 +443,18 @@ function SplitMetricChart({
   const expenseVisible = !hiddenKeys.includes("expense_sum");
   const rateVisible = rateKey ? !hiddenKeys.includes(rateKey) : false;
   const hasVisibleSeries = primaryVisible || expenseVisible || rateVisible;
+  const isOrdersPanel = primaryKey === "orders";
+  const chartRows = isOrdersPanel
+    ? rows.map((row) => {
+        const adsOrders = Math.max(Number(row.orders) || 0, 0);
+        const totalOrders = Math.max(Number(row.ordered_total) || 0, 0);
+        return {
+          ...row,
+          orders_ads: adsOrders,
+          orders_organic: Math.max(totalOrders - adsOrders, 0),
+        };
+      })
+    : rows;
 
   return (
     <div className="rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]">
@@ -433,7 +474,7 @@ function SplitMetricChart({
           </div>
         ) : (
           <ResponsiveContainer>
-            <ComposedChart data={rows} syncId={CHART_SYNC_ID} margin={{ top: 10, right: 10, left: 8, bottom: 8 }}>
+            <ComposedChart data={chartRows} syncId={CHART_SYNC_ID} margin={{ top: 10, right: 10, left: 8, bottom: 8 }}>
               <CartesianGrid stroke={CHART_GRID} strokeDasharray="4 4" vertical={false} />
               <XAxis
                 dataKey="label"
@@ -452,16 +493,43 @@ function SplitMetricChart({
               {rateKey ? <YAxis yAxisId={rateKey} hide orientation="right" allowDecimals domain={["auto", "auto"]} /> : null}
               <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
               {primaryVisible ? (
-                <Bar
-                  yAxisId={primaryKey}
-                  dataKey={primaryKey}
-                  name={primaryMeta.label}
-                  fill={primaryMeta.color}
-                  radius={[8, 8, 0, 0]}
-                  maxBarSize={24}
-                  fillOpacity={0.9}
-                  isAnimationActive={false}
-                />
+                isOrdersPanel ? (
+                  <>
+                    <Bar
+                      yAxisId={primaryKey}
+                      dataKey={ORDER_ADS_SERIES.key}
+                      name={ORDER_ADS_SERIES.label}
+                      fill={ORDER_ADS_SERIES.color}
+                      stackId="orders-total"
+                      radius={[0, 0, 8, 8]}
+                      maxBarSize={24}
+                      fillOpacity={0.92}
+                      isAnimationActive={false}
+                    />
+                    <Bar
+                      yAxisId={primaryKey}
+                      dataKey={ORDER_ORGANIC_SERIES.key}
+                      name={ORDER_ORGANIC_SERIES.label}
+                      fill={ORDER_ORGANIC_SERIES.color}
+                      stackId="orders-total"
+                      radius={[8, 8, 0, 0]}
+                      maxBarSize={24}
+                      fillOpacity={0.9}
+                      isAnimationActive={false}
+                    />
+                  </>
+                ) : (
+                  <Bar
+                    yAxisId={primaryKey}
+                    dataKey={primaryKey}
+                    name={primaryMeta.label}
+                    fill={primaryMeta.color}
+                    radius={[8, 8, 0, 0]}
+                    maxBarSize={24}
+                    fillOpacity={0.9}
+                    isAnimationActive={false}
+                  />
+                )
               ) : null}
               {expenseVisible ? (
                 <Line
@@ -496,6 +564,20 @@ function SplitMetricChart({
           </ResponsiveContainer>
         )}
       </div>
+
+      {isOrdersPanel && primaryVisible ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-[var(--color-muted)]">
+          {CATALOG_ORDER_SPLIT_SERIES.map((series) => (
+            <span
+              key={series.key}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[rgba(128,122,147,0.22)] bg-white/60 px-2.5 py-1"
+            >
+              <span className="size-2 rounded-full" style={{ backgroundColor: series.color }} />
+              {series.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <SeriesToggleRow
         items={[

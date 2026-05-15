@@ -502,9 +502,17 @@ export interface CatalogArticleBestOrderTimeRange {
   label: string;
 }
 
+export interface CatalogArticleBestOrderTimeHour {
+  hour: number;
+  orders: number;
+}
+
 export interface CatalogArticleBestOrderTime {
   label: string;
   max_orders: number;
+  total_orders?: number;
+  target_orders?: number;
+  by_hour?: CatalogArticleBestOrderTimeHour[];
   ranges: CatalogArticleBestOrderTimeRange[];
 }
 

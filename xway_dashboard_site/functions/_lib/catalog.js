@@ -808,6 +808,7 @@ function buildBestOrderTimeSummary(payload) {
     max_orders: maxOrders,
     total_orders: totalOrders,
     target_orders: targetOrders,
+    by_hour: ordersByHour.map((orders, hour) => ({ hour, orders })),
     ranges: resultRanges,
   };
 }
