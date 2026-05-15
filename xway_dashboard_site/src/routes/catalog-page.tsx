@@ -5179,6 +5179,7 @@ export function CatalogPage() {
       scope: CatalogRefreshLogScope;
       scopeLabel: string;
       includeAllKnownShops?: boolean;
+      shopIds?: Array<number | string>;
       onFastProgress?: (progress: { completed: number; total: number; currentLabel?: string | null }) => void;
     },
   ) => {
@@ -5193,11 +5194,16 @@ export function CatalogPage() {
       map.set(shopId, current);
       return map;
     }, new Map<string, string[]>());
+    const optionShopIds = [...new Set((options.shopIds ?? []).map((shopId) => String(shopId)).filter(Boolean))];
     const allKnownShopIds = [
       ...new Set([...loaderPayload.shops, ...sourcePayload.shops].map((shop) => String(shop.id))),
     ];
-    const sourceShopIds = options.includeAllKnownShops ? allKnownShopIds : sourcePayload.shops.map((shop) => String(shop.id));
-    const requestedShopIds = new Set(refsByShopId.keys());
+    const sourceShopIds = options.includeAllKnownShops
+      ? allKnownShopIds
+      : optionShopIds.length
+        ? optionShopIds
+        : sourcePayload.shops.map((shop) => String(shop.id));
+    const requestedShopIds = new Set([...refsByShopId.keys(), ...optionShopIds]);
     const orderedShopIds = [
       ...sourceShopIds.filter((shopId) => options.includeAllKnownShops || !requestedShopIds.size || requestedShopIds.has(shopId)),
       ...[...requestedShopIds].filter((shopId) => !sourceShopIds.includes(shopId)),
@@ -6420,9 +6426,6 @@ export function CatalogPage() {
 
     const sourceShop = sourcePayload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
     let productRefs = sourceShop.articles.map((article) => `${sourceShop.id}:${article.product_id}`);
-    if (!productRefs.length) {
-      return;
-    }
 
     catalogRefreshAbortRef.current?.abort();
     const controller = new AbortController();
@@ -6443,6 +6446,7 @@ export function CatalogPage() {
         signal: controller.signal,
         scope: "shop",
         scopeLabel: `Обновление кабинета: ${shop.name}`,
+        shopIds: [shopId],
         onFastProgress: ({ completed, total, currentLabel }) => {
           setCatalogRefreshProductProgress({
             stage: "fast",
@@ -6454,31 +6458,14 @@ export function CatalogPage() {
           });
         },
       });
-      const knownArticlesByRef = baseRefresh.knownArticlesByRef;
-      const knownTurnoverOrdersByRef = baseRefresh.turnoverOrdersByRef;
-      const knownChartRowsByRef = baseRefresh.absoluteChartRowsByRef;
       productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
       setCatalogRefreshProductProgress({
-        stage: "deep",
+        stage: "fast",
         fastCompleted: baseRefresh.shopCount,
         fastTotal: baseRefresh.shopCount,
-        deepCompleted: 0,
+        deepCompleted: productRefs.length,
         deepTotal: productRefs.length,
         currentLabel: null,
-      });
-
-      await runCatalogDeepRefreshQueue(productRefs, {
-        signal: controller.signal,
-        scope: "shop",
-        scopeLabel: `Обновление кабинета: ${shop.name}`,
-        fastCompleted: baseRefresh.shopCount,
-        fastTotal: baseRefresh.shopCount,
-        knownArticlesByRef,
-        knownTurnoverOrdersByRef,
-        knownChartRowsByRef,
-        campaignChartMode: "deferred",
-        forceDeepDetailsRefresh: false,
-        refreshIssuesBatch: true,
       });
     } catch (error) {
       if (!isAbortError(error) && !controller.signal.aborted) {
@@ -7087,7 +7074,7 @@ export function CatalogPage() {
                     className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
                   >
                     <RefreshCw className={cn("size-4", isShopRefreshing && "animate-spin")} />
-                    Обновить товары
+                    Обновить кабинет
                   </button>
                   <button
                     type="button"
