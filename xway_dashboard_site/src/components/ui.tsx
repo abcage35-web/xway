@@ -435,11 +435,12 @@ export function MetricTable<T>({
         variant === "default"
           ? "table-shell overflow-visible rounded-[28px] border border-[var(--color-line)] bg-white"
           : "table-shell-flat overflow-visible rounded-none border-0 bg-transparent shadow-none",
+        stickyHeader && "metric-table-shell-sticky",
         className,
       )}
     >
       {showStickyHeaderClone ? (
-        <div className="sticky z-20 overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ top: headerStickyTop }}>
+        <div className="metric-table-sticky-header-clone sticky z-[60] overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]" style={{ top: headerStickyTop }}>
           <table
             className="data-table text-sm"
             style={{

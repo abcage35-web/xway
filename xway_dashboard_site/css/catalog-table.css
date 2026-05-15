@@ -16,6 +16,17 @@
   min-width: 0;
 }
 
+.catalog-shop-section .metric-table-shell-sticky {
+  overflow: visible !important;
+  clip-path: none;
+  isolation: auto;
+}
+
+.catalog-shop-section .metric-table-sticky-header-clone {
+  border-radius: 22px 22px 0 0;
+  box-shadow: 0 14px 32px rgba(7, 10, 18, 0.22);
+}
+
 .catalog-table-head,
 .catalog-article-table {
   display: grid;
