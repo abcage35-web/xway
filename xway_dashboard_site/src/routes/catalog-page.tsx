@@ -2628,6 +2628,25 @@ function catalogChartLoadedProductRefs(response: CatalogChartResponse) {
   return new Set((response.product_rows || []).map((product) => product.product_ref));
 }
 
+function catalogChartRowsByProductRef(response: CatalogChartResponse, fallbackRefs: string[] = []) {
+  const rowsByRef = new Map<string, CatalogChartResponse["rows"]>();
+  response.product_rows?.forEach((product) => {
+    rowsByRef.set(product.product_ref, product.rows);
+  });
+  if (!rowsByRef.size && fallbackRefs.length === 1) {
+    rowsByRef.set(fallbackRefs[0]!, response.rows);
+  }
+  return rowsByRef;
+}
+
+function filterCatalogChartRowsForRange(rows: CatalogChartResponse["rows"], start?: string | null, end?: string | null) {
+  if (!start || !end) {
+    return rows;
+  }
+  const selectedRows = rows.filter((row) => row.day >= start && row.day <= end);
+  return selectedRows.length || rows.length === 0 ? selectedRows : rows;
+}
+
 function isCatalogArticleDisabled(article: CatalogArticle | null | undefined) {
   return article?.enabled === false || article?.is_active === false;
 }
@@ -4935,7 +4954,12 @@ export function CatalogPage() {
     }
   };
 
-  const mergeChartResponseForRefs = async (response: CatalogChartResponse, productRefs: string[], progress?: { chunkCount: number; loadedChunkCount: number }) => {
+  const mergeChartResponseForRefs = async (
+    response: CatalogChartResponse,
+    productRefs: string[],
+    progress?: { chunkCount: number; loadedChunkCount: number },
+    updateCampaignTypeTotals = true,
+  ) => {
     const persistedEntry = await readCatalogChartSourceCache(chartSourceCacheKey);
     const persistedBase =
       isCompleteCatalogChartCacheEntry(persistedEntry) &&
@@ -4969,15 +4993,17 @@ export function CatalogPage() {
       return nextResponse;
     });
 
-    const nextTypeTotals: Record<string, CatalogCampaignTypeTotalsByKey> = {};
-    response.product_rows?.forEach((product) => {
-      nextTypeTotals[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
-    });
-    if (!Object.keys(nextTypeTotals).length && productRefs.length === 1) {
-      nextTypeTotals[productRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
-    }
-    if (Object.keys(nextTypeTotals).length) {
-      setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...nextTypeTotals }));
+    if (updateCampaignTypeTotals) {
+      const nextTypeTotals: Record<string, CatalogCampaignTypeTotalsByKey> = {};
+      response.product_rows?.forEach((product) => {
+        nextTypeTotals[product.product_ref] = buildCatalogCampaignTypeTotals(product.rows);
+      });
+      if (!Object.keys(nextTypeTotals).length && productRefs.length === 1) {
+        nextTypeTotals[productRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
+      }
+      if (Object.keys(nextTypeTotals).length) {
+        setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...nextTypeTotals }));
+      }
     }
   };
 
@@ -5011,6 +5037,8 @@ export function CatalogPage() {
       ...[...requestedShopIds].filter((shopId) => !sourceShopIds.includes(shopId)),
     ];
     const knownArticlesByRef = new Map<string, CatalogArticle>();
+    const turnoverOrdersByRef = new Map<string, number | string | null | undefined>();
+    const absoluteChartRowsByRef = new Map<string, CatalogChartResponse["rows"]>();
     const refreshedProductRefs: string[] = [];
 
     for (const shopId of orderedShopIds) {
@@ -5053,6 +5081,110 @@ export function CatalogPage() {
         });
 
         const missingRefs = shopRefs.filter((ref) => !articleOverrides[ref]);
+        if (loadedRefs.length) {
+          const turnoverEnd = selectedRangeEnd;
+          const turnoverStart = shiftIsoDate(turnoverEnd, -2);
+          setCatalogRefreshStep(options.scopeLabel, `${shopName}: оборачиваемость за 3 дня`, shopRefs.length === 1 ? shopRefs[0] : undefined);
+          try {
+            const turnoverCatalog = await fetchCatalog({
+              shopIds: [shopId],
+              start: turnoverStart,
+              end: turnoverEnd,
+              forceRefresh: true,
+              includeAux: false,
+              signal: options.signal,
+            });
+            const responseTurnoverShop = turnoverCatalog.shops.find((shop) => String(shop.id) === shopId);
+            const turnoverOverrides: Record<string, number | string | null | undefined> = {};
+            let turnoverOrdersTotal = 0;
+            responseTurnoverShop?.articles.forEach((article) => {
+              const ref = `${responseTurnoverShop.id}:${article.product_id}`;
+              if (!loadedRefs.includes(ref)) {
+                return;
+              }
+              const value = article.ordered_report ?? 0;
+              turnoverOverrides[ref] = value;
+              turnoverOrdersByRef.set(ref, value);
+              turnoverOrdersTotal += toNumber(value) ?? 0;
+            });
+            loadedRefs.forEach((ref) => {
+              if (!(ref in turnoverOverrides)) {
+                turnoverOverrides[ref] = 0;
+                turnoverOrdersByRef.set(ref, 0);
+              }
+            });
+            if (Object.keys(turnoverOverrides).length) {
+              setTurnoverOrdersOverridesByRef((current) => ({ ...current, ...turnoverOverrides }));
+            }
+            appendCatalogRefreshLogs({
+              status: "success",
+              scope: options.scope,
+              step: "Кабинеты и артикулы: оборачиваемость",
+              message: "Оборачиваемость загружена",
+              detail: `${shopName}: товаров ${formatNumber(Object.keys(turnoverOverrides).length)} · заказов за 3 дня ${formatNumber(turnoverOrdersTotal)}`,
+            });
+          } catch (error) {
+            if (isAbortError(error) || options.signal?.aborted) {
+              throw error;
+            }
+            const message = await readApiErrorMessage(error);
+            appendCatalogRefreshLogs({
+              status: "error",
+              scope: options.scope,
+              step: "Кабинеты и артикулы: оборачиваемость",
+              message: "Оборачиваемость не загрузилась",
+              detail: `${shopName}: ${message}`,
+            });
+          }
+
+          setCatalogRefreshStep(options.scopeLabel, `${shopName}: абсолютные значения`, shopRefs.length === 1 ? shopRefs[0] : undefined);
+          try {
+            const chartResponse = await fetchCatalogChartWorkerSafe({
+              productRefs: loadedRefs,
+              start: chartSourceRangeStart,
+              end: chartSourceRangeEnd,
+              includeCampaignTypes: false,
+              forceRefresh: true,
+              signal: options.signal,
+              selectionCount: loadedRefs.length,
+              chunkSize: CATALOG_CHART_FETCH_CHUNK_SIZE,
+              onWorkerLimit: (limitRefs) => {
+                appendCatalogRefreshLogs({
+                  status: "warning",
+                  scope: options.scope,
+                  step: "Кабинеты и артикулы: абсолютные значения",
+                  message: "Уменьшаем чанк из-за лимита Worker",
+                  detail: `${shopName}: Cloudflare вернул лимит Worker для ${formatNumber(limitRefs.length)} товаров.`,
+                });
+              },
+            });
+            await mergeChartResponseForRefs(chartResponse, loadedRefs, undefined, false);
+            const chartRowsByRef = catalogChartRowsByProductRef(chartResponse, loadedRefs);
+            chartRowsByRef.forEach((rows, ref) => {
+              absoluteChartRowsByRef.set(ref, rows);
+            });
+            const selectedRows = [...chartRowsByRef.values()].flatMap((rows) => filterCatalogChartRowsForRange(rows, selectedRangeStart, selectedRangeEnd));
+            appendCatalogRefreshLogs({
+              status: chartResponse.errors.length ? "warning" : "success",
+              scope: options.scope,
+              step: "Кабинеты и артикулы: абсолютные значения",
+              message: chartResponse.errors.length ? "Абсолютные значения загружены частично" : "Абсолютные значения загружены",
+              detail: `${shopName}: товаров ${formatNumber(chartRowsByRef.size)} · ошибок ${formatNumber(chartResponse.errors.length)} · ${formatCatalogAbsoluteMetricSummary(selectedRows)}`,
+            });
+          } catch (error) {
+            if (isAbortError(error) || options.signal?.aborted) {
+              throw error;
+            }
+            const message = await readApiErrorMessage(error);
+            appendCatalogRefreshLogs({
+              status: "error",
+              scope: options.scope,
+              step: "Кабинеты и артикулы: абсолютные значения",
+              message: "Абсолютные значения не загрузились",
+              detail: `${shopName}: ${message}`,
+            });
+          }
+        }
         if (missingRefs.length) {
           appendCatalogRefreshLogsForRefs(missingRefs, {
             status: "warning",
@@ -5079,6 +5211,8 @@ export function CatalogPage() {
 
     return {
       knownArticlesByRef,
+      turnoverOrdersByRef,
+      absoluteChartRowsByRef,
       productRefs: refreshedProductRefs.length ? [...new Set(refreshedProductRefs)] : refs,
     };
   };
@@ -5093,6 +5227,8 @@ export function CatalogPage() {
       scopeLabel?: string;
       skipCatalogRowRefresh?: boolean;
       knownArticlesByRef?: Map<string, CatalogArticle>;
+      knownTurnoverOrdersByRef?: Map<string, number | string | null | undefined>;
+      knownChartRowsByRef?: Map<string, CatalogChartResponse["rows"]>;
     } = {},
   ) => {
     const refs = [...new Set(productRefs)];
@@ -5209,6 +5345,17 @@ export function CatalogPage() {
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: оборачиваемость за 3 дня`, activityRef);
       for (const ref of refs) {
         currentStepErrorRefs = [ref];
+        if (options.knownTurnoverOrdersByRef?.has(ref)) {
+          const value = options.knownTurnoverOrdersByRef.get(ref);
+          appendCatalogRefreshLogsForRefs([ref], {
+            status: "success",
+            scope,
+            step: "Оборачиваемость",
+            message: "Заказы за 3 дня взяты из пакетной загрузки кабинета",
+            detail: `Заказов за 3 дня: ${formatNumber(value)}`,
+          });
+          continue;
+        }
         try {
           const turnoverCatalog = await fetchCatalog({
             productRefs: [ref],
@@ -5255,6 +5402,23 @@ export function CatalogPage() {
         }
       }
       currentStepErrorRefs = refs;
+
+      const preloadedChartRefs = refs.filter((ref) => options.knownChartRowsByRef?.has(ref));
+      if (preloadedChartRefs.length) {
+        setCatalogRefreshStep(scopeLabel, `${targetLabel}: абсолютные значения`, activityRef);
+        appendCatalogRefreshLogsForRefs(preloadedChartRefs, {
+          status: "success",
+          scope,
+          step: "Абсолютные значения",
+          message: "Взяты из пакетной загрузки кабинета",
+        }, (ref) => {
+          const rows = filterCatalogChartRowsForRange(options.knownChartRowsByRef?.get(ref) ?? [], selectedRangeStart, selectedRangeEnd);
+          return {
+            message: `Загружено дней: ${formatNumber(rows.length)}`,
+            detail: formatCatalogAbsoluteMetricSummary(rows),
+          };
+        });
+      }
 
       if (options.skipCatalogRowRefresh) {
         const detailRefs = refs.filter((ref) => !isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
@@ -5349,13 +5513,26 @@ export function CatalogPage() {
             }
             chartHasCampaignTypeBreakdown = false;
             chartLimitFallbackMessage = await readApiErrorMessage(error);
+            const hasPreloadedAbsoluteChartRows = chartProcessRefs.every((ref) => options.knownChartRowsByRef?.has(ref));
             appendCatalogRefreshLogsForRefs(chartProcessRefs, {
               status: "warning",
               scope,
               step: "Данные РК: графики",
               message: "РК-разбивка не загрузилась",
-              detail: `${chartLimitFallbackMessage} Пробую загрузить обычный график без разбивки по типам РК.`,
+              detail: hasPreloadedAbsoluteChartRows
+                ? `${chartLimitFallbackMessage} Абсолютные значения уже взяты из пакетной загрузки кабинета.`
+                : `${chartLimitFallbackMessage} Пробую загрузить обычный график без разбивки по типам РК.`,
             });
+            if (hasPreloadedAbsoluteChartRows) {
+              appendCatalogRefreshLogsForRefs(chartProcessRefs, {
+                status: "warning",
+                scope,
+                step: "Данные РК: графики",
+                message: "Повторный обычный график пропущен",
+                detail: "Абсолютные значения уже взяты из пакетной загрузки кабинета; повторный запрос без РК-разбивки не нужен.",
+              });
+              continue;
+            }
             chartResponse = await fetchCatalogChartWorkerSafe({
               productRefs: chartProcessRefs,
               start: chartSourceRangeStart,
@@ -5369,36 +5546,32 @@ export function CatalogPage() {
           }
           await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress);
 
-          const chartRowsByRef = new Map<string, CatalogChartResponse["rows"]>();
-          chartResponse.product_rows?.forEach((item) => {
-            chartRowsByRef.set(item.product_ref, item.rows);
-          });
-          if (!chartRowsByRef.size && chartProcessRefs.length === 1) {
-            chartRowsByRef.set(chartProcessRefs[0]!, chartResponse.rows);
-          }
+          const chartRowsByRef = catalogChartRowsByProductRef(chartResponse, chartProcessRefs);
 
           const resolveRowsForRef = (ref: string) => chartRowsByRef.get(ref) ?? [];
           const resolveSelectedRowsForRef = (ref: string) => {
             const rows = resolveRowsForRef(ref);
-            const selectedRows = rows.filter((row) => row.day >= selectedRangeStart && row.day <= selectedRangeEnd);
-            return selectedRows.length || rows.length === 0 ? selectedRows : rows;
+            return filterCatalogChartRowsForRange(rows, selectedRangeStart, selectedRangeEnd);
           };
           const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
           const loadedChartRefs = new Set(chartRowsByRef.keys());
           const loadedRefs = chartProcessRefs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
           if (loadedRefs.length) {
-            appendCatalogRefreshLogsForRefs(loadedRefs, {
-              status: "success",
-              scope,
-              step: "Абсолютные значения",
-              message: "Загружено",
-            }, (ref) => {
-              const rows = resolveSelectedRowsForRef(ref);
-              return {
-                message: `Загружено дней: ${formatNumber(rows.length)}`,
-                detail: formatCatalogAbsoluteMetricSummary(rows),
-              };
-            });
+            const absoluteLoadedRefs = loadedRefs.filter((ref) => !options.knownChartRowsByRef?.has(ref));
+            if (absoluteLoadedRefs.length) {
+              appendCatalogRefreshLogsForRefs(absoluteLoadedRefs, {
+                status: "success",
+                scope,
+                step: "Абсолютные значения",
+                message: "Загружено",
+              }, (ref) => {
+                const rows = resolveSelectedRowsForRef(ref);
+                return {
+                  message: `Загружено дней: ${formatNumber(rows.length)}`,
+                  detail: formatCatalogAbsoluteMetricSummary(rows),
+                };
+              });
+            }
             appendCatalogRefreshLogsForRefs(loadedRefs, {
               status: chartHasCampaignTypeBreakdown ? "success" : "warning",
               scope,
@@ -5566,6 +5739,8 @@ export function CatalogPage() {
         includeAllKnownShops: true,
       });
       const knownArticlesByRef = baseRefresh.knownArticlesByRef;
+      const knownTurnoverOrdersByRef = baseRefresh.turnoverOrdersByRef;
+      const knownChartRowsByRef = baseRefresh.absoluteChartRowsByRef;
       productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
       setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
       setChartProgress({
@@ -5587,6 +5762,8 @@ export function CatalogPage() {
           progress: { chunkCount: productRefs.length, loadedChunkCount: index + 1 },
           skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
           knownArticlesByRef,
+          knownTurnoverOrdersByRef,
+          knownChartRowsByRef,
         });
         setCatalogRefreshProductProgress({ completed: index + 1, total: productRefs.length });
         if (index < productRefs.length - 1) {
@@ -5686,6 +5863,8 @@ export function CatalogPage() {
         scopeLabel: `Обновление кабинета: ${shop.name}`,
       });
       const knownArticlesByRef = baseRefresh.knownArticlesByRef;
+      const knownTurnoverOrdersByRef = baseRefresh.turnoverOrdersByRef;
+      const knownChartRowsByRef = baseRefresh.absoluteChartRowsByRef;
       productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
       setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
 
@@ -5698,6 +5877,8 @@ export function CatalogPage() {
           scopeLabel: `Обновление кабинета: ${shop.name}`,
           skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
           knownArticlesByRef,
+          knownTurnoverOrdersByRef,
+          knownChartRowsByRef,
         });
         setCatalogRefreshProductProgress({ completed: index + 1, total: productRefs.length });
         if (index < productRefs.length - 1) {
