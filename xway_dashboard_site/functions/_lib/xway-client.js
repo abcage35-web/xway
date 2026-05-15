@@ -1,5 +1,7 @@
-import { cloneValue, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, resolveRange, sanitizeOrigin } from "./utils.js";
+import { cloneValue, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, mapWithConcurrency, resolveRange, sanitizeOrigin } from "./utils.js";
 
+const SOURCE_CACHE_VERSION = "v1";
+const SOURCE_CACHE_PREFIX = "xway-source";
 const SHOP_LIST_CACHE_TTL_MS = 120000;
 const SHOP_LISTING_CACHE_TTL_MS = 120000;
 const SHOP_DETAILS_CACHE_TTL_MS = 120000;
@@ -8,7 +10,9 @@ const PRODUCT_STATA_CACHE_TTL_MS = 180000;
 const PRODUCT_INFO_CACHE_TTL_MS = 180000;
 const PRODUCT_DYNAMICS_CACHE_TTL_MS = 180000;
 const PRODUCT_STOCKS_RULE_CACHE_TTL_MS = 180000;
+const CAMPAIGN_DAILY_EXACT_CACHE_TTL_MS = 180000;
 const PRODUCT_DAILY_STATS_CHUNK_DAYS = 30;
+const CAMPAIGN_DAILY_EXACT_CONCURRENCY = 2;
 const XWAY_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const XWAY_REQUEST_MAX_ATTEMPTS = 3;
 const XWAY_REQUEST_RETRY_DELAY_MS = 900;
@@ -22,6 +26,7 @@ const cacheStore = {
   productInfo: new Map(),
   productDynamics: new Map(),
   productStocksRule: new Map(),
+  campaignDailyExact: new Map(),
 };
 
 function getCached(map, key, ttlMs) {
@@ -38,6 +43,25 @@ function getCached(map, key, ttlMs) {
 
 function setCached(map, key, value) {
   map.set(key, { createdAt: Date.now(), value: cloneValue(value) });
+}
+
+function sourceCacheBinding(env) {
+  const cache = env?.XWAY_AI_CACHE;
+  return cache && typeof cache.get === "function" && typeof cache.put === "function" ? cache : null;
+}
+
+function sourceCacheKey(namespace, key) {
+  return `${SOURCE_CACHE_PREFIX}:${SOURCE_CACHE_VERSION}:${namespace}:${key}`;
+}
+
+function unwrapSourceCachePayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "value")) {
+    return payload.value;
+  }
+  return payload;
 }
 
 function wait(ms) {
@@ -330,6 +354,55 @@ export class XwayApiClient {
     return `${this.buildProductReferer(shopId, productId)}/campaign/${campaignId}/new-flow?stat=${start}..${end}`;
   }
 
+  async readSourceCache(map, key, ttlMs) {
+    if (this.forceRefresh) {
+      return null;
+    }
+
+    const memoryCached = getCached(map, key, ttlMs);
+    if (memoryCached) {
+      return memoryCached;
+    }
+
+    const cache = sourceCacheBinding(this.env);
+    if (!cache) {
+      return null;
+    }
+
+    try {
+      const cached = await cache.get(sourceCacheKey(this.cacheNamespace, key), "json");
+      const value = unwrapSourceCachePayload(cached);
+      if (value === null || value === undefined) {
+        return null;
+      }
+      setCached(map, key, value);
+      return cloneValue(value);
+    } catch {
+      return null;
+    }
+  }
+
+  async writeSourceCache(map, key, value) {
+    setCached(map, key, value);
+
+    const cache = sourceCacheBinding(this.env);
+    if (!cache) {
+      return;
+    }
+
+    try {
+      await cache.put(
+        sourceCacheKey(this.cacheNamespace, key),
+        JSON.stringify({
+          created_at: new Date().toISOString(),
+          value,
+        }),
+      );
+    } catch {
+      // Source cache is an optimization only. A KV write failure must not fail the data load.
+    }
+  }
+
   async requestJson(pathname, { method = "GET", referer = null, params = null, csrf = false, body = null, json = null, extraHeaders = {} } = {}) {
     const url = new URL(pathname, this.baseOrigin);
     if (params) {
@@ -371,31 +444,31 @@ export class XwayApiClient {
 
   async listShops() {
     const cacheKey = `${this.cacheNamespace}:shops`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.shopList, cacheKey, SHOP_LIST_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.shopList, cacheKey, SHOP_LIST_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
     const payload = await this.requestJson("/api/adv/shop/list", { params: { query: "" } });
-    setCached(cacheStore.shopList, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.shopList, cacheKey, payload);
     return payload;
   }
 
   async shopDetails(shopId) {
     const cacheKey = `${this.cacheNamespace}:shop-details:${shopId}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.shopDetails, cacheKey, SHOP_DETAILS_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.shopDetails, cacheKey, SHOP_DETAILS_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
     const payload = await this.requestJson(`/api/adv/shop/${shopId}`, {
       referer: `${this.baseOrigin}/wb/shop/${shopId}`,
     });
-    setCached(cacheStore.shopDetails, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.shopDetails, cacheKey, payload);
     return payload;
   }
 
   async shopListing(shopId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:shop-listing:${shopId}:${start}:${end}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.shopListing, cacheKey, SHOP_LISTING_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.shopListing, cacheKey, SHOP_LISTING_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -419,7 +492,7 @@ export class XwayApiClient {
       list_wo: listWoResult.status === "fulfilled" ? listWoResult.value : { products_wb: [] },
       list_stat: listStatResult.status === "fulfilled" ? listStatResult.value : { products_wb: {} },
     };
-    setCached(cacheStore.shopListing, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.shopListing, cacheKey, payload);
     return payload;
   }
 
@@ -459,20 +532,20 @@ export class XwayApiClient {
 
   async productInfo(shopId, productId) {
     const cacheKey = `${this.cacheNamespace}:product-info:${shopId}:${productId}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.productInfo, cacheKey, PRODUCT_INFO_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.productInfo, cacheKey, PRODUCT_INFO_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
     const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/info`, {
       referer: this.buildProductReferer(shopId, productId),
     });
-    setCached(cacheStore.productInfo, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.productInfo, cacheKey, payload);
     return payload;
   }
 
   async productDynamics(shopId, productId) {
     const cacheKey = `${this.cacheNamespace}:product-dynamics:${shopId}:${productId}:${this.range.current_start}:${this.range.current_end}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.productDynamics, cacheKey, PRODUCT_DYNAMICS_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.productDynamics, cacheKey, PRODUCT_DYNAMICS_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -486,26 +559,26 @@ export class XwayApiClient {
         is_active: 0,
       },
     });
-    setCached(cacheStore.productDynamics, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.productDynamics, cacheKey, payload);
     return payload;
   }
 
   async productStocksRule(shopId, productId) {
     const cacheKey = `${this.cacheNamespace}:product-stocks-rule:${shopId}:${productId}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.productStocksRule, cacheKey, PRODUCT_STOCKS_RULE_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.productStocksRule, cacheKey, PRODUCT_STOCKS_RULE_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
     const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/stocks-rule`, {
       referer: this.buildProductReferer(shopId, productId),
     });
-    setCached(cacheStore.productStocksRule, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.productStocksRule, cacheKey, payload);
     return payload;
   }
 
   async productStataRange(shopId, productId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:product-stata:${shopId}:${productId}:${start}:${end}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.productStata, cacheKey, PRODUCT_STATA_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.productStata, cacheKey, PRODUCT_STATA_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -519,7 +592,7 @@ export class XwayApiClient {
         active_camps: 1,
       },
     });
-    setCached(cacheStore.productStata, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.productStata, cacheKey, payload);
     return payload;
   }
 
@@ -529,7 +602,7 @@ export class XwayApiClient {
 
   async productStatsByDay(shopId, productId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:product-stats:${shopId}:${productId}:${start}:${end}`;
-    const cached = this.forceRefresh ? null : getCached(cacheStore.productDailyStats, cacheKey, PRODUCT_DAILY_STATS_CACHE_TTL_MS);
+    const cached = await this.readSourceCache(cacheStore.productDailyStats, cacheKey, PRODUCT_DAILY_STATS_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -546,7 +619,7 @@ export class XwayApiClient {
         }
       }
       const payload = [...rowsByDay.values()].sort((left, right) => String(left.day || "").localeCompare(String(right.day || "")));
-      setCached(cacheStore.productDailyStats, cacheKey, payload);
+      await this.writeSourceCache(cacheStore.productDailyStats, cacheKey, payload);
       return payload;
     }
     const range = ranges[0] || { start, end };
@@ -554,27 +627,46 @@ export class XwayApiClient {
       referer: buildStatDynReferer(this.buildProductReferer(shopId, productId), range.start, range.end),
       params: { start: range.start, end: range.end },
     });
-    setCached(cacheStore.productDailyStats, cacheKey, payload);
+    await this.writeSourceCache(cacheStore.productDailyStats, cacheKey, payload);
     return payload;
   }
 
   async campaignDailyExact(shopId, productId, campaignIds, start = this.range.current_start, end = this.range.current_end) {
-    const normalizedIds = [...new Set((campaignIds || []).map((campaignId) => String(campaignId || "").trim()).filter(Boolean))];
+    const normalizedIds = [...new Set((campaignIds || []).map((campaignId) => String(campaignId || "").trim()).filter(Boolean))].sort();
     const result = Object.fromEntries(normalizedIds.map((campaignId) => [campaignId, []]));
     if (!normalizedIds.length) {
       return result;
+    }
+    const cacheKey = `${this.cacheNamespace}:campaign-daily-exact:${shopId}:${productId}:${normalizedIds.join(",")}:${start}:${end}`;
+    const cached = await this.readSourceCache(cacheStore.campaignDailyExact, cacheKey, CAMPAIGN_DAILY_EXACT_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
     }
     const days = [];
     for (let dayCursor = new Date(`${start}T00:00:00Z`); dayCursor <= new Date(`${end}T00:00:00Z`); dayCursor = new Date(dayCursor.getTime() + 86400000)) {
       days.push(dayCursor.toISOString().slice(0, 10));
     }
-    const dayPayloads = await Promise.all(
-      days.map(async (day) => ({
-        day,
-        stata: await this.productStataRange(shopId, productId, day, day),
-      })),
-    );
+    const dayPayloads = await mapWithConcurrency(days, CAMPAIGN_DAILY_EXACT_CONCURRENCY, async (day) => {
+      try {
+        return {
+          day,
+          stata: await this.productStataRange(shopId, productId, day, day),
+          error: null,
+        };
+      } catch (error) {
+        return {
+          day,
+          stata: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+    const errors = [];
     for (const { day, stata } of dayPayloads) {
+      if (!stata) {
+        errors.push(day);
+        continue;
+      }
       const campaignMap = new Map(
         (stata?.campaign_wb || [])
           .filter((campaign) => campaign?.id !== null && campaign?.id !== undefined)
@@ -600,6 +692,15 @@ export class XwayApiClient {
           CPO_with_rel: stat.CPO_with_rel ?? null,
         });
       }
+    }
+    if (errors.length) {
+      Object.defineProperty(result, "__missing_days", {
+        value: errors,
+        enumerable: false,
+      });
+    }
+    if (!errors.length) {
+      await this.writeSourceCache(cacheStore.campaignDailyExact, cacheKey, result);
     }
     return result;
   }

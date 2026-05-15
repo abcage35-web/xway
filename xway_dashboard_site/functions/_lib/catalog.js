@@ -81,6 +81,10 @@ const SHOP_STAT_SAFE_FIELDS = [
   "spend_limits",
   "dispatcher_enabled",
 ];
+const CATALOG_SHOP_FETCH_CONCURRENCY = 2;
+const CATALOG_PRODUCT_AUX_CONCURRENCY = 2;
+const CATALOG_CHART_PRODUCT_CONCURRENCY = 4;
+const CATALOG_CHART_CAMPAIGN_TYPE_CONCURRENCY = 2;
 const CATALOG_CHART_CAMPAIGN_TYPE_META = {
   "cpm-manual": { label: "CPM · Ручная", color: "#2ea36f", order: 1 },
   "cpm-unified": { label: "CPM · Единая", color: "#4b7bff", order: 2 },
@@ -715,7 +719,7 @@ async function collectCatalogBestOrderTimes(shopId, products, statMap, client) {
   const bestTimeByProductId = new Map();
   let errorCount = 0;
 
-  await mapWithConcurrency(targets, 4, async (product) => {
+  await mapWithConcurrency(targets, CATALOG_PRODUCT_AUX_CONCURRENCY, async (product) => {
     try {
       const productId = product.id;
       const payload = await client.productOrdersHeatMap(shopId, productId);
@@ -739,7 +743,7 @@ async function collectCatalogCampaignDetailSources(shopId, products, statMap, cl
   const detailByProductId = new Map();
   let errorCount = 0;
 
-  await mapWithConcurrency(targets, 4, async (product) => {
+  await mapWithConcurrency(targets, CATALOG_PRODUCT_AUX_CONCURRENCY, async (product) => {
     try {
       const productId = product.id;
       const stata = await client.productStata(shopId, productId);
@@ -947,7 +951,7 @@ export async function collectCatalog(env, { start = null, end = null, mode = "co
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const refsByShop = catalogProductRefsByShop(productRefs);
   const shops = (await client.listShops()).filter((shop) => !refsByShop.size || refsByShop.has(Number(shop?.id)));
-  const catalogShops = await mapWithConcurrency(shops, 4, (shop) =>
+  const catalogShops = await mapWithConcurrency(shops, CATALOG_SHOP_FETCH_CONCURRENCY, (shop) =>
     collectShopCatalog(shop, client, includeExtended, refsByShop.get(Number(shop?.id)) || null),
   );
 
@@ -1108,7 +1112,7 @@ export async function collectCatalogChart(env, { productRefs = [], start = null,
   const productRows = [];
   const errors = [];
 
-  await mapWithConcurrency(parsedRefs, 6, async ([shopId, productId]) => {
+  await mapWithConcurrency(parsedRefs, includeCampaignTypes ? CATALOG_CHART_CAMPAIGN_TYPE_CONCURRENCY : CATALOG_CHART_PRODUCT_CONCURRENCY, async ([shopId, productId]) => {
     const productRef = `${shopId}:${productId}`;
     try {
       const rows = await client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end);

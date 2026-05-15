@@ -27,6 +27,10 @@ const DAILY_SUM_FIELDS = [
 ];
 
 const PRODUCTS_CACHE_TTL_MS = 180000;
+const PRODUCT_AUX_CONCURRENCY = 2;
+const PRODUCT_HEAVY_CAMPAIGN_CONCURRENCY = 2;
+const PRODUCT_CLUSTER_HISTORY_CONCURRENCY = 2;
+const PRODUCT_ARTICLE_FETCH_CONCURRENCY = 2;
 const productsCache = new Map();
 
 const CATALOG_CAMPAIGN_FIELD_ORDER = ["unified", "manual_search", "manual_recom", "cpc"];
@@ -966,7 +970,7 @@ async function collectCampaignHeavyPayload(client, shopId, productId, campaignId
       status_pause: [() => client.campaignStatusPauseHistoryFull(shopId, productId, campaignId, { initialLimit: 120, targetStart: campaignHistoryStart }), {}],
       cluster_stats: [() => client.campaignNormqueryStats(shopId, productId, campaignId), {}],
     },
-    6,
+    3,
   );
 
   const clusterStatsPayload = primaryValues.cluster_stats || {};
@@ -989,7 +993,7 @@ async function collectCampaignHeavyPayload(client, shopId, productId, campaignId
         cluster_additional: [() => client.campaignAdditionalStatsForNormqueries(shopId, productId, campaignId, clusterIds, additionalStatsStart(client.range), client.range.current_end), {}],
         cluster_history: [
           async () => {
-            const entries = await mapWithConcurrency(clusterIds, 4, async (normqueryId) => {
+            const entries = await mapWithConcurrency(clusterIds, PRODUCT_CLUSTER_HISTORY_CONCURRENCY, async (normqueryId) => {
               const [history] = await safeCall(() => client.campaignNormqueryHistory(shopId, productId, campaignId, normqueryId), []);
               return [String(normqueryId), history || []];
             });
@@ -1086,10 +1090,10 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
     orders_heatmap: [() => client.productOrdersHeatMap(shopId, productId), {}],
   };
 
-  const auxPromise = runParallelSafeCalls(auxTasks, 4);
+  const auxPromise = runParallelSafeCalls(auxTasks, PRODUCT_AUX_CONCURRENCY);
   const heavyPayloadEntries = await mapWithConcurrency(
     heavyCampaignIds,
-    Math.min(4, Math.max(heavyCampaignIds.length, 1)),
+    Math.min(PRODUCT_HEAVY_CAMPAIGN_CONCURRENCY, Math.max(heavyCampaignIds.length, 1)),
     async (campaignId) => {
       try {
         const payload = await collectCampaignHeavyPayload(client, shopId, productId, Number(campaignId), campaignHistoryStarts[String(campaignId)] || null);
@@ -1251,7 +1255,7 @@ export async function collectProducts(env, { articles = [], start = null, end = 
   const productsByArticle = Object.fromEntries(
     await mapWithConcurrency(
       pendingArticles,
-      Math.min(4, Math.max(pendingArticles.length, 1)),
+      Math.min(PRODUCT_ARTICLE_FETCH_CONCURRENCY, Math.max(pendingArticles.length, 1)),
       async (article) => [article, await collectSingleArticle(env, article, found[article], client.range.current_start, client.range.current_end, normalizedMode, requestedHeavyIds)],
     ),
   );

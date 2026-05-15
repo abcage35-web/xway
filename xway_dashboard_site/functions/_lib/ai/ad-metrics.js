@@ -296,7 +296,9 @@ function retryChunkSize(initialChunkSize, round) {
 }
 
 async function collectChartWithRetries(context, productRefs, range, includeCampaignTypes, forceRefresh, options = {}) {
-  const initialChunkSize = clampInteger(options.chunkSize, DEFAULT_CHART_CHUNK_SIZE, 1, 25);
+  const defaultChunkSize = includeCampaignTypes ? 4 : DEFAULT_CHART_CHUNK_SIZE;
+  const maxChunkSize = includeCampaignTypes ? 8 : 25;
+  const initialChunkSize = clampInteger(options.chunkSize, defaultChunkSize, 1, maxChunkSize);
   const retryFailed = options.retryFailed !== false;
   const maxRetryRounds = retryFailed ? clampInteger(options.maxRetryRounds, DEFAULT_RETRY_ROUNDS, 0, 5) : 0;
   const retryDelayMs = clampInteger(options.retryDelayMs, DEFAULT_RETRY_DELAY_MS, 0, 1500);

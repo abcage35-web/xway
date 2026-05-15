@@ -319,7 +319,6 @@ export async function fetchCatalogChart(options: {
     {
       namespace: "catalog-chart",
       bypassRead: options.forceRefresh,
-      shouldWrite: (response) => !response.errors.length,
     },
   );
 }

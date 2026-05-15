@@ -84,7 +84,7 @@ Optional shared cache:
 XWAY_AI_CACHE=<Cloudflare KV namespace binding>
 ```
 
-If the KV binding exists, `/api/ai/recommendation-data` returns cached article analytics for the same article and date range. `/api/ai/refresh-article` bypasses and overwrites that cache.
+If the KV binding exists, `/api/ai/recommendation-data` returns cached article analytics for the same article and date range. The same KV namespace also stores reusable XWAY source responses such as shop listings, product stats, `stata` payloads and campaign daily slices. `/api/ai/refresh-article`, `/api/catalog?refresh=1`, `/api/catalog-chart?refresh=1` and `/api/products?force_refresh=1` bypass source-cache reads and overwrite fresh data.
 
 ## Custom GPT setup
 

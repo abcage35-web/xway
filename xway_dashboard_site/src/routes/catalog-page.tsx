@@ -2458,7 +2458,7 @@ function catalogChartLoadedProductRefs(response: CatalogChartResponse) {
 }
 
 function isWorkerSubrequestLimitMessage(message: string) {
-  return /too many subrequests/i.test(message);
+  return /too many subrequests|worker exceeded resource limits|cloudflare:\s*worker exceeded resource limits|\b1102\b/i.test(message);
 }
 
 function catalogChartWorkerSubrequestLimitRefs(response: CatalogChartResponse | null, availableRefs?: Set<string>) {

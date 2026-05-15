@@ -20,5 +20,5 @@
   // - OPENAI_MODEL: optional model override for /api/ai/chat
   // - MPVIBE_REFRESH_COOKIE_HEADER, MPVIBE_COOKIE_HEADER, or MPVIBE_AUTHORIZATION: optional MPVibe data source for AI analytics
   // - WB_FEEDBACK_ROOTS_JSON: optional article -> WB feedback root id mapping
-  // - XWAY_AI_CACHE: optional KV namespace binding for shared AI response cache
+  // - XWAY_AI_CACHE: optional KV namespace binding for shared AI response cache, MPVibe token cache, and XWAY source cache
 }
