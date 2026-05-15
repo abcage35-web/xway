@@ -119,6 +119,7 @@ const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_CHART_FETCH_CHUNK_SIZE = 24;
 const CATALOG_REFRESH_CAMPAIGN_PROCESS_SIZE = 1;
+const CATALOG_DEEP_REFRESH_CONCURRENCY = 3;
 const CATALOG_SOURCE_WINDOW_DAYS = 30;
 const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
@@ -5856,6 +5857,107 @@ export function CatalogPage() {
     }
   };
 
+  const runCatalogDeepRefreshQueue = async (
+    productRefs: string[],
+    options: {
+      signal: AbortSignal;
+      scope: CatalogRefreshLogScope;
+      scopeLabel: string;
+      fastCompleted: number;
+      fastTotal: number;
+      knownArticlesByRef: Map<string, CatalogArticle>;
+      knownTurnoverOrdersByRef: Map<string, number | string | null | undefined>;
+      knownChartRowsByRef: Map<string, CatalogChartResponse["rows"]>;
+      updateChartProgress?: boolean;
+    },
+  ) => {
+    const refs = [...new Set(productRefs)];
+    const total = refs.length;
+    const activeLabelsByRef = new Map<string, string>();
+    let nextIndex = 0;
+    let completedCount = 0;
+
+    const formatActiveLabel = () => {
+      const labels = [...activeLabelsByRef.values()];
+      if (!labels.length) {
+        return null;
+      }
+      return `В работе ${formatNumber(labels.length)}: ${labels.slice(0, CATALOG_DEEP_REFRESH_CONCURRENCY).join(" · ")}`;
+    };
+
+    const syncDeepProgress = () => {
+      setCatalogRefreshProductProgress({
+        stage: "deep",
+        fastCompleted: options.fastCompleted,
+        fastTotal: options.fastTotal,
+        deepCompleted: completedCount,
+        deepTotal: total,
+        currentLabel: formatActiveLabel(),
+      });
+      if (options.updateChartProgress) {
+        setChartProgress((current) =>
+          current
+            ? {
+                ...current,
+                chunkCount: total,
+                loadedChunkCount: Math.max(current.loadedChunkCount, completedCount),
+              }
+            : current,
+        );
+      }
+    };
+
+    const runWorker = async () => {
+      while (nextIndex < total) {
+        if (options.signal.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        const index = nextIndex;
+        nextIndex += 1;
+        const productRef = refs[index]!;
+        let completed = false;
+        activeLabelsByRef.set(productRef, resolveCatalogRefreshProductLabel(productRef));
+        syncDeepProgress();
+
+        try {
+          await refreshCatalogProductRefs([productRef], {
+            refreshIssues: true,
+            signal: options.signal,
+            scope: options.scope,
+            scopeLabel: options.scopeLabel,
+            progress: options.updateChartProgress
+              ? {
+                  chunkCount: total,
+                  loadedChunkCount: Math.min(total, completedCount + activeLabelsByRef.size),
+                }
+              : undefined,
+            skipCatalogRowRefresh: options.knownArticlesByRef.has(productRef),
+            knownArticlesByRef: options.knownArticlesByRef,
+            knownTurnoverOrdersByRef: options.knownTurnoverOrdersByRef,
+            knownChartRowsByRef: options.knownChartRowsByRef,
+            mode: "deep",
+          });
+          completed = true;
+        } finally {
+          activeLabelsByRef.delete(productRef);
+          if (completed) {
+            completedCount += 1;
+          }
+          syncDeepProgress();
+        }
+
+        if (nextIndex < total) {
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, options.signal);
+        }
+      }
+    };
+
+    syncDeepProgress();
+    await Promise.all(
+      Array.from({ length: Math.min(CATALOG_DEEP_REFRESH_CONCURRENCY, total) }, () => runWorker()),
+    );
+  };
+
   const handleRefreshAllCatalog = async () => {
     if (refreshingAllCatalog || refreshingShopIds.length) {
       return;
@@ -5941,41 +6043,17 @@ export function CatalogPage() {
         errorCount: 0,
       });
 
-      for (let index = 0; index < productRefs.length; index += 1) {
-        const productRef = productRefs[index]!;
-        const productLabel = resolveCatalogRefreshProductLabel(productRef);
-        setCatalogRefreshProductProgress({
-          stage: "deep",
-          fastCompleted: baseRefresh.shopCount,
-          fastTotal: baseRefresh.shopCount,
-          deepCompleted: index,
-          deepTotal: productRefs.length,
-          currentLabel: productLabel,
-        });
-        await refreshCatalogProductRefs([productRef], {
-          refreshIssues: true,
-          signal: controller.signal,
-          scope: "catalog",
-          scopeLabel: "Обновление всех товаров",
-          progress: { chunkCount: productRefs.length, loadedChunkCount: index + 1 },
-          skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
-          knownArticlesByRef,
-          knownTurnoverOrdersByRef,
-          knownChartRowsByRef,
-          mode: "deep",
-        });
-        setCatalogRefreshProductProgress({
-          stage: "deep",
-          fastCompleted: baseRefresh.shopCount,
-          fastTotal: baseRefresh.shopCount,
-          deepCompleted: index + 1,
-          deepTotal: productRefs.length,
-          currentLabel: productLabel,
-        });
-        if (index < productRefs.length - 1) {
-          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
-        }
-      }
+      await runCatalogDeepRefreshQueue(productRefs, {
+        signal: controller.signal,
+        scope: "catalog",
+        scopeLabel: "Обновление всех товаров",
+        fastCompleted: baseRefresh.shopCount,
+        fastTotal: baseRefresh.shopCount,
+        knownArticlesByRef,
+        knownTurnoverOrdersByRef,
+        knownChartRowsByRef,
+        updateChartProgress: true,
+      });
     } catch (error) {
       if (!isAbortError(error) && !controller.signal.aborted) {
         setCatalogRefreshError(await readApiErrorMessage(error));
@@ -6098,40 +6176,16 @@ export function CatalogPage() {
         currentLabel: null,
       });
 
-      for (let index = 0; index < productRefs.length; index += 1) {
-        const productRef = productRefs[index]!;
-        const productLabel = resolveCatalogRefreshProductLabel(productRef);
-        setCatalogRefreshProductProgress({
-          stage: "deep",
-          fastCompleted: baseRefresh.shopCount,
-          fastTotal: baseRefresh.shopCount,
-          deepCompleted: index,
-          deepTotal: productRefs.length,
-          currentLabel: productLabel,
-        });
-        await refreshCatalogProductRefs([productRef], {
-          refreshIssues: true,
-          signal: controller.signal,
-          scope: "shop",
-          scopeLabel: `Обновление кабинета: ${shop.name}`,
-          skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
-          knownArticlesByRef,
-          knownTurnoverOrdersByRef,
-          knownChartRowsByRef,
-          mode: "deep",
-        });
-        setCatalogRefreshProductProgress({
-          stage: "deep",
-          fastCompleted: baseRefresh.shopCount,
-          fastTotal: baseRefresh.shopCount,
-          deepCompleted: index + 1,
-          deepTotal: productRefs.length,
-          currentLabel: productLabel,
-        });
-        if (index < productRefs.length - 1) {
-          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
-        }
-      }
+      await runCatalogDeepRefreshQueue(productRefs, {
+        signal: controller.signal,
+        scope: "shop",
+        scopeLabel: `Обновление кабинета: ${shop.name}`,
+        fastCompleted: baseRefresh.shopCount,
+        fastTotal: baseRefresh.shopCount,
+        knownArticlesByRef,
+        knownTurnoverOrdersByRef,
+        knownChartRowsByRef,
+      });
     } catch (error) {
       if (!isAbortError(error) && !controller.signal.aborted) {
         setCatalogRefreshError(await readApiErrorMessage(error));
