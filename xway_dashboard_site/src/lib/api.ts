@@ -2,7 +2,7 @@ import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignStat
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
-const API_RESPONSE_CACHE_VERSION = "v3";
+const API_RESPONSE_CACHE_VERSION = "v4";
 
 function buildBaseUrl(request?: Request) {
   if (request) {
@@ -100,7 +100,15 @@ function sumCatalogArticles(shops: CatalogResponse["shops"]) {
 
 const CATALOG_CAMPAIGN_DETAIL_FIELDS: Array<keyof Pick<
   CatalogCampaignState,
-  "budget_limit" | "budget_spent_today" | "budget_rule_active" | "spend_limit" | "spend_spent_today" | "spend_limit_active"
+  | "budget_limit"
+  | "budget_spent_today"
+  | "budget_rule_active"
+  | "spend_limit"
+  | "spend_spent_today"
+  | "spend_limit_active"
+  | "schedule_active"
+  | "schedule_active_slots"
+  | "schedule_total_slots"
 >> = [
   "budget_limit",
   "budget_spent_today",
@@ -108,6 +116,9 @@ const CATALOG_CAMPAIGN_DETAIL_FIELDS: Array<keyof Pick<
   "spend_limit",
   "spend_spent_today",
   "spend_limit_active",
+  "schedule_active",
+  "schedule_active_slots",
+  "schedule_total_slots",
 ];
 
 function hasKnownCatalogCampaignDetailValue(value: unknown) {

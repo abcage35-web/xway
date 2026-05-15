@@ -285,9 +285,9 @@
 
 .catalog-campaign-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(214px, 1fr));
+  grid-template-columns: repeat(3, minmax(232px, 1fr));
   gap: 8px;
-  min-width: 660px;
+  min-width: 720px;
 }
 
 .catalog-campaign-type-header {
@@ -496,7 +496,7 @@
 
 .catalog-campaign-limit-chips {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   min-width: 0;
 }
@@ -527,9 +527,17 @@
   --campaign-limit-chip-color: #3e9d69;
 }
 
+.catalog-campaign-limit-chip.is-schedule {
+  --campaign-limit-chip-color: #8b64f6;
+}
+
 .catalog-campaign-limit-chip.is-active {
   background: color-mix(in srgb, var(--campaign-limit-chip-color, var(--muted)) 21%, transparent);
   border-color: color-mix(in srgb, var(--campaign-limit-chip-color, var(--muted)) 42%, transparent);
+}
+
+.catalog-campaign-limit-chip.is-off {
+  --campaign-limit-chip-color: var(--muted);
 }
 
 .catalog-campaign-limit-chip.is-empty {
@@ -550,7 +558,7 @@
 
 .catalog-campaign-limit-chip > strong {
   flex: 1 1 auto;
-  max-width: 46px;
+  max-width: 58px;
   color: currentColor;
   font-size: inherit;
   text-align: right;

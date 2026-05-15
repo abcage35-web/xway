@@ -2,6 +2,8 @@ import { XwayApiClient } from "./xway-client.js";
 import { asFloat, cloneValue, formatDay, iterIsoDays, mapWithConcurrency, parseCatalogChartProductRefs } from "./utils.js";
 
 const CATALOG_CAMPAIGN_FIELD_ORDER = ["unified", "manual_search", "manual_recom", "cpc"];
+const CATALOG_SCHEDULE_WEEKDAY_KEYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const CATALOG_SCHEDULE_TOTAL_SLOTS = 168;
 const CATALOG_CAMPAIGN_FIELD_META = {
   unified: { label: "Единая ставка", short_label: "Ед. CPM" },
   manual_search: { label: "Поиск", short_label: "CPM Поиск" },
@@ -143,6 +145,84 @@ function numberOrNull(value) {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeCatalogSchedule(schedulePayload) {
+  const payload = schedulePayload || {};
+  const rawSchedule = payload.schedule || {};
+  let activeSlots = 0;
+  const hoursByDay = {};
+  for (const dayKey of CATALOG_SCHEDULE_WEEKDAY_KEYS) {
+    const activeHours = [
+      ...new Set(
+        (rawSchedule[dayKey] || [])
+          .filter((hour) => hour !== null && hour !== undefined)
+          .map((hour) => Number(hour))
+          .filter(Number.isFinite),
+      ),
+    ].sort((left, right) => left - right);
+    activeSlots += activeHours.length;
+    hoursByDay[dayKey] = activeHours;
+  }
+
+  return {
+    schedule_active: Boolean(payload.schedule_active),
+    active_slots: activeSlots,
+    hours_by_day: hoursByDay,
+  };
+}
+
+function readCatalogCampaignScheduleConfig(source) {
+  const schedule = source?.schedule_config;
+  if (schedule && typeof schedule === "object") {
+    return {
+      known: true,
+      active: Boolean(schedule.schedule_active),
+      activeSlots: numberOrNull(schedule.active_slots),
+      totalSlots: CATALOG_SCHEDULE_TOTAL_SLOTS,
+    };
+  }
+  if (source && Object.prototype.hasOwnProperty.call(source, "schedule_active")) {
+    return {
+      known: true,
+      active: Boolean(source.schedule_active),
+      activeSlots: Boolean(source.schedule_active) ? null : 0,
+      totalSlots: CATALOG_SCHEDULE_TOTAL_SLOTS,
+    };
+  }
+  return {
+    known: false,
+    active: null,
+    activeSlots: null,
+    totalSlots: null,
+  };
+}
+
+function normalizeCatalogCampaignScheduleSummary(campaigns) {
+  const schedules = (campaigns || []).map(readCatalogCampaignScheduleConfig).filter((schedule) => schedule.known);
+  if (!schedules.length) {
+    return {
+      schedule_active: null,
+      schedule_active_slots: null,
+      schedule_total_slots: null,
+    };
+  }
+
+  const activeSchedules = schedules.filter((schedule) => schedule.active);
+  if (!activeSchedules.length) {
+    return {
+      schedule_active: false,
+      schedule_active_slots: 0,
+      schedule_total_slots: schedules.length * CATALOG_SCHEDULE_TOTAL_SLOTS,
+    };
+  }
+
+  const activeSlotValues = activeSchedules.map((schedule) => schedule.activeSlots).filter((value) => value !== null && value !== undefined);
+  return {
+    schedule_active: true,
+    schedule_active_slots: activeSlotValues.length === activeSchedules.length ? activeSlotValues.reduce((sum, value) => sum + value, 0) : null,
+    schedule_total_slots: activeSchedules.reduce((sum, schedule) => sum + (schedule.totalSlots || CATALOG_SCHEDULE_TOTAL_SLOTS), 0),
+  };
 }
 
 function firstNumber(...values) {
@@ -580,6 +660,7 @@ export function normalizeCatalogCampaignStates(raw, extraSources = []) {
       continue;
     }
     const meta = CATALOG_CAMPAIGN_FIELD_META[key] || {};
+    const scheduleSummary = normalizeCatalogCampaignScheduleSummary(campaigns);
     rows.push({
       key,
       label: meta.label || key,
@@ -588,6 +669,7 @@ export function normalizeCatalogCampaignStates(raw, extraSources = []) {
       status_label: catalogCampaignStatusLabel(normalizedCode),
       active: normalizedCode === "ACTIVE",
       ...normalizeCatalogCampaignLimitSummary(payload[key], campaigns),
+      ...scheduleSummary,
     });
   }
   return rows;
@@ -1007,6 +1089,75 @@ function catalogErrorMessage(error) {
   return String(error?.message || error || "Unknown error");
 }
 
+function catalogCampaignId(campaign) {
+  const value = campaign?.id ?? campaign?.campaign_id ?? campaign?.external_id ?? campaign?.wb_id;
+  const numeric = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+async function enrichCatalogCampaignsWithSchedules(client, shopId, productId, campaigns) {
+  const scheduleTargets = (campaigns || [])
+    .map((campaign) => ({ campaign, campaignId: catalogCampaignId(campaign) }))
+    .filter(({ campaign, campaignId }) => campaignId !== null && Boolean(campaign?.schedule_active));
+  if (!scheduleTargets.length) {
+    return {
+      campaigns: (campaigns || []).map((campaign) =>
+        Object.prototype.hasOwnProperty.call(campaign || {}, "schedule_active")
+          ? {
+              ...campaign,
+              schedule_config: {
+                schedule_active: Boolean(campaign?.schedule_active),
+                active_slots: Boolean(campaign?.schedule_active) ? null : 0,
+                hours_by_day: {},
+              },
+            }
+          : campaign,
+      ),
+      errors: [],
+    };
+  }
+
+  const scheduleResults = await mapWithConcurrency(scheduleTargets, 2, async ({ campaignId }) => {
+    try {
+      return {
+        campaignId,
+        schedule: normalizeCatalogSchedule(await client.campaignSchedule(shopId, productId, campaignId)),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        campaignId,
+        schedule: null,
+        error: catalogErrorMessage(error),
+      };
+    }
+  });
+  const scheduleById = new Map(scheduleResults.filter((result) => result.schedule).map((result) => [String(result.campaignId), result.schedule]));
+  const errors = scheduleResults.filter((result) => result.error).map((result) => `РК ${result.campaignId}: ${result.error}`);
+
+  return {
+    campaigns: (campaigns || []).map((campaign) => {
+      const campaignId = catalogCampaignId(campaign);
+      const schedule = campaignId !== null ? scheduleById.get(String(campaignId)) : null;
+      if (schedule) {
+        return { ...campaign, schedule_config: schedule };
+      }
+      if (Object.prototype.hasOwnProperty.call(campaign || {}, "schedule_active")) {
+        return {
+          ...campaign,
+          schedule_config: {
+            schedule_active: Boolean(campaign?.schedule_active),
+            active_slots: Boolean(campaign?.schedule_active) ? null : 0,
+            hours_by_day: {},
+          },
+        };
+      }
+      return campaign;
+    }),
+    errors,
+  };
+}
+
 function catalogShopIdSet(shopIds = []) {
   return new Set(
     (shopIds || [])
@@ -1108,8 +1259,13 @@ export async function collectCatalogProductDetails(
     if (includeCampaignDetails) {
       if (stataResult.status === "fulfilled") {
         const campaigns = Array.isArray(stataResult.value?.campaign_wb) ? stataResult.value.campaign_wb : [];
-        campaignStates = normalizeCatalogCampaignStates({}, [{ campaign_wb: campaigns }]);
-        campaignTypeTotals = buildCatalogCampaignTypeTotalsFromCampaigns(campaigns);
+        const scheduleResult = await enrichCatalogCampaignsWithSchedules(client, shopId, productId, campaigns);
+        if (scheduleResult.errors.length) {
+          rowErrors.campaign_schedule = scheduleResult.errors.join("; ");
+          errors.push({ product: productRef, source: "campaign_schedule", error: rowErrors.campaign_schedule });
+        }
+        campaignStates = normalizeCatalogCampaignStates({}, [{ campaign_wb: scheduleResult.campaigns }]);
+        campaignTypeTotals = buildCatalogCampaignTypeTotalsFromCampaigns(scheduleResult.campaigns);
       } else {
         rowErrors.campaign_details = catalogErrorMessage(stataResult.reason);
         errors.push({ product: productRef, source: "campaign_details", error: rowErrors.campaign_details });

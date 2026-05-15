@@ -11,6 +11,7 @@ const PRODUCT_INFO_CACHE_TTL_MS = 180000;
 const PRODUCT_DYNAMICS_CACHE_TTL_MS = 180000;
 const PRODUCT_STOCKS_RULE_CACHE_TTL_MS = 180000;
 const CAMPAIGN_DAILY_EXACT_CACHE_TTL_MS = 180000;
+const CAMPAIGN_SCHEDULE_CACHE_TTL_MS = 180000;
 const PRODUCT_DAILY_STATS_CHUNK_DAYS = 30;
 const CAMPAIGN_DAILY_EXACT_CONCURRENCY = 1;
 const XWAY_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
@@ -27,6 +28,7 @@ const cacheStore = {
   productDynamics: new Map(),
   productStocksRule: new Map(),
   campaignDailyExact: new Map(),
+  campaignSchedule: new Map(),
 };
 
 function getCached(map, key, ttlMs) {
@@ -731,9 +733,16 @@ export class XwayApiClient {
   }
 
   async campaignSchedule(shopId, productId, campaignId) {
-    return this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/schedule-get`, {
+    const cacheKey = `${this.cacheNamespace}:campaign-schedule:${shopId}:${productId}:${campaignId}`;
+    const cached = await this.readSourceCache(cacheStore.campaignSchedule, cacheKey, CAMPAIGN_SCHEDULE_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+    const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/schedule-get`, {
       referer: this.buildCampaignReferer(shopId, productId, campaignId),
     });
+    await this.writeSourceCache(cacheStore.campaignSchedule, cacheKey, payload);
+    return payload;
   }
 
   async campaignBidHistory(shopId, productId, campaignId) {

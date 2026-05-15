@@ -66,6 +66,7 @@ interface CatalogCampaignSlot {
   statusCode: string | null;
   displayStatus: CatalogCampaignDisplayStatus;
   limitRows: CatalogCampaignLimitRow[];
+  schedule: CatalogCampaignScheduleSummary;
 }
 
 interface CatalogCampaignLimitRow {
@@ -75,6 +76,12 @@ interface CatalogCampaignLimitRow {
   total: number | null;
   active: boolean;
   percent: number | null;
+}
+
+interface CatalogCampaignScheduleSummary {
+  active: boolean | null;
+  activeSlots: number | null;
+  totalSlots: number | null;
 }
 
 const EMPTY_CATALOG_CAMPAIGN_TYPE_TOTALS: CatalogCampaignTypeTotals = {
@@ -467,7 +474,15 @@ function mergeCatalogProductDetailRow(
 
 const CATALOG_CAMPAIGN_DETAIL_FIELDS: Array<keyof Pick<
   CatalogCampaignState,
-  "budget_limit" | "budget_spent_today" | "budget_rule_active" | "spend_limit" | "spend_spent_today" | "spend_limit_active"
+  | "budget_limit"
+  | "budget_spent_today"
+  | "budget_rule_active"
+  | "spend_limit"
+  | "spend_spent_today"
+  | "spend_limit_active"
+  | "schedule_active"
+  | "schedule_active_slots"
+  | "schedule_total_slots"
 >> = [
   "budget_limit",
   "budget_spent_today",
@@ -475,6 +490,9 @@ const CATALOG_CAMPAIGN_DETAIL_FIELDS: Array<keyof Pick<
   "spend_limit",
   "spend_spent_today",
   "spend_limit_active",
+  "schedule_active",
+  "schedule_active_slots",
+  "schedule_total_slots",
 ];
 
 function hasKnownCatalogCampaignDetailValue(value: unknown) {
@@ -910,6 +928,36 @@ function buildCatalogCampaignLimitRows(states: CatalogCampaignState[]): CatalogC
   ];
 }
 
+function buildCatalogCampaignScheduleSummary(states: CatalogCampaignState[]): CatalogCampaignScheduleSummary {
+  const knownStates = states.filter((state) => state.schedule_active !== null && state.schedule_active !== undefined);
+  if (!knownStates.length) {
+    return {
+      active: null,
+      activeSlots: null,
+      totalSlots: null,
+    };
+  }
+  const activeStates = knownStates.filter((state) => Boolean(state.schedule_active));
+  if (!activeStates.length) {
+    return {
+      active: false,
+      activeSlots: 0,
+      totalSlots: knownStates.length * 168,
+    };
+  }
+  const activeSlots = activeStates
+    .map((state) => toNumber(state.schedule_active_slots))
+    .filter((value): value is number => value !== null && value >= 0);
+  const totalSlots = activeStates
+    .map((state) => toNumber(state.schedule_total_slots) ?? 168)
+    .filter((value): value is number => value > 0);
+  return {
+    active: true,
+    activeSlots: activeSlots.length === activeStates.length ? activeSlots.reduce((sum, value) => sum + value, 0) : null,
+    totalSlots: totalSlots.length ? totalSlots.reduce((sum, value) => sum + value, 0) : activeStates.length * 168,
+  };
+}
+
 function formatCatalogCampaignLimitChipValue(value: number | string | null | undefined) {
   const numeric = toNumber(value);
   if (numeric === null) {
@@ -928,11 +976,29 @@ function formatCatalogCampaignLimitChipValue(value: number | string | null | und
   return formatNumber(numeric);
 }
 
-function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] }) {
+function formatCatalogCampaignScheduleChipValue(schedule: CatalogCampaignScheduleSummary) {
+  if (schedule.active === false) {
+    return "off";
+  }
+  if (schedule.activeSlots !== null && schedule.totalSlots !== null) {
+    return `${formatNumber(schedule.activeSlots)}/${formatNumber(schedule.totalSlots)}ч`;
+  }
+  return "—";
+}
+
+function CatalogCampaignLimitBars({ rows, schedule }: { rows: CatalogCampaignLimitRow[]; schedule: CatalogCampaignScheduleSummary }) {
   if (!rows.length) {
     return null;
   }
   const limitChipRows = rows.filter((row) => row.key === "budget" || row.key === "spend");
+  const scheduleChipValue = formatCatalogCampaignScheduleChipValue(schedule);
+  const scheduleKnown = schedule.active !== null;
+  const scheduleTitle =
+    schedule.active === false
+      ? "Время показов выключено"
+      : schedule.active === true
+        ? `Время показов включено · ${schedule.activeSlots !== null && schedule.totalSlots !== null ? `${formatNumber(schedule.activeSlots)} из ${formatNumber(schedule.totalSlots)} ч` : "часы не получены"}`
+        : "Данные по времени показов еще не загружены";
 
   return (
     <div className="catalog-campaign-limit-bars">
@@ -980,6 +1046,13 @@ function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] })
               </span>
             );
           })}
+          <span
+            className={cn("catalog-campaign-limit-chip is-schedule", schedule.active === true && "is-active", !scheduleKnown && "is-empty", schedule.active === false && "is-off")}
+            title={scheduleTitle}
+          >
+            <span>Время</span>
+            <strong>{scheduleChipValue}</strong>
+          </span>
         </div>
       ) : null}
     </div>
@@ -1899,6 +1972,7 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
       statusCode: unifiedState.status_code,
       displayStatus: resolveCatalogCampaignDisplayStatus(unifiedState.status_code),
       limitRows: buildCatalogCampaignLimitRows([unifiedState]),
+      schedule: buildCatalogCampaignScheduleSummary([unifiedState]),
     });
   }
 
@@ -1915,6 +1989,7 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
       statusCode: resolveCatalogCampaignSlotStatus(manualStates),
       displayStatus: resolveCatalogCampaignDisplayStatus(resolveCatalogCampaignSlotStatus(manualStates)),
       limitRows: buildCatalogCampaignLimitRows(manualStates),
+      schedule: buildCatalogCampaignScheduleSummary(manualStates),
     });
   }
 
@@ -1929,6 +2004,7 @@ function buildCatalogCampaignSlots(article: CatalogArticle): CatalogCampaignSlot
       statusCode: cpcState.status_code,
       displayStatus: resolveCatalogCampaignDisplayStatus(cpcState.status_code),
       limitRows: buildCatalogCampaignLimitRows([cpcState]),
+      schedule: buildCatalogCampaignScheduleSummary([cpcState]),
     });
   }
 
@@ -3391,10 +3467,28 @@ function formatCatalogCampaignLimitSummary(article: CatalogArticle | null | unde
   };
   const budget = sumLimitRows("budget");
   const spend = sumLimitRows("spend");
+  const schedules = slots.map((slot) => slot.schedule).filter((schedule) => schedule.active !== null);
+  const activeSchedules = schedules.filter((schedule) => schedule.active === true);
+  const activeHours = activeSchedules
+    .map((schedule) => schedule.activeSlots)
+    .filter((value): value is number => value !== null && value >= 0)
+    .reduce((sum, value) => sum + value, 0);
+  const totalHours = activeSchedules
+    .map((schedule) => schedule.totalSlots)
+    .filter((value): value is number => value !== null && value > 0)
+    .reduce((sum, value) => sum + value, 0);
+  const scheduleText = !schedules.length
+    ? "не загружено"
+    : !activeSchedules.length
+      ? "off"
+      : totalHours > 0
+        ? `${formatNumber(activeHours)}/${formatNumber(totalHours)} ч`
+        : "включено";
   return [
     `РК: ${formatNumber(slots.length)}`,
     `Бюджет: ${budget.total !== null ? formatMoney(budget.total, true) : "нет"}${budget.activeCount ? `, активных ${formatNumber(budget.activeCount)}` : ""}`,
     `Лимит: ${spend.total !== null ? formatMoney(spend.total, true) : "нет"}${spend.activeCount ? `, активных ${formatNumber(spend.activeCount)}` : ""}`,
+    `Время: ${scheduleText}`,
   ].join(" · ");
 }
 
@@ -5557,7 +5651,7 @@ export function CatalogPage() {
             if (detailRow) {
               const nextArticle = mergeCatalogProductDetailRow(article, detailRow, { mergeBestTime: false });
               article = nextArticle;
-              const detailErrors = [detailRow.errors?.campaign_details]
+              const detailErrors = [detailRow.errors?.campaign_details, detailRow.errors?.campaign_schedule]
                 .filter((message): message is string => Boolean(message))
                 .map((message) => normalizeApiErrorMessage(message));
               refreshedArticlesByRef.set(ref, nextArticle);
@@ -5566,7 +5660,7 @@ export function CatalogPage() {
                 status: detailErrors.length ? "warning" : "success",
                 scope,
                 step: "Данные РК: лимиты",
-                message: detailErrors.length ? "Лимиты РК загружены частично" : "Лимиты РК загружены",
+                message: detailErrors.length ? "Лимиты и время РК загружены частично" : "Лимиты и время РК загружены",
                 detail: [
                   formatCatalogCampaignLimitSummary(article),
                   ...detailErrors,
@@ -7121,7 +7215,7 @@ export function CatalogPage() {
                           const slotByKey = new Map(slots.map((slot) => [slot.key, slot] as const));
                           const slotOrder: CatalogCampaignSlotKind[] = ["unified", "manual", "cpc"];
                           return (
-                          <div className="catalog-campaign-board min-w-[660px]">
+                          <div className="catalog-campaign-board min-w-[720px]">
                             {slots.length ? (
                               slotOrder.map((slotKey) => {
                                 const slot = slotByKey.get(slotKey);
@@ -7147,7 +7241,7 @@ export function CatalogPage() {
                                     <CatalogCampaignZonePill label={slot.zoneLabel} kind={slot.zoneKind} iconOnly />
                                     <strong className="catalog-campaign-title">{slot.headline}</strong>
                                   </div>
-                                  <CatalogCampaignLimitBars rows={slot.limitRows} />
+                                  <CatalogCampaignLimitBars rows={slot.limitRows} schedule={slot.schedule} />
                                 </div>
                                 );
                               })

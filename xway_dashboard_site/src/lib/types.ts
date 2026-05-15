@@ -19,6 +19,9 @@ export interface CatalogCampaignState {
   spend_limit?: number | null;
   spend_spent_today?: number | null;
   spend_limit_active?: boolean | null;
+  schedule_active?: boolean | null;
+  schedule_active_slots?: number | null;
+  schedule_total_slots?: number | null;
 }
 
 export interface GroupInfo {
@@ -586,6 +589,7 @@ export interface CatalogProductDetailRow {
   best_order_time?: CatalogArticleBestOrderTime | null;
   errors?: {
     campaign_details?: string | null;
+    campaign_schedule?: string | null;
     best_order_time?: string | null;
   };
 }
