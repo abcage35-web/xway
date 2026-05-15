@@ -307,11 +307,13 @@ type CatalogSortField =
   | "clicks"
   | "atbs"
   | "orders"
+  | "totalOrders"
   | "ctr"
   | "cr"
   | "cr1"
   | "cr2"
   | "drr"
+  | "drrTotal"
   | "categoryAvgCr";
 
 type CatalogSortDirection = "asc" | "desc";
@@ -326,10 +328,12 @@ const CATALOG_SORT_FIELD_OPTIONS: Array<{ value: CatalogSortField; label: string
   { value: "clicks", label: "Клики" },
   { value: "atbs", label: "Корзины" },
   { value: "orders", label: "Заказы" },
+  { value: "totalOrders", label: "Общее кол-во заказов" },
   { value: "ctr", label: "CTR" },
   { value: "cr1", label: "CR1" },
   { value: "cr2", label: "CR2" },
   { value: "drr", label: "ДРР" },
+  { value: "drrTotal", label: "ДРР общих заказов" },
   { value: "categoryAvgCr", label: "Ср. CR категории" },
   { value: "article", label: "Артикул" },
   { value: "name", label: "Название" },
@@ -2628,6 +2632,10 @@ function resolveCatalogArticleDrr(article: CatalogArticle) {
   return catalogChartRate(toNumber(article.expense_sum) ?? 0, toNumber(article.sum_price) ?? 0);
 }
 
+function resolveCatalogArticleTotalDrr(article: CatalogArticle) {
+  return catalogChartRate(toNumber(article.expense_sum) ?? 0, toNumber(article.ordered_sum_report) ?? 0);
+}
+
 function formatCatalogBestOrderTimeTitle(article: CatalogArticle) {
   const bestTime = article.best_order_time;
   if (!bestTime?.ranges?.length) {
@@ -3945,6 +3953,8 @@ export function CatalogPage() {
               return toNumber(article.atbs) ?? Number.NEGATIVE_INFINITY;
             case "orders":
               return toNumber(article.orders) ?? Number.NEGATIVE_INFINITY;
+            case "totalOrders":
+              return toNumber(article.ordered_report) ?? Number.NEGATIVE_INFINITY;
             case "ctr":
               return toNumber(article.ctr) ?? Number.NEGATIVE_INFINITY;
             case "cr1":
@@ -3953,6 +3963,8 @@ export function CatalogPage() {
               return catalogMetricRate(article.orders, article.atbs) ?? Number.NEGATIVE_INFINITY;
             case "drr":
               return resolveCatalogArticleDrr(article) ?? Number.NEGATIVE_INFINITY;
+            case "drrTotal":
+              return resolveCatalogArticleTotalDrr(article) ?? Number.NEGATIVE_INFINITY;
             case "categoryAvgCr":
               return categoryAverageCrByValue.get(normalizeCategoryValue(article.category_keyword)) ?? Number.NEGATIVE_INFINITY;
             case "cr":
@@ -7478,6 +7490,18 @@ export function CatalogPage() {
                         },
                       },
                       {
+                        key: "totalOrders",
+                        header: (
+                          <span className="inline-flex min-w-[104px] flex-col leading-[1.05]">
+                            <span>Общее</span>
+                            <span>кол-во заказов</span>
+                          </span>
+                        ),
+                        align: "right",
+                        cellClassName: "min-w-[118px]",
+                        render: (article) => formatNumber(article.ordered_report),
+                      },
+                      {
                         key: "bestOrderTime",
                         header: (
                           <span className="inline-flex w-[112px] flex-col leading-[1.05]">
@@ -7599,6 +7623,17 @@ export function CatalogPage() {
                             />
                           );
                         },
+                      },
+                      {
+                        key: "drrTotal",
+                        header: (
+                          <span className="inline-flex flex-col leading-[1.05]">
+                            <span>ДРР</span>
+                            <span>общ.</span>
+                          </span>
+                        ),
+                        align: "right",
+                        render: (article) => formatPercent(resolveCatalogArticleTotalDrr(article)),
                       },
                       {
                         key: "categoryAvgCr",
