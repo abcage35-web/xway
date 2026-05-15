@@ -240,9 +240,9 @@
 
 .catalog-campaign-header-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(214px, 1fr));
   gap: 8px;
-  min-width: 560px;
+  min-width: 660px;
 }
 
 .catalog-campaign-header-item {
@@ -285,8 +285,9 @@
 
 .catalog-campaign-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(214px, 1fr));
   gap: 8px;
+  min-width: 660px;
 }
 
 .catalog-campaign-type-header {
@@ -1015,7 +1016,8 @@ html[data-theme="dark"] .catalog-campaign-zone-pill.is-both {
 @media (max-width: 1360px) {
   .catalog-campaign-header-board,
   .catalog-campaign-board {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(214px, 1fr));
+    min-width: 436px;
   }
 }
 

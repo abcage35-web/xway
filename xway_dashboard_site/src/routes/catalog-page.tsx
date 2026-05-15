@@ -6320,7 +6320,7 @@ export function CatalogPage() {
                           const slotByKey = new Map(slots.map((slot) => [slot.key, slot] as const));
                           const slotOrder: CatalogCampaignSlotKind[] = ["unified", "manual", "cpc"];
                           return (
-                          <div className="catalog-campaign-board min-w-[560px]">
+                          <div className="catalog-campaign-board min-w-[660px]">
                             {slots.length ? (
                               slotOrder.map((slotKey) => {
                                 const slot = slotByKey.get(slotKey);
