@@ -593,6 +593,17 @@ function productHasCampaignSlots(product, statItem) {
   );
 }
 
+function isCatalogProductDisabled(product, statItem = {}) {
+  return (
+    product?.enabled === false ||
+    product?.is_active === false ||
+    product?.disabled === true ||
+    statItem?.enabled === false ||
+    statItem?.is_active === false ||
+    statItem?.disabled === true
+  );
+}
+
 function formatCatalogHour(hour) {
   return `${String(((hour % 24) + 24) % 24).padStart(2, "0")}:00`;
 }
@@ -715,7 +726,7 @@ async function collectCatalogBestOrderTimes(shopId, products, statMap, client) {
     .map((product) => {
       const productId = product?.id;
       const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
-      return productId !== null && productId !== undefined && asFloat(statItem?.stat?.orders) > 0 ? product : null;
+      return productId !== null && productId !== undefined && !isCatalogProductDisabled(product, statItem) && asFloat(statItem?.stat?.orders) > 0 ? product : null;
     })
     .filter(Boolean);
   const bestTimeByProductId = new Map();
@@ -739,7 +750,7 @@ async function collectCatalogCampaignDetailSources(shopId, products, statMap, cl
     .map((product) => {
       const productId = product?.id;
       const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
-      return productId !== null && productId !== undefined && productHasCampaignSlots(product, statItem) ? product : null;
+      return productId !== null && productId !== undefined && !isCatalogProductDisabled(product, statItem) && productHasCampaignSlots(product, statItem) ? product : null;
     })
     .filter(Boolean);
   const detailByProductId = new Map();
@@ -803,11 +814,14 @@ async function collectShopCatalog(shop, client, includeExtended, productIds = nu
     const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
     const campaignDetailSource = productId !== null && productId !== undefined ? campaignDetailSources.detailByProductId.get(String(productId)) : null;
     const hasCampaignSlots = productHasCampaignSlots(product, statItem);
+    const disabledProduct = isCatalogProductDisabled(product, statItem);
     const stat = statItem.stat || {};
     const spend = statItem.spend || {};
     const hasPeriodAdStats = [stat.sum, stat.views, stat.clicks, stat.atbs, stat.orders].some((value) => asFloat(value) > 0);
     const rawCampaignTypeTotals = campaignDetailSource ? buildCatalogCampaignTypeTotalsFromCampaigns(campaignDetailSource.campaign_wb || []) : null;
-    const campaignTypeTotals = campaignDetailSource
+    const campaignTypeTotals = disabledProduct
+      ? {}
+      : campaignDetailSource
       ? (Object.keys(rawCampaignTypeTotals).length || !hasCampaignSlots || !hasPeriodAdStats ? rawCampaignTypeTotals : null)
       : (hasCampaignSlots ? null : {});
     const articlePayload = {

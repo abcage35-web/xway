@@ -650,6 +650,17 @@ function normalizeClusterRows(statsPayload, positionsPayload, additionalPayload,
   };
 }
 
+function isProductDisabled(product, statItem = {}) {
+  return (
+    product?.enabled === false ||
+    product?.is_active === false ||
+    product?.disabled === true ||
+    statItem?.enabled === false ||
+    statItem?.is_active === false ||
+    statItem?.disabled === true
+  );
+}
+
 function normalizeClusterActionHistory(campaign, cluster, rows) {
   return [...(rows || [])]
     .map((row) => {
@@ -1037,12 +1048,13 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
   const statItem = match.stat_item || {};
   const shopId = Number.parseInt(String(shop.id), 10);
   const productId = Number.parseInt(String(product.id), 10);
+  const disabledProduct = isProductDisabled(product, statItem);
 
   const [shopInfo, info, dynamics, stata, [stocksRulePayload]] = await Promise.all([
     client.shopDetails(shopId),
     client.productInfo(shopId, productId),
     client.productDynamics(shopId, productId),
-    client.productStata(shopId, productId),
+    disabledProduct ? Promise.resolve({ campaign_wb: [], totals: {} }) : client.productStata(shopId, productId),
     safeCall(() => client.productStocksRule(shopId, productId), {}),
   ]);
 

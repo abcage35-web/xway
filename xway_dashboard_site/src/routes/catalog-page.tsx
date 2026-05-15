@@ -107,6 +107,7 @@ const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_CHART_FETCH_CHUNK_SIZE = 24;
 const CATALOG_REFRESH_FETCH_CHUNK_SIZE = 24;
+const CATALOG_REFRESH_CAMPAIGN_PROCESS_SIZE = 1;
 const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
 const CATALOG_CHART_MAX_RETRY_PASSES = 6;
 const CATALOG_CHART_CHUNK_DELAY_MS = 650;
@@ -2460,6 +2461,10 @@ function catalogChartLoadedProductRefs(response: CatalogChartResponse) {
   return new Set((response.product_rows || []).map((product) => product.product_ref));
 }
 
+function isCatalogArticleDisabled(article: CatalogArticle | null | undefined) {
+  return article?.enabled === false || article?.is_active === false;
+}
+
 function isWorkerSubrequestLimitMessage(message: string) {
   return /too many subrequests|worker exceeded resource limits|cloudflare:\s*worker exceeded resource limits|\b1102\b/i.test(message);
 }
@@ -3437,19 +3442,21 @@ export function CatalogPage() {
   );
   const visibleIssueTargets = [...new Map(
     issueScopedShops.flatMap((shop) =>
-      shop.articles.map((article) => [
-        `${shop.id}:${article.product_id}`,
-        {
-          ref: `${shop.id}:${article.product_id}`,
-          article: article.article,
-          name: article.name || `Артикул ${article.article}`,
-          productUrl: article.product_url,
-          imageUrl: article.image_url || null,
-          stock: article.stock,
-          turnoverDays: computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)),
-          campaignSlots: buildCatalogCampaignSlots(article),
-        },
-      ]),
+      shop.articles
+        .filter((article) => !isCatalogArticleDisabled(article))
+        .map((article) => [
+          `${shop.id}:${article.product_id}`,
+          {
+            ref: `${shop.id}:${article.product_id}`,
+            article: article.article,
+            name: article.name || `Артикул ${article.article}`,
+            productUrl: article.product_url,
+            imageUrl: article.image_url || null,
+            stock: article.stock,
+            turnoverDays: computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)),
+            campaignSlots: buildCatalogCampaignSlots(article),
+          },
+        ]),
     ),
   ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0) as CatalogIssueTargetMeta[];
   const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
@@ -3495,7 +3502,10 @@ export function CatalogPage() {
         : null,
     [chartSourceData, chartProductRefsKey, chartRangeStart, chartRangeEnd],
   );
-  const catalogRowCampaignTypeFallbackRefs = chartProductRefs.filter((ref) => !catalogArticleByRef.get(ref)?.campaign_type_totals);
+  const catalogRowCampaignTypeFallbackRefs = chartProductRefs.filter((ref) => {
+    const article = catalogArticleByRef.get(ref);
+    return !isCatalogArticleDisabled(article) && !article?.campaign_type_totals;
+  });
   const catalogRowCampaignTypeFallbackRefsKey = catalogRowCampaignTypeFallbackRefs.join(",");
   const catalogRowCampaignTypesRangeStart = payload.range.current_start;
   const catalogRowCampaignTypesRangeEnd = payload.range.current_end;
@@ -3585,6 +3595,13 @@ export function CatalogPage() {
     }
 
     setExpandedAnalyticsRefs((current) => (current.includes(ref) ? current : [...current, ref]));
+    if (isCatalogArticleDisabled(catalogArticleByRef.get(ref))) {
+      setArticleAnalyticsByRef((current) => ({
+        ...current,
+        [ref]: { loading: false, error: null, rows: [] },
+      }));
+      return;
+    }
     const existingState = articleAnalyticsByRef[ref];
     if (existingState?.loading || existingState?.rows) {
       return;
@@ -3899,7 +3916,12 @@ export function CatalogPage() {
 
     try {
       let nextResponse: CatalogChartResponse | null = null;
-      const productChunks = chunkItems(chartSourceProductRefs, CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE);
+      const campaignTypeRefs = chartSourceProductRefs.filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+      const productChunks = chunkItems(campaignTypeRefs, CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE);
+      if (!productChunks.length) {
+        setChartCampaignTypesLoadedKey(chartSourceCacheKey);
+        return;
+      }
       for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
         const chunkRefs = productChunks[chunkIndex]!;
         const chunkResponse = await fetchCatalogChartWorkerSafe({
@@ -4735,10 +4757,29 @@ export function CatalogPage() {
       }
       currentStepErrorRefs = refs;
 
-      setCatalogRefreshStep(scopeLabel, `${targetLabel}: график и метрики РК`, activityRef);
-      try {
+      const disabledChartRefs = refs.filter((ref) => isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+      if (disabledChartRefs.length) {
+        appendCatalogRefreshLogsForRefs(disabledChartRefs, {
+          status: "info",
+          scope,
+          step: "График и РК",
+          message: "Товар отключен",
+          detail: "Товар отключен в XWAY, внутренние данные РК не загружаются.",
+        });
+      }
+      const chartProcessSourceRefs = refs.filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+      const chartProcessGroups = chunkItems(chartProcessSourceRefs, CATALOG_REFRESH_CAMPAIGN_PROCESS_SIZE);
+      for (let chartProcessIndex = 0; chartProcessIndex < chartProcessGroups.length; chartProcessIndex += 1) {
+        const chartProcessRefs = chartProcessGroups[chartProcessIndex]!;
+        currentStepErrorRefs = chartProcessRefs;
+        setCatalogRefreshStep(
+          scopeLabel,
+          `${targetLabel}: график и РК ${formatNumber(chartProcessIndex + 1)}/${formatNumber(chartProcessGroups.length)}`,
+          chartProcessRefs.length === 1 ? chartProcessRefs[0] : activityRef,
+        );
+        try {
         const chartResponse = await fetchCatalogChartWorkerSafe({
-          productRefs: refs,
+          productRefs: chartProcessRefs,
           start: chartSourceRangeStart,
           end: chartRangeEnd,
           includeCampaignTypes: true,
@@ -4756,13 +4797,13 @@ export function CatalogPage() {
             });
           },
         });
-        await mergeChartResponseForRefs(chartResponse, refs, options.progress);
+        await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress);
         const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
         const loadedChartRefs = new Set((chartResponse.product_rows || []).map((item) => item.product_ref));
-        if (!loadedChartRefs.size && refs.length === 1 && !chartErrorsByRef.has(refs[0]!)) {
-          loadedChartRefs.add(refs[0]!);
+        if (!loadedChartRefs.size && chartProcessRefs.length === 1 && !chartErrorsByRef.has(chartProcessRefs[0]!)) {
+          loadedChartRefs.add(chartProcessRefs[0]!);
         }
-        const loadedRefs = refs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+        const loadedRefs = chartProcessRefs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
         if (loadedRefs.length) {
           appendCatalogRefreshLogsForRefs(loadedRefs, {
             status: "success",
@@ -4772,7 +4813,7 @@ export function CatalogPage() {
             detail: "График и разбивка по типам РК обновлены.",
           });
         }
-        const errorRefs = refs.filter((ref) => chartErrorsByRef.has(ref));
+        const errorRefs = chartProcessRefs.filter((ref) => chartErrorsByRef.has(ref));
         if (errorRefs.length) {
           appendCatalogRefreshLogsForRefs(errorRefs, {
             status: "error",
@@ -4786,7 +4827,7 @@ export function CatalogPage() {
           }));
           rememberStepError(chartErrorsByRef.get(errorRefs[0]!) || "Не удалось загрузить график и метрики РК.");
         }
-        const missingRefs = refs.filter((ref) => !loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+        const missingRefs = chartProcessRefs.filter((ref) => !loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
         if (missingRefs.length) {
           appendCatalogRefreshLogsForRefs(missingRefs, {
             status: "warning",
@@ -4796,19 +4837,23 @@ export function CatalogPage() {
             detail: "API ответил без ошибки, но не вернул дневные строки товара.",
           });
         }
-        const expandedRefs = refs.filter((ref) => expandedAnalyticsRefs.includes(ref));
+        const expandedRefs = chartProcessRefs.filter((ref) => expandedAnalyticsRefs.includes(ref));
         if (expandedRefs.length) {
           setArticleAnalyticsByRef((current) => {
             const next = { ...current };
             expandedRefs.forEach((ref) => {
-              const productRows = chartResponse.product_rows?.find((item) => item.product_ref === ref)?.rows ?? (refs.length === 1 ? chartResponse.rows : null);
+              const productRows = chartResponse.product_rows?.find((item) => item.product_ref === ref)?.rows ?? (chartProcessRefs.length === 1 ? chartResponse.rows : null);
               next[ref] = { loading: false, error: null, rows: productRows ?? current[ref]?.rows ?? null };
             });
             return next;
           });
         }
-      } catch (error) {
-        await logStepError("График и РК", error);
+        } catch (error) {
+          await logStepError("График и РК", error, chartProcessRefs);
+        }
+        if (chartProcessIndex < chartProcessGroups.length - 1) {
+          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, options.signal ?? new AbortController().signal);
+        }
       }
 
       if (options.refreshIssues) {
@@ -5652,7 +5697,7 @@ export function CatalogPage() {
                           const isRefreshing = refreshingArticleRefs.includes(ref);
                           const hasRefreshLogs = catalogRefreshLogs.some((entry) => entry.productRef === ref);
                           const isRefreshLogSelected = selectedCatalogRefreshLogRef === ref && catalogRefreshPanelOpen;
-                          const isDisabledProduct = article.enabled === false || article.is_active === false;
+                          const isDisabledProduct = isCatalogArticleDisabled(article);
                           return (
                             <div className={cn("catalog-product-row-cell flex w-[252px] max-w-[252px] items-start gap-2.5", isRefreshing && "is-refreshing")}>
                               <div className="catalog-article-row-actions">
@@ -5707,7 +5752,7 @@ export function CatalogPage() {
                                   </p>
                                   {isDisabledProduct ? (
                                     <span className="catalog-product-status-chip is-disabled" title="Товар отключен">
-                                      Отключен
+                                      отключен
                                     </span>
                                   ) : null}
                                 </div>
