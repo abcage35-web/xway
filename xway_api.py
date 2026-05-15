@@ -218,6 +218,13 @@ def _parse_iso_date(value: Optional[str]) -> Optional[date]:
     return date.fromisoformat(value)
 
 
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _iter_iso_days(start: Optional[str], end: Optional[str]) -> List[str]:
     start_date = _parse_iso_date(start)
     end_date = _parse_iso_date(end)
@@ -2730,7 +2737,18 @@ def _collect_catalog_best_order_times(
         product_id = product.get("id")
         stat_item = stat_map.get(str(product_id), {}) if product_id is not None else {}
         stat = stat_item.get("stat") or {}
-        if product_id is not None and _as_float(stat.get("orders")) > 0:
+        has_order_signals = any(
+            _as_float(value) > 0
+            for value in (
+                stat.get("orders"),
+                stat.get("ordered_total"),
+                stat.get("sum_price"),
+                stat.get("ordered_sum_total"),
+                stat_item.get("ordered_report"),
+                stat_item.get("ordered_sum_report"),
+            )
+        )
+        if product_id is not None and (has_order_signals or _catalog_product_has_campaign_slots(product, stat_item)):
             targets.append(product)
 
     best_time_by_product_id: Dict[str, Optional[Dict[str, Any]]] = {}

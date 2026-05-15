@@ -726,7 +726,17 @@ async function collectCatalogBestOrderTimes(shopId, products, statMap, client) {
     .map((product) => {
       const productId = product?.id;
       const statItem = productId !== null && productId !== undefined ? statMap[String(productId)] || {} : {};
-      return productId !== null && productId !== undefined && !isCatalogProductDisabled(product, statItem) && asFloat(statItem?.stat?.orders) > 0 ? product : null;
+      const stat = statItem?.stat || {};
+      const hasOrderSignals = [
+        stat.orders,
+        stat.ordered_total,
+        stat.sum_price,
+        stat.ordered_sum_total,
+        statItem?.ordered_report,
+        statItem?.ordered_sum_report,
+      ].some((value) => asFloat(value) > 0);
+      const shouldLoadHourlyOrders = hasOrderSignals || productHasCampaignSlots(product, statItem);
+      return productId !== null && productId !== undefined && !isCatalogProductDisabled(product, statItem) && shouldLoadHourlyOrders ? product : null;
     })
     .filter(Boolean);
   const bestTimeByProductId = new Map();
