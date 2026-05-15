@@ -430,7 +430,19 @@ function mergeCatalogCampaignStates(baseStates: CatalogCampaignState[] = [], det
   const statesByKey = new Map(baseStates.map((state) => [state.key, state]));
   detailStates.forEach((detailState) => {
     const current = statesByKey.get(detailState.key);
-    statesByKey.set(detailState.key, current ? { ...current, ...detailState } : detailState);
+    if (!current) {
+      statesByKey.set(detailState.key, detailState);
+      return;
+    }
+    const detailStatus = String(detailState.status_code || "").toUpperCase();
+    const hasCanonicalStatus = ["ACTIVE", "PAUSED", "FROZEN"].includes(detailStatus);
+    statesByKey.set(detailState.key, {
+      ...current,
+      ...detailState,
+      status_code: hasCanonicalStatus ? detailState.status_code : current.status_code,
+      status_label: hasCanonicalStatus ? detailState.status_label : current.status_label,
+      active: hasCanonicalStatus ? detailState.active : current.active,
+    });
   });
   return [...statesByKey.values()];
 }

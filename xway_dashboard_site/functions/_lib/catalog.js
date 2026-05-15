@@ -125,6 +125,15 @@ function extractCatalogCampaignStatusCode(rawValue) {
     return null;
   }
   const normalized = String(value).trim().toUpperCase();
+  if (["ACTIVE", "АКТИВНА", "АКТИВЕН", "АКТИВНАЯ", "АКТИВНЫЙ"].includes(normalized)) {
+    return "ACTIVE";
+  }
+  if (["PAUSED", "PAUSE", "ПАУЗА", "ПРИОСТАНОВЛЕНА", "ПРИОСТАНОВЛЕН", "ОСТАНОВЛЕНА", "ОСТАНОВЛЕН"].includes(normalized)) {
+    return "PAUSED";
+  }
+  if (["FROZEN", "FREEZE", "ЗАМОРОЖЕНА", "ЗАМОРОЖЕН", "ЗАМОРОЗКА"].includes(normalized)) {
+    return "FROZEN";
+  }
   return normalized || null;
 }
 
