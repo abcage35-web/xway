@@ -125,6 +125,39 @@ function hasKnownCatalogCampaignDetailValue(value: unknown) {
   return value !== null && value !== undefined;
 }
 
+function catalogCampaignMetricNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const number = typeof value === "number" ? value : Number(String(value).replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(number) ? number : null;
+}
+
+function catalogCampaignTypeTotalsHasSignal(totals: CatalogArticle["campaign_type_totals"]) {
+  if (!totals || typeof totals !== "object" || Array.isArray(totals)) {
+    return false;
+  }
+  return Object.values(totals).some((metrics) => {
+    if (!metrics || typeof metrics !== "object") {
+      return false;
+    }
+    return ["views", "clicks", "atbs", "orders", "spend", "revenue"].some((field) => (catalogCampaignMetricNumber(metrics[field as keyof typeof metrics]) ?? 0) > 0);
+  });
+}
+
+function mergeCatalogCampaignTypeTotalsPreservingSignal(
+  baseTotals: CatalogArticle["campaign_type_totals"],
+  incomingTotals: CatalogArticle["campaign_type_totals"],
+) {
+  if (incomingTotals === undefined) {
+    return baseTotals;
+  }
+  if (catalogCampaignTypeTotalsHasSignal(incomingTotals) || !catalogCampaignTypeTotalsHasSignal(baseTotals)) {
+    return incomingTotals;
+  }
+  return baseTotals;
+}
+
 function mergeCatalogCampaignStatesPreservingDetails(baseStates: CatalogCampaignState[] = [], incomingStates: CatalogCampaignState[] = []) {
   if (!incomingStates.length) {
     return baseStates;
@@ -152,7 +185,7 @@ function mergeCatalogArticlePreservingDetails(baseArticle: CatalogArticle | null
   return {
     ...incomingArticle,
     campaign_states: mergeCatalogCampaignStatesPreservingDetails(baseArticle.campaign_states, incomingArticle.campaign_states),
-    campaign_type_totals: incomingArticle.campaign_type_totals ?? baseArticle.campaign_type_totals,
+    campaign_type_totals: mergeCatalogCampaignTypeTotalsPreservingSignal(baseArticle.campaign_type_totals, incomingArticle.campaign_type_totals),
     best_order_time: incomingArticle.best_order_time ?? baseArticle.best_order_time ?? null,
   };
 }
@@ -175,9 +208,105 @@ function mergeCatalogArticleDetailRow(article: CatalogArticle, detailRow: Catalo
   return {
     ...article,
     campaign_states: hasCampaignError ? article.campaign_states : mergeCatalogCampaignStatesFromDetails(article.campaign_states, detailRow.campaign_states ?? []),
-    campaign_type_totals: hasCampaignError ? article.campaign_type_totals : detailRow.campaign_type_totals ?? article.campaign_type_totals,
+    campaign_type_totals: hasCampaignError
+      ? article.campaign_type_totals
+      : mergeCatalogCampaignTypeTotalsPreservingSignal(article.campaign_type_totals, detailRow.campaign_type_totals),
     best_order_time: hasBestTimeError ? article.best_order_time ?? null : detailRow.best_order_time ?? article.best_order_time ?? null,
   };
+}
+
+function buildCatalogCampaignTypeTotalsFromChartRows(rows: CatalogChartResponse["rows"]) {
+  const totals: NonNullable<CatalogArticle["campaign_type_totals"]> = {
+    "cpm-manual": { views: 0, clicks: 0, atbs: 0, orders: 0, spend: 0, revenue: 0 },
+    "cpm-unified": { views: 0, clicks: 0, atbs: 0, orders: 0, spend: 0, revenue: 0 },
+    cpc: { views: 0, clicks: 0, atbs: 0, orders: 0, spend: 0, revenue: 0 },
+  };
+  let hasCampaignBreakdown = false;
+
+  rows.forEach((row) => {
+    Object.entries(row.metrics_by_campaign_type ?? {}).forEach(([key, metrics]) => {
+      hasCampaignBreakdown = true;
+      const bucket = totals[key] ?? { views: 0, clicks: 0, atbs: 0, orders: 0, spend: 0, revenue: 0 };
+      totals[key] = {
+        views: (catalogCampaignMetricNumber(bucket.views) ?? 0) + (catalogCampaignMetricNumber(metrics.views) ?? 0),
+        clicks: (catalogCampaignMetricNumber(bucket.clicks) ?? 0) + (catalogCampaignMetricNumber(metrics.clicks) ?? 0),
+        atbs: (catalogCampaignMetricNumber(bucket.atbs) ?? 0) + (catalogCampaignMetricNumber(metrics.atbs) ?? 0),
+        orders: (catalogCampaignMetricNumber(bucket.orders) ?? 0) + (catalogCampaignMetricNumber(metrics.orders) ?? 0),
+        spend: (catalogCampaignMetricNumber(bucket.spend) ?? 0) + (catalogCampaignMetricNumber(metrics.spend) ?? 0),
+        revenue: (catalogCampaignMetricNumber(bucket.revenue) ?? 0) + (catalogCampaignMetricNumber(metrics.revenue) ?? 0),
+      };
+    });
+  });
+
+  return hasCampaignBreakdown ? totals : null;
+}
+
+async function mergeCatalogChartCampaignTypesIntoFullCache(url: URL, chartResponse: CatalogChartResponse) {
+  if (url.searchParams.get("include_campaign_types") !== "1") {
+    return;
+  }
+
+  const totalsByRef = new Map<string, NonNullable<CatalogArticle["campaign_type_totals"]>>();
+  chartResponse.product_rows?.forEach((product) => {
+    const totals = buildCatalogCampaignTypeTotalsFromChartRows(product.rows);
+    if (totals) {
+      totalsByRef.set(product.product_ref, totals);
+    }
+  });
+
+  const requestedProducts = (url.searchParams.get("products") || "").split(",").map((item) => item.trim()).filter(Boolean);
+  if (!totalsByRef.size && requestedProducts.length === 1) {
+    const totals = buildCatalogCampaignTypeTotalsFromChartRows(chartResponse.rows);
+    if (totals) {
+      totalsByRef.set(requestedProducts[0]!, totals);
+    }
+  }
+  if (!totalsByRef.size) {
+    return;
+  }
+
+  const fullUrl = new URL(url.toString());
+  fullUrl.pathname = "/api/catalog";
+  fullUrl.searchParams.set("mode", "compact");
+  fullUrl.searchParams.set("aux", "0");
+  fullUrl.searchParams.delete("products");
+  fullUrl.searchParams.delete("include_campaign_types");
+  fullUrl.searchParams.delete("refresh");
+  fullUrl.searchParams.delete("force_refresh");
+  fullUrl.searchParams.delete("cursor");
+  fullUrl.searchParams.delete("limit_products");
+  fullUrl.searchParams.delete("deadline_ms");
+  const fullCacheKey = apiResponseCacheKey("catalog", fullUrl);
+  const cachedFullResponse = await readPersistentApiCache<CatalogResponse>(fullCacheKey);
+  if (!cachedFullResponse) {
+    return;
+  }
+
+  let changed = false;
+  const shops = cachedFullResponse.shops.map((shop) => ({
+    ...shop,
+    articles: shop.articles.map((article) => {
+      const totals = totalsByRef.get(`${shop.id}:${article.product_id}`);
+      if (!totals) {
+        return article;
+      }
+      changed = true;
+      return {
+        ...article,
+        campaign_type_totals: totals,
+      };
+    }),
+  }));
+
+  if (!changed) {
+    return;
+  }
+
+  await writePersistentApiCache<CatalogResponse>(fullCacheKey, {
+    ...cachedFullResponse,
+    generated_at: chartResponse.generated_at,
+    shops,
+  });
 }
 
 async function mergeCatalogProductResponseIntoFullCache(url: URL, productResponse: CatalogResponse) {
@@ -561,6 +690,9 @@ export async function fetchCatalogChart(options: {
     {
       namespace: "catalog-chart",
       bypassRead: options.forceRefresh,
+      afterWrite: options.includeCampaignTypes
+        ? (response) => mergeCatalogChartCampaignTypesIntoFullCache(url, response)
+        : undefined,
     },
   );
 }

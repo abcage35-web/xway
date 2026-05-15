@@ -471,7 +471,9 @@ function mergeCatalogProductDetailRow(
   return {
     ...article,
     campaign_states: !mergeCampaignDetails || hasCampaignError ? article.campaign_states : mergeCatalogCampaignStates(article.campaign_states, row.campaign_states ?? []),
-    campaign_type_totals: !mergeCampaignDetails || hasCampaignError ? article.campaign_type_totals : row.campaign_type_totals ?? article.campaign_type_totals,
+    campaign_type_totals: !mergeCampaignDetails || hasCampaignError
+      ? article.campaign_type_totals
+      : mergeCatalogCampaignTypeTotalsPreservingSignal(article.campaign_type_totals, row.campaign_type_totals),
     best_order_time: !mergeBestTime || hasBestTimeError ? article.best_order_time ?? null : row.best_order_time ?? null,
   };
 }
@@ -530,7 +532,7 @@ function mergeCatalogArticlePreservingDetails(baseArticle: CatalogArticle | null
   return {
     ...incomingArticle,
     campaign_states: mergeCatalogCampaignStatesPreservingDetails(baseArticle.campaign_states, incomingArticle.campaign_states),
-    campaign_type_totals: incomingArticle.campaign_type_totals ?? baseArticle.campaign_type_totals,
+    campaign_type_totals: mergeCatalogCampaignTypeTotalsPreservingSignal(baseArticle.campaign_type_totals, incomingArticle.campaign_type_totals),
     best_order_time: incomingArticle.best_order_time ?? baseArticle.best_order_time ?? null,
   };
 }
@@ -702,6 +704,33 @@ function normalizeCatalogCampaignTypeTotals(raw: CatalogArticle["campaign_type_t
   return totals;
 }
 
+function catalogCampaignTypeTotalsHasSignal(totals: CatalogCampaignTypeTotalsByKey | null | undefined) {
+  if (!totals) {
+    return false;
+  }
+  return CATALOG_CAMPAIGN_TYPE_ROWS.some((type) => {
+    const row = totals[type.key];
+    return Boolean(row && (row.views > 0 || row.clicks > 0 || row.atbs > 0 || row.orders > 0 || row.spend > 0 || row.revenue > 0));
+  });
+}
+
+function catalogCampaignTypeTotalsRecordHasSignal(raw: CatalogArticle["campaign_type_totals"]) {
+  return catalogCampaignTypeTotalsHasSignal(normalizeCatalogCampaignTypeTotals(raw));
+}
+
+function mergeCatalogCampaignTypeTotalsPreservingSignal(
+  baseTotals: CatalogArticle["campaign_type_totals"],
+  incomingTotals: CatalogArticle["campaign_type_totals"],
+) {
+  if (incomingTotals === undefined) {
+    return baseTotals;
+  }
+  if (catalogCampaignTypeTotalsRecordHasSignal(incomingTotals) || !catalogCampaignTypeTotalsRecordHasSignal(baseTotals)) {
+    return incomingTotals;
+  }
+  return baseTotals;
+}
+
 function buildCatalogCampaignTypeTotals(rows: CatalogChartResponse["rows"]): CatalogCampaignTypeTotalsByKey {
   const totals = createEmptyCatalogCampaignTypeTotalsByKey();
 
@@ -728,7 +757,22 @@ function resolveCatalogCampaignTypeTotalsForArticle(
   totalsByRef: Record<string, CatalogCampaignTypeTotalsByKey>,
   chartData: CatalogChartResponse | null,
 ) {
-  return normalizeCatalogCampaignTypeTotals(article.campaign_type_totals) ?? resolveCatalogCampaignTypeTotalsForRef(productRef, totalsByRef, chartData);
+  const directTotals = totalsByRef[productRef];
+  if (directTotals) {
+    return directTotals;
+  }
+
+  const articleTotals = normalizeCatalogCampaignTypeTotals(article.campaign_type_totals);
+  if (catalogCampaignTypeTotalsHasSignal(articleTotals)) {
+    return articleTotals;
+  }
+
+  const chartTotals = resolveCatalogCampaignTypeTotalsForRef(productRef, {}, chartData);
+  if (catalogCampaignTypeTotalsHasSignal(chartTotals) || !articleTotals) {
+    return chartTotals;
+  }
+
+  return articleTotals;
 }
 
 function resolveCatalogCampaignTypeTotalsForRef(
@@ -3655,6 +3699,7 @@ export function CatalogPage() {
   const [catalogRowCampaignTypesRefreshToken, setCatalogRowCampaignTypesRefreshToken] = useState(0);
   const [turnoverOrdersOverridesByRef, setTurnoverOrdersOverridesByRef] = useState<Record<string, number | string | null | undefined>>({});
   const [refreshingAllCatalog, setRefreshingAllCatalog] = useState(false);
+  const [refreshingAllCampaignData, setRefreshingAllCampaignData] = useState(false);
   const [refreshingShopIds, setRefreshingShopIds] = useState<string[]>([]);
   const [refreshingArticleRefs, setRefreshingArticleRefs] = useState<string[]>([]);
   const [catalogRefreshProductProgress, setCatalogRefreshProductProgress] = useState<CatalogRefreshProgressState | null>(null);
@@ -3682,6 +3727,7 @@ export function CatalogPage() {
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const catalogRowCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRefreshAbortRef = useRef<AbortController | null>(null);
+  const catalogRowCampaignTypesRangeKeyRef = useRef<string | null>(null);
   const chartAutoRetrySignatureRef = useRef<string | null>(null);
   const chartCacheRef = useRef<Map<string, CatalogChartCacheEntry>>(new Map());
   const articleIssuesAbortRef = useRef<AbortController | null>(null);
@@ -3720,7 +3766,7 @@ export function CatalogPage() {
     });
     return next;
   }, [catalogArticleByRef]);
-  const catalogRefreshing = refreshingAllCatalog || refreshingShopIds.length > 0;
+  const catalogRefreshing = refreshingAllCatalog || refreshingAllCampaignData || refreshingShopIds.length > 0;
   const abortCatalogRefresh = () => {
     catalogRefreshAbortRef.current?.abort();
   };
@@ -4140,6 +4186,7 @@ export function CatalogPage() {
   const catalogRowCampaignTypeFallbackRefsKey = catalogRowCampaignTypeFallbackRefs.join(",");
   const catalogRowCampaignTypesRangeStart = payload.range.current_start;
   const catalogRowCampaignTypesRangeEnd = payload.range.current_end;
+  const catalogRowCampaignTypesRangeKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}`;
   const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${catalogRowCampaignTypeFallbackRefsKey}|${catalogRowCampaignTypesRefreshToken}`;
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
@@ -4335,15 +4382,24 @@ export function CatalogPage() {
   }, [visibleIssueTargetRefsKey]);
 
   useEffect(() => {
+    if (catalogRowCampaignTypesRangeKeyRef.current === null) {
+      catalogRowCampaignTypesRangeKeyRef.current = catalogRowCampaignTypesRangeKey;
+      return;
+    }
+    if (catalogRowCampaignTypesRangeKeyRef.current !== catalogRowCampaignTypesRangeKey) {
+      catalogRowCampaignTypesRangeKeyRef.current = catalogRowCampaignTypesRangeKey;
+      setCatalogRowCampaignTypesByRef({});
+    }
+  }, [catalogRowCampaignTypesRangeKey]);
+
+  useEffect(() => {
     catalogRowCampaignTypesAbortRef.current?.abort();
     if (catalogRefreshing || !catalogRowCampaignTypeFallbackRefs.length) {
-      setCatalogRowCampaignTypesByRef({});
       return;
     }
 
     const controller = new AbortController();
     catalogRowCampaignTypesAbortRef.current = controller;
-    setCatalogRowCampaignTypesByRef({});
 
     const timer = window.setTimeout(() => {
       (async () => {
@@ -5848,7 +5904,7 @@ export function CatalogPage() {
               chunkSize: CATALOG_CHART_FETCH_CHUNK_SIZE,
             });
           }
-          await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress);
+          await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress, chartHasCampaignTypeBreakdown);
 
           const chartRowsByRef = catalogChartRowsByProductRef(chartResponse, chartProcessRefs);
 
@@ -6152,6 +6208,7 @@ export function CatalogPage() {
       campaignChartMode?: "exact" | "deferred";
       forceDeepDetailsRefresh?: boolean;
       refreshIssuesBatch?: boolean;
+      refreshIssues?: boolean;
     },
   ) => {
     const refs = [...new Set(productRefs)];
@@ -6204,7 +6261,7 @@ export function CatalogPage() {
 
         try {
           await refreshCatalogProductRefs([productRef], {
-            refreshIssues: !options.refreshIssuesBatch,
+            refreshIssues: options.refreshIssues !== false && !options.refreshIssuesBatch,
             signal: options.signal,
             scope: options.scope,
             scopeLabel: options.scopeLabel,
@@ -6242,7 +6299,7 @@ export function CatalogPage() {
       Array.from({ length: Math.min(CATALOG_DEEP_REFRESH_CONCURRENCY, total) }, () => runWorker()),
     );
 
-    if (options.refreshIssuesBatch) {
+    if (options.refreshIssues !== false && options.refreshIssuesBatch) {
       await refreshCatalogIssuesForRefsBatch(refs, {
         signal: options.signal,
         scope: options.scope,
@@ -6253,7 +6310,7 @@ export function CatalogPage() {
   };
 
   const handleRefreshAllCatalog = async () => {
-    if (refreshingAllCatalog || refreshingShopIds.length) {
+    if (catalogRefreshing) {
       return;
     }
 
@@ -6270,7 +6327,6 @@ export function CatalogPage() {
     setTurnoverPayloadOverride(null);
     setCatalogArticleOverridesByRef({});
     setTurnoverOrdersOverridesByRef({});
-    setCatalogRowCampaignTypesByRef({});
     setArticleAnalyticsByRef({});
     setChartSourceData(null);
     setChartProgress(null);
@@ -6374,6 +6430,76 @@ export function CatalogPage() {
     }
   };
 
+  const handleRefreshAllCampaignData = async () => {
+    if (catalogRefreshing) {
+      return;
+    }
+
+    const allProductRefs = catalogProductRefsFromPayloads([loaderPayload, sourcePayload]);
+    const productRefs = allProductRefs.filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+    catalogRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogRefreshAbortRef.current = controller;
+    setCatalogRefreshError(null);
+    setRefreshingAllCampaignData(true);
+
+    try {
+      if (!productRefs.length) {
+        setCatalogRefreshActivity({
+          title: "Данные РК не обновлялись",
+          detail: "В текущем каталоге нет активных товаров для загрузки РК.",
+        });
+        return;
+      }
+
+      setCatalogRefreshProductProgress({
+        stage: "deep",
+        fastCompleted: 0,
+        fastTotal: 0,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: "данные РК",
+      });
+
+      await runCatalogDeepRefreshQueue(productRefs, {
+        signal: controller.signal,
+        scope: "catalog",
+        scopeLabel: "Обновление данных РК",
+        fastCompleted: 0,
+        fastTotal: 0,
+        knownArticlesByRef: new Map(),
+        knownTurnoverOrdersByRef: new Map(),
+        knownChartRowsByRef: new Map(),
+        campaignChartMode: "exact",
+        forceDeepDetailsRefresh: true,
+        refreshIssues: false,
+      });
+    } catch (error) {
+      if (!isAbortError(error) && !controller.signal.aborted) {
+        setCatalogRefreshError(await readApiErrorMessage(error));
+      }
+    } finally {
+      if (catalogRefreshAbortRef.current === controller) {
+        catalogRefreshAbortRef.current = null;
+        if (controller.signal.aborted) {
+          appendCatalogRefreshLogs({
+            status: "cancelled",
+            scope: "catalog",
+            step: "Обновление данных РК",
+            message: "Проходка по РК остановлена",
+            detail: "Фоновое обновление данных РК было отменено.",
+          });
+        }
+        setCatalogRefreshActivity({
+          title: controller.signal.aborted ? "Обновление РК отменено" : "Обновление РК завершено",
+          detail: `Обработано товаров: ${formatNumber(productRefs.length)}.`,
+        });
+      }
+      setRefreshingAllCampaignData(false);
+      setCatalogRefreshProductProgress(null);
+    }
+  };
+
   const handleRefreshArticle = async (productRef: string) => {
     if (catalogRefreshing || refreshingArticleRefs.includes(productRef)) {
       return;
@@ -6417,7 +6543,7 @@ export function CatalogPage() {
 
   const handleRefreshShopCabinet = async (shop: CatalogShop) => {
     const shopId = String(shop.id);
-    if (refreshingAllCatalog || refreshingShopIds.length || refreshingShopIds.includes(shopId)) {
+    if (catalogRefreshing || refreshingShopIds.includes(shopId)) {
       return;
     }
 
@@ -6492,7 +6618,7 @@ export function CatalogPage() {
 
   const handleRefreshShopCatalog = async (shop: CatalogShop) => {
     const shopId = String(shop.id);
-    if (refreshingAllCatalog || refreshingShopIds.length || refreshingShopIds.includes(shopId)) {
+    if (catalogRefreshing || refreshingShopIds.includes(shopId)) {
       return;
     }
 
@@ -6660,8 +6786,17 @@ export function CatalogPage() {
                     disabled={catalogRefreshing}
                     className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
                   >
-                    <RefreshCw className={cn("size-4", catalogRefreshing && "animate-spin")} />
+                    <RefreshCw className={cn("size-4", refreshingAllCatalog && "animate-spin")} />
                     Обновить все товары
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRefreshAllCampaignData}
+                    disabled={catalogRefreshing}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
+                  >
+                    <RefreshCw className={cn("size-4", refreshingAllCampaignData && "animate-spin")} />
+                    Обновить данные РК
                   </button>
                   <button
                     type="button"
