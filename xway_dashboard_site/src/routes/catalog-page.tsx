@@ -108,7 +108,6 @@ const CATALOG_ISSUES_PAGE_SIZE = 4;
 const CATALOG_ISSUES_MAX_ATTEMPTS = 3;
 const CATALOG_ISSUES_RETRY_DELAY_MS = 1200;
 const CATALOG_CHART_FETCH_CHUNK_SIZE = 24;
-const CATALOG_REFRESH_FETCH_CHUNK_SIZE = 24;
 const CATALOG_REFRESH_CAMPAIGN_PROCESS_SIZE = 1;
 const CATALOG_SOURCE_WINDOW_DAYS = 30;
 const CATALOG_CHART_RETRY_CHUNK_SIZE = 3;
@@ -3150,6 +3149,83 @@ function sumCatalogChartRows(rows: CatalogChartResponse["rows"]) {
   );
 }
 
+function formatCatalogAbsoluteMetricSummary(rows: CatalogChartResponse["rows"]) {
+  const totals = sumCatalogChartRows(rows);
+  return [
+    `Расход: ${formatMoney(totals.expense_sum, true)}`,
+    `Показы: ${formatCompactNumber(totals.views)}`,
+    `Клики: ${formatNumber(totals.clicks)}`,
+    `Корзины: ${formatNumber(totals.atbs)}`,
+    `Заказы: ${formatNumber(totals.orders)}`,
+    `CTR: ${formatPercent(catalogMetricRate(totals.clicks, totals.views))}`,
+    `CR1: ${formatPercent(catalogMetricRate(totals.atbs, totals.clicks))}`,
+    `CR2: ${formatPercent(catalogMetricRate(totals.orders, totals.atbs))}`,
+    `ДРР: ${formatPercent(catalogMetricRate(totals.expense_sum, totals.sum_price))}`,
+  ].join(" · ");
+}
+
+function formatCatalogCampaignLimitSummary(article: CatalogArticle | null | undefined) {
+  if (!article) {
+    return "Строка товара еще не загружена.";
+  }
+  const slots = buildCatalogCampaignSlots(article);
+  if (!slots.length) {
+    return "Активные плашки РК не найдены.";
+  }
+  const sumLimitRows = (key: CatalogCampaignLimitRow["key"]) => {
+    const rows = slots.flatMap((slot) => slot.limitRows.filter((row) => row.key === key));
+    const total = rows.reduce((sum, row) => sum + (toNumber(row.total) ?? 0), 0);
+    const activeCount = rows.filter((row) => row.active).length;
+    return {
+      total: total > 0 ? total : null,
+      activeCount,
+    };
+  };
+  const budget = sumLimitRows("budget");
+  const spend = sumLimitRows("spend");
+  return [
+    `РК: ${formatNumber(slots.length)}`,
+    `Бюджет: ${budget.total !== null ? formatMoney(budget.total, true) : "нет"}${budget.activeCount ? `, активных ${formatNumber(budget.activeCount)}` : ""}`,
+    `Лимит: ${spend.total !== null ? formatMoney(spend.total, true) : "нет"}${spend.activeCount ? `, активных ${formatNumber(spend.activeCount)}` : ""}`,
+  ].join(" · ");
+}
+
+function formatCatalogBestOrderTimeSummary(article: CatalogArticle | null | undefined) {
+  const ranges = article?.best_order_time?.ranges || [];
+  if (!ranges.length) {
+    return "Лучшие часы не найдены или заказов недостаточно.";
+  }
+  return ranges.map((range) => `${range.label}: ${formatNumber(range.orders)} заказов`).join(" · ");
+}
+
+function formatCatalogCampaignTypeMetricsSummary(rows: CatalogChartResponse["rows"]) {
+  const totals = buildCatalogCampaignTypeTotals(rows);
+  const parts = CATALOG_CAMPAIGN_TYPE_ROWS.map((type) => {
+    const metrics = totals[type.key];
+    if (!catalogCampaignTypeHasMetrics(metrics)) {
+      return null;
+    }
+    return `${type.label}: расход ${formatMoney(metrics.spend, true)}, показы ${formatCompactNumber(metrics.views)}, заказы ${formatNumber(metrics.orders)}`;
+  }).filter(Boolean);
+
+  return parts.length ? parts.join(" · ") : "Разбивка по типам РК не вернула значимых значений.";
+}
+
+function formatCatalogShopRefreshSummary(shop: CatalogShop | null | undefined) {
+  if (!shop) {
+    return "Кабинет не найден в ответе каталога.";
+  }
+  const totals = computeCatalogTotals([shop]);
+  return [
+    `Товаров: ${formatNumber(shop.articles.length)}`,
+    `Расход: ${formatMoney(totals.expense_sum, true)}`,
+    `Показы: ${formatCompactNumber(totals.views)}`,
+    `Клики: ${formatNumber(totals.clicks)}`,
+    `Корзины: ${formatNumber(totals.atbs)}`,
+    `Заказы: ${formatNumber(totals.orders)}`,
+  ].join(" · ");
+}
+
 function applyCatalogChartMetricsToPayload(
   payload: CatalogResponse,
   chartData: CatalogChartResponse | null,
@@ -4846,6 +4922,94 @@ export function CatalogPage() {
     }
   };
 
+  const refreshCatalogRowsByShop = async (
+    productRefs: string[],
+    options: {
+      signal?: AbortSignal;
+      scope: CatalogRefreshLogScope;
+      scopeLabel: string;
+    },
+  ) => {
+    const refs = [...new Set(productRefs)];
+    const refsByShopId = refs.reduce((map, ref) => {
+      const [shopId] = ref.split(":");
+      if (!shopId) {
+        return map;
+      }
+      const current = map.get(shopId) ?? [];
+      current.push(ref);
+      map.set(shopId, current);
+      return map;
+    }, new Map<string, string[]>());
+    const sourceShopIds = sourcePayload.shops.map((shop) => String(shop.id));
+    const orderedShopIds = [...sourceShopIds, ...[...refsByShopId.keys()].filter((shopId) => !sourceShopIds.includes(shopId))];
+    const knownArticlesByRef = new Map<string, CatalogArticle>();
+
+    for (const shopId of orderedShopIds) {
+      const shopRefs = refsByShopId.get(shopId);
+      if (!shopRefs?.length) {
+        continue;
+      }
+      if (options.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+
+      const sourceShop = sourcePayload.shops.find((shop) => String(shop.id) === shopId);
+      const shopName = sourceShop?.name ?? `Кабинет ${shopId}`;
+      setCatalogRefreshStep(options.scopeLabel, `${shopName}: кабинеты, артикулы и остатки`, shopRefs.length === 1 ? shopRefs[0] : undefined);
+
+      try {
+        const currentCatalog = await fetchCatalog({
+          productRefs: shopRefs,
+          start: sourcePayload.range.current_start,
+          end: sourcePayload.range.current_end,
+          forceRefresh: true,
+          signal: options.signal,
+        });
+        const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, shopRefs);
+        const loadedRefs = Object.keys(articleOverrides);
+        if (loadedRefs.length) {
+          loadedRefs.forEach((ref) => knownArticlesByRef.set(ref, articleOverrides[ref]!));
+          setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+        }
+
+        const responseShop = currentCatalog.shops.find((shop) => String(shop.id) === shopId);
+        appendCatalogRefreshLogs({
+          status: "success",
+          scope: options.scope,
+          step: "Кабинеты и артикулы",
+          message: "Кабинет загружен",
+          detail: `${shopName}: ${formatCatalogShopRefreshSummary(responseShop)}`,
+        });
+
+        const missingRefs = shopRefs.filter((ref) => !articleOverrides[ref]);
+        if (missingRefs.length) {
+          appendCatalogRefreshLogsForRefs(missingRefs, {
+            status: "warning",
+            scope: options.scope,
+            step: "Кабинеты и артикулы",
+            message: "Товар не найден в пакетном ответе кабинета",
+            detail: "Для этого товара будет использована обычная товарная загрузка строки.",
+          });
+        }
+      } catch (error) {
+        if (isAbortError(error) || options.signal?.aborted) {
+          throw error;
+        }
+        const message = await readApiErrorMessage(error);
+        appendCatalogRefreshLogs({
+          status: "error",
+          scope: options.scope,
+          step: "Кабинеты и артикулы",
+          message: "Кабинет не загрузился",
+          detail: `${shopName}: ${message}`,
+        });
+      }
+    }
+
+    return knownArticlesByRef;
+  };
+
   const refreshCatalogProductRefs = async (
     productRefs: string[],
     options: {
@@ -4854,6 +5018,8 @@ export function CatalogPage() {
       signal?: AbortSignal;
       scope?: CatalogRefreshLogScope;
       scopeLabel?: string;
+      skipCatalogRowRefresh?: boolean;
+      knownArticlesByRef?: Map<string, CatalogArticle>;
     } = {},
   ) => {
     const refs = [...new Set(productRefs)];
@@ -4871,6 +5037,10 @@ export function CatalogPage() {
     const activityRef = refs.length === 1 ? refs[0] : undefined;
     let firstErrorMessage: string | null = null;
     let currentStepErrorRefs = refs;
+    const refreshedArticlesByRef = new Map<string, CatalogArticle>();
+
+    const resolveRefreshedArticle = (ref: string) =>
+      refreshedArticlesByRef.get(ref) ?? options.knownArticlesByRef?.get(ref) ?? catalogArticleByRef.get(ref);
 
     const rememberStepError = (message: string) => {
       if (!firstErrorMessage) {
@@ -4894,42 +5064,69 @@ export function CatalogPage() {
     };
 
     try {
-      setCatalogRefreshStep(scopeLabel, `${targetLabel}: строка, РК и остаток`, activityRef);
-      for (const ref of refs) {
-        currentStepErrorRefs = [ref];
-        try {
-          const currentCatalog = await fetchCatalog({
-            productRefs: [ref],
-            start: sourcePayload.range.current_start,
-            end: sourcePayload.range.current_end,
-            forceRefresh: true,
-            signal: options.signal,
-          });
-          const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, [ref]);
-          const loadedRefs = Object.keys(articleOverrides);
-          if (loadedRefs.length) {
-            setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
-          }
-          if (loadedRefs.length) {
-            appendCatalogRefreshLogsForRefs(loadedRefs, {
+      setCatalogRefreshStep(scopeLabel, `${targetLabel}: остатки`, activityRef);
+      if (options.skipCatalogRowRefresh) {
+        refs.forEach((ref) => {
+          const article = resolveRefreshedArticle(ref);
+          if (article) {
+            refreshedArticlesByRef.set(ref, article);
+            appendCatalogRefreshLogsForRefs([ref], {
               status: "success",
               scope,
-              step: "Строка товара",
-              message: "Загружены показатели, РК и остаток",
+              step: "Остатки",
+              message: "Остаток взят из пакетной загрузки кабинета",
+              detail: `Остаток: ${formatNumber(article.stock)}`,
             });
-          }
-          const missingRefs = Object.keys(articleOverrides).length ? [] : [ref];
-          if (missingRefs.length) {
-            appendCatalogRefreshLogsForRefs(missingRefs, {
+          } else {
+            appendCatalogRefreshLogsForRefs([ref], {
               status: "warning",
               scope,
-              step: "Строка товара",
-              message: "Товар не найден в ответе каталога",
-              detail: "API ответил без строки этого товара.",
+              step: "Остатки",
+              message: "Нет строки товара после пакетной загрузки",
+              detail: "Кабинетный ответ не вернул этот товар.",
             });
           }
-        } catch (error) {
-          await logStepError("Строка товара", error);
+        });
+      } else {
+        for (const ref of refs) {
+          currentStepErrorRefs = [ref];
+          try {
+            const currentCatalog = await fetchCatalog({
+              productRefs: [ref],
+              start: sourcePayload.range.current_start,
+              end: sourcePayload.range.current_end,
+              forceRefresh: true,
+              signal: options.signal,
+            });
+            const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, [ref]);
+            const loadedRefs = Object.keys(articleOverrides);
+            if (loadedRefs.length) {
+              loadedRefs.forEach((loadedRef) => refreshedArticlesByRef.set(loadedRef, articleOverrides[loadedRef]!));
+              setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
+            }
+            if (loadedRefs.length) {
+              appendCatalogRefreshLogsForRefs(loadedRefs, {
+                status: "success",
+                scope,
+                step: "Остатки",
+                message: "Загружен остаток",
+              }, (loadedRef) => ({
+                detail: `Остаток: ${formatNumber(articleOverrides[loadedRef]?.stock)}`,
+              }));
+            }
+            const missingRefs = Object.keys(articleOverrides).length ? [] : [ref];
+            if (missingRefs.length) {
+              appendCatalogRefreshLogsForRefs(missingRefs, {
+                status: "warning",
+                scope,
+                step: "Строка товара",
+                message: "Товар не найден в ответе каталога",
+                detail: "API ответил без строки этого товара.",
+              });
+            }
+          } catch (error) {
+            await logStepError("Остатки", error);
+          }
         }
       }
       currentStepErrorRefs = refs;
@@ -4966,7 +5163,9 @@ export function CatalogPage() {
               scope,
               step: "Оборачиваемость",
               message: "Загружены заказы за 3 дня",
-            });
+            }, (loadedRef) => ({
+              detail: `Заказов за 3 дня: ${formatNumber(turnoverOverrides[loadedRef])}`,
+            }));
           }
           if (emptyTurnoverRefs.length) {
             appendCatalogRefreshLogsForRefs(emptyTurnoverRefs, {
@@ -4983,17 +5182,17 @@ export function CatalogPage() {
       }
       currentStepErrorRefs = refs;
 
-      const disabledChartRefs = refs.filter((ref) => isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+      const disabledChartRefs = refs.filter((ref) => isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
       if (disabledChartRefs.length) {
         appendCatalogRefreshLogsForRefs(disabledChartRefs, {
           status: "info",
           scope,
-          step: "График и РК",
+          step: "Данные РК",
           message: "Товар отключен",
           detail: "Товар отключен в XWAY, внутренние данные РК не загружаются.",
         });
       }
-      const chartProcessSourceRefs = refs.filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
+      const chartProcessSourceRefs = refs.filter((ref) => !isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
       const chartProcessGroups = chunkItems(chartProcessSourceRefs, CATALOG_REFRESH_CAMPAIGN_PROCESS_SIZE);
       for (let chartProcessIndex = 0; chartProcessIndex < chartProcessGroups.length; chartProcessIndex += 1) {
         const chartProcessRefs = chartProcessGroups[chartProcessIndex]!;
@@ -5004,78 +5203,120 @@ export function CatalogPage() {
           chartProcessRefs.length === 1 ? chartProcessRefs[0] : activityRef,
         );
         try {
-        const chartResponse = await fetchCatalogChartWorkerSafe({
-          productRefs: chartProcessRefs,
-          start: chartSourceRangeStart,
-          end: chartSourceRangeEnd,
-          includeCampaignTypes: true,
-          forceRefresh: true,
-          signal: options.signal,
-          selectionCount: chartSourceSelectionCount,
-          chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
-          onWorkerLimit: (limitRefs) => {
-            appendCatalogRefreshLogsForRefs(limitRefs, {
+          const chartResponse = await fetchCatalogChartWorkerSafe({
+            productRefs: chartProcessRefs,
+            start: chartSourceRangeStart,
+            end: chartSourceRangeEnd,
+            includeCampaignTypes: true,
+            forceRefresh: true,
+            signal: options.signal,
+            selectionCount: chartSourceSelectionCount,
+            chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
+            onWorkerLimit: (limitRefs) => {
+              appendCatalogRefreshLogsForRefs(limitRefs, {
+                status: "warning",
+                scope,
+                step: "Данные РК: графики",
+                message: "Уменьшаем чанк из-за лимита Worker",
+                detail: `Cloudflare вернул лимит Worker для ${formatNumber(limitRefs.length)} товаров.`,
+              });
+            },
+          });
+          await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress);
+
+          const chartRowsByRef = new Map<string, CatalogChartResponse["rows"]>();
+          chartResponse.product_rows?.forEach((item) => {
+            chartRowsByRef.set(item.product_ref, item.rows);
+          });
+          if (!chartRowsByRef.size && chartProcessRefs.length === 1) {
+            chartRowsByRef.set(chartProcessRefs[0]!, chartResponse.rows);
+          }
+
+          const resolveRowsForRef = (ref: string) => chartRowsByRef.get(ref) ?? [];
+          const resolveSelectedRowsForRef = (ref: string) => {
+            const rows = resolveRowsForRef(ref);
+            const selectedRows = rows.filter((row) => row.day >= selectedRangeStart && row.day <= selectedRangeEnd);
+            return selectedRows.length || rows.length === 0 ? selectedRows : rows;
+          };
+          const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
+          const loadedChartRefs = new Set(chartRowsByRef.keys());
+          const loadedRefs = chartProcessRefs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+          if (loadedRefs.length) {
+            appendCatalogRefreshLogsForRefs(loadedRefs, {
+              status: "success",
+              scope,
+              step: "Абсолютные значения",
+              message: "Загружено",
+            }, (ref) => {
+              const rows = resolveSelectedRowsForRef(ref);
+              return {
+                message: `Загружено дней: ${formatNumber(rows.length)}`,
+                detail: formatCatalogAbsoluteMetricSummary(rows),
+              };
+            });
+            appendCatalogRefreshLogsForRefs(loadedRefs, {
+              status: "success",
+              scope,
+              step: "Данные РК: графики",
+              message: "Графики РК загружены",
+            }, (ref) => ({
+              message: "Графики РК загружены",
+              detail: formatCatalogCampaignTypeMetricsSummary(resolveSelectedRowsForRef(ref)),
+            }));
+            appendCatalogRefreshLogsForRefs(loadedRefs, {
+              status: "success",
+              scope,
+              step: "Данные РК: лимиты",
+              message: "Бюджет и лимиты проверены",
+            }, (ref) => ({
+              detail: formatCatalogCampaignLimitSummary(resolveRefreshedArticle(ref)),
+            }));
+            appendCatalogRefreshLogsForRefs(loadedRefs, {
+              status: "success",
+              scope,
+              step: "Данные РК: лучшие часы",
+              message: "Лучшие часы проверены",
+            }, (ref) => ({
+              detail: formatCatalogBestOrderTimeSummary(resolveRefreshedArticle(ref)),
+            }));
+          }
+          const errorRefs = chartProcessRefs.filter((ref) => chartErrorsByRef.has(ref));
+          if (errorRefs.length) {
+            appendCatalogRefreshLogsForRefs(errorRefs, {
+              status: "error",
+              scope,
+              step: "Абсолютные значения / РК",
+              message: "Не загрузилось",
+            }, (ref) => ({
+              status: "error",
+              message: "Не загрузилось",
+              detail: chartErrorsByRef.get(ref) || "API вернул ошибку без текста.",
+            }));
+            rememberStepError(chartErrorsByRef.get(errorRefs[0]!) || "Не удалось загрузить график и метрики РК.");
+          }
+          const missingRefs = chartProcessRefs.filter((ref) => !loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+          if (missingRefs.length) {
+            appendCatalogRefreshLogsForRefs(missingRefs, {
               status: "warning",
               scope,
-              step: "Р“СЂР°С„РёРє Рё Р Рљ",
-              message: "РЈРјРµРЅСЊС€Р°РµРј С‡Р°РЅРє РёР·-Р·Р° Р»РёРјРёС‚Р° Worker",
-              detail: `Cloudflare РІРµСЂРЅСѓР» Too many subrequests РґР»СЏ ${formatNumber(limitRefs.length)} С‚РѕРІР°СЂРѕРІ.`,
+              step: "Абсолютные значения",
+              message: "Нет строк графика в ответе",
+              detail: "API ответил без ошибки, но не вернул дневные строки товара.",
             });
-          },
-        });
-        await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress);
-        const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
-        const loadedChartRefs = new Set((chartResponse.product_rows || []).map((item) => item.product_ref));
-        if (!loadedChartRefs.size && chartProcessRefs.length === 1 && !chartErrorsByRef.has(chartProcessRefs[0]!)) {
-          loadedChartRefs.add(chartProcessRefs[0]!);
-        }
-        const loadedRefs = chartProcessRefs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
-        if (loadedRefs.length) {
-          appendCatalogRefreshLogsForRefs(loadedRefs, {
-            status: "success",
-            scope,
-            step: "График и РК",
-            message: `Загружено дней: ${formatNumber(chartResponse.rows.length)}`,
-            detail: "График и разбивка по типам РК обновлены.",
-          });
-        }
-        const errorRefs = chartProcessRefs.filter((ref) => chartErrorsByRef.has(ref));
-        if (errorRefs.length) {
-          appendCatalogRefreshLogsForRefs(errorRefs, {
-            status: "error",
-            scope,
-            step: "График и РК",
-            message: "Не загрузилось",
-          }, (ref) => ({
-            status: "error",
-            message: "Не загрузилось",
-            detail: chartErrorsByRef.get(ref) || "API вернул ошибку без текста.",
-          }));
-          rememberStepError(chartErrorsByRef.get(errorRefs[0]!) || "Не удалось загрузить график и метрики РК.");
-        }
-        const missingRefs = chartProcessRefs.filter((ref) => !loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
-        if (missingRefs.length) {
-          appendCatalogRefreshLogsForRefs(missingRefs, {
-            status: "warning",
-            scope,
-            step: "График и РК",
-            message: "Нет строк графика в ответе",
-            detail: "API ответил без ошибки, но не вернул дневные строки товара.",
-          });
-        }
-        const expandedRefs = chartProcessRefs.filter((ref) => expandedAnalyticsRefs.includes(ref));
-        if (expandedRefs.length) {
-          setArticleAnalyticsByRef((current) => {
-            const next = { ...current };
-            expandedRefs.forEach((ref) => {
-              const productRows = chartResponse.product_rows?.find((item) => item.product_ref === ref)?.rows ?? (chartProcessRefs.length === 1 ? chartResponse.rows : null);
-              next[ref] = { loading: false, error: null, rows: productRows ?? current[ref]?.rows ?? null };
+          }
+          const expandedRefs = chartProcessRefs.filter((ref) => expandedAnalyticsRefs.includes(ref));
+          if (expandedRefs.length) {
+            setArticleAnalyticsByRef((current) => {
+              const next = { ...current };
+              expandedRefs.forEach((ref) => {
+                const productRows = resolveRowsForRef(ref);
+                next[ref] = { loading: false, error: null, rows: productRows.length ? productRows : current[ref]?.rows ?? null };
+              });
+              return next;
             });
-            return next;
-          });
-        }
+          }
         } catch (error) {
-          await logStepError("График и РК", error, chartProcessRefs);
+          await logStepError("Абсолютные значения / РК", error, chartProcessRefs);
         }
         if (chartProcessIndex < chartProcessGroups.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, options.signal ?? new AbortController().signal);
@@ -5158,32 +5399,36 @@ export function CatalogPage() {
     setChartCampaignTypesError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
 
-    const productGroups = payload.shops.flatMap((shop) =>
-      chunkItems(
-        shop.articles.map((article) => `${shop.id}:${article.product_id}`),
-        CATALOG_REFRESH_FETCH_CHUNK_SIZE,
-      ),
-    );
+    const productRefs = sourcePayload.shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
 
     setChartProgress({
       cacheKey: chartSourceCacheKey,
       selectionCount: chartSourceSelectionCount,
       loadedProductsCount: 0,
-      chunkCount: productGroups.length,
+      chunkCount: productRefs.length,
       loadedChunkCount: 0,
       errorCount: 0,
     });
 
     try {
-      for (let index = 0; index < productGroups.length; index += 1) {
-        await refreshCatalogProductRefs(productGroups[index]!, {
-          refreshIssues: false,
+      const knownArticlesByRef = await refreshCatalogRowsByShop(productRefs, {
+        signal: controller.signal,
+        scope: "catalog",
+        scopeLabel: "Обновление всех товаров",
+      });
+
+      for (let index = 0; index < productRefs.length; index += 1) {
+        const productRef = productRefs[index]!;
+        await refreshCatalogProductRefs([productRef], {
+          refreshIssues: true,
           signal: controller.signal,
           scope: "catalog",
           scopeLabel: "Обновление всех товаров",
-          progress: { chunkCount: productGroups.length, loadedChunkCount: index + 1 },
+          progress: { chunkCount: productRefs.length, loadedChunkCount: index + 1 },
+          skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
+          knownArticlesByRef,
         });
-        if (index < productGroups.length - 1) {
+        if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
       }
@@ -5205,7 +5450,7 @@ export function CatalogPage() {
         }
         setCatalogRefreshActivity({
           title: controller.signal.aborted ? "Обновление отменено" : "Обновление завершено",
-          detail: controller.signal.aborted ? "Проходка по товарам остановлена." : `Обработано чанков: ${formatNumber(productGroups.length)}.`,
+          detail: controller.signal.aborted ? "Проходка по товарам остановлена." : `Обработано товаров: ${formatNumber(productRefs.length)}.`,
         });
       }
       setRefreshingAllCatalog(false);
@@ -5259,7 +5504,7 @@ export function CatalogPage() {
       return;
     }
 
-    const sourceShop = payload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
+    const sourceShop = sourcePayload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
     const productRefs = sourceShop.articles.map((article) => `${sourceShop.id}:${article.product_id}`);
     if (!productRefs.length) {
       return;
@@ -5272,12 +5517,21 @@ export function CatalogPage() {
     setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
 
     try {
+      const knownArticlesByRef = await refreshCatalogRowsByShop(productRefs, {
+        signal: controller.signal,
+        scope: "shop",
+        scopeLabel: `Обновление кабинета: ${shop.name}`,
+      });
+
       for (let index = 0; index < productRefs.length; index += 1) {
-        await refreshCatalogProductRefs([productRefs[index]!], {
+        const productRef = productRefs[index]!;
+        await refreshCatalogProductRefs([productRef], {
           refreshIssues: true,
           signal: controller.signal,
           scope: "shop",
           scopeLabel: `Обновление кабинета: ${shop.name}`,
+          skipCatalogRowRefresh: knownArticlesByRef.has(productRef),
+          knownArticlesByRef,
         });
         if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
