@@ -417,6 +417,14 @@ function catalogProductRefsFromPayload(payload: CatalogResponse) {
   return payload.shops.flatMap((shop) => shop.articles.map((article) => `${shop.id}:${article.product_id}`));
 }
 
+function catalogProductRefsFromPayloads(payloads: CatalogResponse[]) {
+  return [
+    ...new Set(
+      payloads.flatMap((payload) => catalogProductRefsFromPayload(payload)),
+    ),
+  ];
+}
+
 function mergeCatalogPayloadWithShopResponse(basePayload: CatalogResponse, shopResponse: CatalogResponse) {
   const incomingById = new Map(shopResponse.shops.map((shop) => [String(shop.id), shop]));
   const seenShopIds = new Set<string>();
@@ -4979,6 +4987,7 @@ export function CatalogPage() {
       signal?: AbortSignal;
       scope: CatalogRefreshLogScope;
       scopeLabel: string;
+      includeAllKnownShops?: boolean;
     },
   ) => {
     const refs = [...new Set(productRefs)];
@@ -4992,10 +5001,13 @@ export function CatalogPage() {
       map.set(shopId, current);
       return map;
     }, new Map<string, string[]>());
-    const sourceShopIds = sourcePayload.shops.map((shop) => String(shop.id));
+    const allKnownShopIds = [
+      ...new Set([...loaderPayload.shops, ...sourcePayload.shops].map((shop) => String(shop.id))),
+    ];
+    const sourceShopIds = options.includeAllKnownShops ? allKnownShopIds : sourcePayload.shops.map((shop) => String(shop.id));
     const requestedShopIds = new Set(refsByShopId.keys());
     const orderedShopIds = [
-      ...sourceShopIds.filter((shopId) => !requestedShopIds.size || requestedShopIds.has(shopId)),
+      ...sourceShopIds.filter((shopId) => options.includeAllKnownShops || !requestedShopIds.size || requestedShopIds.has(shopId)),
       ...[...requestedShopIds].filter((shopId) => !sourceShopIds.includes(shopId)),
     ];
     const knownArticlesByRef = new Map<string, CatalogArticle>();
@@ -5007,7 +5019,9 @@ export function CatalogPage() {
         throw new DOMException("Aborted", "AbortError");
       }
 
-      const sourceShop = sourcePayload.shops.find((shop) => String(shop.id) === shopId);
+      const sourceShop =
+        sourcePayload.shops.find((shop) => String(shop.id) === shopId) ??
+        loaderPayload.shops.find((shop) => String(shop.id) === shopId);
       const shopName = sourceShop?.name ?? `Кабинет ${shopId}`;
       setCatalogRefreshStep(options.scopeLabel, `${shopName}: кабинет, артикулы и базовые данные`, shopRefs.length === 1 ? shopRefs[0] : undefined);
 
@@ -5532,7 +5546,7 @@ export function CatalogPage() {
     setChartCampaignTypesError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
 
-    let productRefs = catalogProductRefsFromPayload(sourcePayload);
+    let productRefs = catalogProductRefsFromPayloads([loaderPayload, sourcePayload]);
 
     setChartProgress({
       cacheKey: chartSourceCacheKey,
@@ -5549,6 +5563,7 @@ export function CatalogPage() {
         signal: controller.signal,
         scope: "catalog",
         scopeLabel: "Обновление всех товаров",
+        includeAllKnownShops: true,
       });
       const knownArticlesByRef = baseRefresh.knownArticlesByRef;
       productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
