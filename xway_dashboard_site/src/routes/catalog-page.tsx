@@ -3163,7 +3163,6 @@ export function CatalogPage() {
       productLabel: entry.productRef ? (entry.productLabel ?? resolveCatalogRefreshProductLabel(entry.productRef)) : entry.productLabel,
     }));
     setCatalogRefreshLogs((current) => [...current, ...nextEntries].slice(-5000));
-    setCatalogRefreshPanelOpen(true);
   };
   const appendCatalogRefreshLogsForRefs = (
     refs: string[],
@@ -3185,10 +3184,9 @@ export function CatalogPage() {
       detail,
       productRef,
     });
-    setCatalogRefreshPanelOpen(true);
   };
-  const openCatalogRefreshLogs = (productRef: string) => {
-    setSelectedCatalogRefreshLogRef(productRef);
+  const openCatalogRefreshLogs = (productRef?: string | null) => {
+    setSelectedCatalogRefreshLogRef(productRef ?? null);
     setCatalogRefreshPanelOpen(true);
   };
   const fetchCatalogChartWorkerSafe = async ({
@@ -5213,6 +5211,18 @@ export function CatalogPage() {
                   >
                     <RefreshCw className={cn("size-4", catalogRefreshing && "animate-spin")} />
                     Обновить все товары
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openCatalogRefreshLogs(null)}
+                    className={cn(
+                      "metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm transition hover:bg-[var(--color-surface-strong)]",
+                      catalogRefreshPanelOpen && !selectedCatalogRefreshLogRef ? "text-brand-200" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]",
+                    )}
+                  >
+                    <FileText className="size-4" />
+                    Логи
+                    {catalogRefreshLogErrorCount > 0 ? <span className="text-rose-400">{formatNumber(catalogRefreshLogErrorCount)}</span> : null}
                   </button>
                   <button
                     type="button"
