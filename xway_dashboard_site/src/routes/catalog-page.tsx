@@ -2845,6 +2845,30 @@ function normalizeApiErrorMessage(message: string) {
     return "Не удалось собрать ошибки по артикулам.";
   }
   const hasHtml = /<!doctype html>|<html[\s>]|<head[\s>]|<body[\s>]/i.test(text);
+  const decodeHtmlText = (value: string) =>
+    value
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&bull;/gi, "·")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  const cloudflareCode = text.match(/cf-error-code[^>]*>\s*(\d{3,4})\s*</i)?.[1] || text.match(/\bError\s+(\d{3,4})\b/i)?.[1] || null;
+  const title = text.match(/<title[^>]*>(.*?)<\/title>/i)?.[1];
+  const decodedTitle = title ? decodeHtmlText(title).replace(/\s*\|.*$/, "").trim() : "";
+  const errorDescription = text.match(/data-translate=["']error_desc["'][^>]*>(.*?)<\/h2>/i)?.[1];
+  const decodedDescription = errorDescription ? decodeHtmlText(errorDescription) : "";
+
+  if (hasHtml && /Worker exceeded resource limits/i.test(text)) {
+    return `Cloudflare: Worker exceeded resource limits${cloudflareCode ? ` (${cloudflareCode})` : ""}.`;
+  }
+  if (hasHtml && (decodedDescription || decodedTitle)) {
+    const label = decodedDescription || decodedTitle;
+    return `Cloudflare: ${label}${cloudflareCode ? ` (${cloudflareCode})` : ""}.`;
+  }
   const statusMatch = text.match(/\b(5\d{2}|4\d{2})\b/);
   if ((hasHtml || /temporarily unavailable|XWAY request failed \(503\)/i.test(text)) && statusMatch?.[1] === "503") {
     return "XWAY временно недоступен (503).";
@@ -3079,6 +3103,8 @@ export function CatalogPage() {
   const appendCatalogRefreshLogs = (entries: CatalogRefreshLogInput | CatalogRefreshLogInput[]) => {
     const nextEntries = (Array.isArray(entries) ? entries : [entries]).map((entry, index) => ({
       ...entry,
+      message: normalizeApiErrorMessage(entry.message),
+      detail: entry.detail ? normalizeApiErrorMessage(entry.detail) : entry.detail,
       id: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
       createdAt: new Date().toISOString(),
       productLabel: entry.productRef ? (entry.productLabel ?? resolveCatalogRefreshProductLabel(entry.productRef)) : entry.productLabel,
@@ -6020,7 +6046,7 @@ export function CatalogPage() {
                   <strong>{entry.step}</strong>
                   <p>{entry.message}</p>
                   {entry.productLabel ? <small>{entry.productLabel}</small> : null}
-                  {entry.detail ? <em>{entry.detail}</em> : null}
+                  {entry.detail ? <em>{normalizeApiErrorMessage(entry.detail)}</em> : null}
                 </div>
               ))
             ) : (
