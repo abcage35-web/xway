@@ -2,11 +2,11 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition
 import { ArrowUp, ChevronDown, ExternalLink, FileText, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
-import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues } from "../lib/api";
+import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues, fetchCatalogProductDetails } from "../lib/api";
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import { readPersistentApiCache, writePersistentApiCache } from "../lib/persistent-api-cache";
-import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesRow, CatalogResponse, CatalogShop } from "../lib/types";
+import type { CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesRow, CatalogProductDetailRow, CatalogResponse, CatalogShop } from "../lib/types";
 import { CatalogArticleAnalyticsPanel, formatCatalogShortDate, type CatalogArticleAnalyticsState } from "../features/catalog/article-analytics-panel";
 import {
   aggregateCatalogChartResponse,
@@ -421,6 +421,29 @@ function catalogArticleOverridesFromPayload(payload: CatalogResponse, productRef
     }
   });
   return overrides;
+}
+
+function mergeCatalogCampaignStates(baseStates: CatalogCampaignState[] = [], detailStates: CatalogCampaignState[] = []) {
+  if (!detailStates.length) {
+    return baseStates;
+  }
+  const statesByKey = new Map(baseStates.map((state) => [state.key, state]));
+  detailStates.forEach((detailState) => {
+    const current = statesByKey.get(detailState.key);
+    statesByKey.set(detailState.key, current ? { ...current, ...detailState } : detailState);
+  });
+  return [...statesByKey.values()];
+}
+
+function mergeCatalogProductDetailRow(article: CatalogArticle, row: CatalogProductDetailRow): CatalogArticle {
+  const hasCampaignError = Boolean(row.errors?.campaign_details);
+  const hasBestTimeError = Boolean(row.errors?.best_order_time);
+  return {
+    ...article,
+    campaign_states: hasCampaignError ? article.campaign_states : mergeCatalogCampaignStates(article.campaign_states, row.campaign_states ?? []),
+    campaign_type_totals: hasCampaignError ? article.campaign_type_totals : row.campaign_type_totals ?? article.campaign_type_totals,
+    best_order_time: hasBestTimeError ? article.best_order_time ?? null : row.best_order_time ?? null,
+  };
 }
 
 function catalogProductRefsFromPayload(payload: CatalogResponse) {
@@ -2277,6 +2300,7 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
     request,
     start: sourceWindow?.start ?? start,
     end: sourceWindow?.end ?? end,
+    includeAux: false,
   });
   const selectedStart = start ?? payload.range.current_start;
   const selectedEnd = end ?? payload.range.current_end;
@@ -2287,7 +2311,7 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
 
   if (selectedIsSourceRange) {
     try {
-      comparePayload = await fetchCatalog({ request, start: compareStart, end: compareEnd });
+      comparePayload = await fetchCatalog({ request, start: compareStart, end: compareEnd, includeAux: false });
     } catch {
       comparePayload = null;
     }
@@ -2301,7 +2325,7 @@ export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<Ca
     turnoverPayload = payload;
   } else if (selectedIsSourceRange) {
     try {
-      turnoverPayload = await fetchCatalog({ request, start: turnoverStart, end: turnoverEnd });
+      turnoverPayload = await fetchCatalog({ request, start: turnoverStart, end: turnoverEnd, includeAux: false });
     } catch {
       turnoverPayload = null;
     }
@@ -5346,6 +5370,7 @@ export function CatalogPage() {
               start: sourcePayload.range.current_start,
               end: sourcePayload.range.current_end,
               forceRefresh: true,
+              includeAux: false,
               signal: options.signal,
             });
             const articleOverrides = catalogArticleOverridesFromPayload(currentCatalog, [ref]);
@@ -5463,48 +5488,54 @@ export function CatalogPage() {
 
       }
 
-      if (options.skipCatalogRowRefresh) {
-        const detailRefs = refs.filter((ref) => !isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
-        if (detailRefs.length) {
-          setCatalogRefreshStep(scopeLabel, `${targetLabel}: детали РК и лучшие часы`, activityRef);
-        }
-        for (const ref of detailRefs) {
-          currentStepErrorRefs = [ref];
-          try {
-            const detailCatalog = await fetchCatalog({
-              productRefs: [ref],
-              start: sourcePayload.range.current_start,
-              end: sourcePayload.range.current_end,
-              forceRefresh: true,
-              signal: options.signal,
-            });
-            const articleOverrides = catalogArticleOverridesFromPayload(detailCatalog, [ref]);
-            const article = articleOverrides[ref];
-            if (article) {
-              refreshedArticlesByRef.set(ref, article);
-              setCatalogArticleOverridesByRef((current) => ({ ...current, ...articleOverrides }));
-              appendCatalogRefreshLogsForRefs([ref], {
-                status: "success",
-                scope,
-                step: "Данные РК: детали",
-                message: "Детали РК загружены",
-                detail: `${formatCatalogCampaignLimitSummary(article)} · ${formatCatalogBestOrderTimeSummary(article)}`,
-              });
-            } else {
-              appendCatalogRefreshLogsForRefs([ref], {
-                status: "warning",
-                scope,
-                step: "Данные РК: детали",
-                message: "Товар не найден в ответе деталей",
-                detail: "API ответил без строки этого товара.",
-              });
-            }
-          } catch (error) {
-            await logStepError("Данные РК: детали", error, [ref]);
-          }
-        }
-        currentStepErrorRefs = refs;
+      const detailRefs = refs.filter((ref) => !isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
+      if (detailRefs.length) {
+        setCatalogRefreshStep(scopeLabel, `${targetLabel}: детали РК и лучшие часы`, activityRef);
       }
+      for (const ref of detailRefs) {
+        currentStepErrorRefs = [ref];
+        try {
+          const detailResponse = await fetchCatalogProductDetails({
+            productRefs: [ref],
+            start: sourcePayload.range.current_start,
+            end: sourcePayload.range.current_end,
+            forceRefresh: true,
+            signal: options.signal,
+          });
+          const detailRow = detailResponse.rows.find((row) => row.product_ref === ref);
+          const baseArticle = resolveRefreshedArticle(ref);
+          if (detailRow && baseArticle) {
+            const article = mergeCatalogProductDetailRow(baseArticle, detailRow);
+            const detailErrors = [detailRow.errors?.campaign_details, detailRow.errors?.best_order_time]
+              .filter((message): message is string => Boolean(message))
+              .map((message) => normalizeApiErrorMessage(message));
+            refreshedArticlesByRef.set(ref, article);
+            setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: article }));
+            appendCatalogRefreshLogsForRefs([ref], {
+              status: detailErrors.length ? "warning" : "success",
+              scope,
+              step: "Данные РК: детали",
+              message: detailErrors.length ? "Детали РК загружены частично" : "Детали РК загружены",
+              detail: [
+                formatCatalogCampaignLimitSummary(article),
+                formatCatalogBestOrderTimeSummary(article),
+                ...detailErrors,
+              ].join(" · "),
+            });
+          } else {
+            appendCatalogRefreshLogsForRefs([ref], {
+              status: "warning",
+              scope,
+              step: "Данные РК: детали",
+              message: detailRow ? "Нет базовой строки товара" : "Товар не найден в ответе деталей",
+              detail: detailRow ? "Детали РК пришли, но строка товара еще не загружена." : "API ответил без строки этого товара.",
+            });
+          }
+        } catch (error) {
+          await logStepError("Данные РК: детали", error, [ref]);
+        }
+      }
+      currentStepErrorRefs = refs;
 
       const disabledChartRefs = refs.filter((ref) => isCatalogArticleDisabled(resolveRefreshedArticle(ref)));
       if (disabledChartRefs.length) {

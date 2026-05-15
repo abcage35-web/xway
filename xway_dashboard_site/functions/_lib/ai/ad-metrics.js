@@ -464,6 +464,7 @@ export async function collectAiAdMetrics(context) {
     start: range.current_start,
     end: range.current_end,
     mode: "compact",
+    aux: "0",
     force_refresh: forceRefresh ? "1" : "",
   });
   const allArticles = catalogArticles(catalog);

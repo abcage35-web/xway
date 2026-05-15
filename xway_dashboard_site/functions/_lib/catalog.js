@@ -976,6 +976,28 @@ function catalogProductRefsByShop(productRefs = []) {
   return refsByShop;
 }
 
+function catalogProductRefsFromInput(productRefs = []) {
+  return (productRefs || [])
+    .map((rawRef) => {
+      const [shopPart, productPart] = String(rawRef || "").split(":", 2);
+      const shopId = Number(shopPart);
+      const productId = Number(productPart);
+      if (!Number.isFinite(shopId) || !Number.isFinite(productId)) {
+        return null;
+      }
+      return {
+        productRef: `${shopId}:${productId}`,
+        shopId,
+        productId,
+      };
+    })
+    .filter(Boolean);
+}
+
+function catalogErrorMessage(error) {
+  return String(error?.message || error || "Unknown error");
+}
+
 function catalogShopIdSet(shopIds = []) {
   return new Set(
     (shopIds || [])
@@ -1052,6 +1074,60 @@ export async function collectCatalog(env, { start = null, end = null, mode = "co
     total_articles: catalogShops.reduce((sum, shopPayload) => sum + Number(shopPayload.products_count || 0), 0),
     totals,
     shops: catalogShops,
+  };
+}
+
+export async function collectCatalogProductDetails(env, { productRefs = [], start = null, end = null, forceRefresh = false, includeBestTime = true } = {}) {
+  const client = new XwayApiClient(env, { start, end, forceRefresh });
+  const refs = catalogProductRefsFromInput(productRefs);
+  const rows = [];
+  const errors = [];
+
+  for (const { productRef, shopId, productId } of refs) {
+    const [stataResult, bestTimeResult] = await Promise.allSettled([
+      client.productStata(shopId, productId),
+      includeBestTime ? client.productOrdersHeatMap(shopId, productId) : Promise.resolve(null),
+    ]);
+    const rowErrors = {};
+    let campaignStates = [];
+    let campaignTypeTotals = {};
+    let bestOrderTime = null;
+
+    if (stataResult.status === "fulfilled") {
+      const campaigns = cloneValue(stataResult.value?.campaign_wb || []);
+      campaignStates = normalizeCatalogCampaignStates(stataResult.value, [{ campaign_wb: campaigns }]);
+      campaignTypeTotals = buildCatalogCampaignTypeTotalsFromCampaigns(campaigns);
+    } else {
+      rowErrors.campaign_details = catalogErrorMessage(stataResult.reason);
+      errors.push({ product: productRef, source: "campaign_details", error: rowErrors.campaign_details });
+    }
+
+    if (includeBestTime) {
+      if (bestTimeResult.status === "fulfilled") {
+        bestOrderTime = buildBestOrderTimeSummary(bestTimeResult.value || {});
+      } else {
+        rowErrors.best_order_time = catalogErrorMessage(bestTimeResult.reason);
+        errors.push({ product: productRef, source: "best_order_time", error: rowErrors.best_order_time });
+      }
+    }
+
+    rows.push({
+      product_ref: productRef,
+      campaign_states: campaignStates,
+      campaign_type_totals: campaignTypeTotals,
+      best_order_time: bestOrderTime,
+      errors: rowErrors,
+    });
+  }
+
+  return {
+    ok: true,
+    generated_at: new Date().toISOString(),
+    range: client.range,
+    requested_products: refs.map((item) => item.productRef),
+    loaded_products_count: rows.filter((row) => !row.errors?.campaign_details).length,
+    rows,
+    errors,
   };
 }
 

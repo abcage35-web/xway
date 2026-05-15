@@ -1,4 +1,4 @@
-import type { AiChatMessage, AiChatResponse, CatalogChartResponse, CatalogIssuesResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
@@ -338,6 +338,36 @@ export async function fetchCatalogChart(options: {
     { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
     {
       namespace: "catalog-chart",
+      bypassRead: options.forceRefresh,
+    },
+  );
+}
+
+export async function fetchCatalogProductDetails(options: {
+  productRefs: string[];
+  start?: string | null;
+  end?: string | null;
+  forceRefresh?: boolean;
+  includeBestTime?: boolean;
+  signal?: AbortSignal;
+}) {
+  const url = new URL("/api/catalog-product-details", window.location.origin);
+  if (options.productRefs.length) {
+    url.searchParams.set("products", options.productRefs.join(","));
+  }
+  appendRange(url.searchParams, options.start, options.end);
+  if (options.includeBestTime === false) {
+    url.searchParams.set("best_time", "0");
+  }
+  if (options.forceRefresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return requestCachedJson<CatalogProductDetailsResponse>(
+    url,
+    options.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "catalog-product-details",
       bypassRead: options.forceRefresh,
     },
   );

@@ -579,6 +579,27 @@ export interface CatalogResponse {
   shops: CatalogShop[];
 }
 
+export interface CatalogProductDetailRow {
+  product_ref: string;
+  campaign_states?: CatalogCampaignState[];
+  campaign_type_totals?: Record<string, CatalogArticleCampaignTypeMetrics> | null;
+  best_order_time?: CatalogArticleBestOrderTime | null;
+  errors?: {
+    campaign_details?: string | null;
+    best_order_time?: string | null;
+  };
+}
+
+export interface CatalogProductDetailsResponse {
+  ok: boolean;
+  generated_at: string;
+  range: DateRange;
+  requested_products: string[];
+  loaded_products_count: number;
+  rows: CatalogProductDetailRow[];
+  errors: Array<{ product: string; source: string; error: string }>;
+}
+
 export interface AiChatMessage {
   role: "user" | "assistant";
   content: string;
