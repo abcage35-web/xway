@@ -1029,35 +1029,39 @@ function CatalogCampaignLimitBars({ rows, schedule }: { rows: CatalogCampaignLim
         );
       })}
       {limitChipRows.length ? (
-        <div className="catalog-campaign-limit-chips">
-          {limitChipRows.map((row) => {
-            const isConfigured = row.total !== null || row.active;
-            const chipLabel = row.key === "budget" ? "Бюджет" : "Лимит";
-            const chipValue = row.total !== null ? formatCatalogCampaignLimitChipValue(row.total) : "нет";
-            const chipTitle = `${chipLabel}: ${
-              isConfigured
-                ? `${row.active ? "включен" : "выключен"} · ${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`
-                : "ограничение не задано"
-            }`;
-            return (
-              <span
-                key={`${row.key}-chip`}
-                className={cn("catalog-campaign-limit-chip", `is-${row.key}`, !isConfigured && "is-empty", row.active && "is-active")}
+        <>
+          <div className="catalog-campaign-limit-chips">
+            {limitChipRows.map((row) => {
+              const isConfigured = row.total !== null || row.active;
+              const chipLabel = row.key === "budget" ? "Бюджет" : "Лимит";
+              const chipValue = row.total !== null ? formatCatalogCampaignLimitChipValue(row.total) : "нет";
+              const chipTitle = `${chipLabel}: ${
+                isConfigured
+                  ? `${row.active ? "включен" : "выключен"} · ${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`
+                  : "ограничение не задано"
+              }`;
+              return (
+                <span
+                  key={`${row.key}-chip`}
+                  className={cn("catalog-campaign-limit-chip", `is-${row.key}`, !isConfigured && "is-empty", row.active && "is-active")}
                 title={chipTitle}
               >
-                <span>{chipLabel}</span>
-                <strong>{chipValue}</strong>
-              </span>
-            );
-          })}
-          <span
-            className={cn("catalog-campaign-limit-chip is-schedule", schedule.active === true && "is-active", !scheduleKnown && "is-empty", schedule.active === false && "is-off")}
-            title={scheduleTitle}
-          >
-            <span>Время</span>
-            <strong>{scheduleChipValue}</strong>
-          </span>
-        </div>
+                  <span>{chipLabel}</span>
+                  <strong>{chipValue}</strong>
+                </span>
+              );
+            })}
+          </div>
+          <div className="catalog-campaign-schedule-row">
+            <span
+              className={cn("catalog-campaign-limit-chip catalog-campaign-schedule-chip is-schedule", schedule.active === true && "is-active", !scheduleKnown && "is-empty", schedule.active === false && "is-off")}
+              title={scheduleTitle}
+            >
+              <span>Время</span>
+              <strong>{scheduleChipValue}</strong>
+            </span>
+          </div>
+        </>
       ) : null}
     </div>
   );
