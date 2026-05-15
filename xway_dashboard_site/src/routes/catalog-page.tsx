@@ -7460,6 +7460,29 @@ export function CatalogPage() {
                           ),
                       },
                       {
+                        key: "totalOrders",
+                        header: (
+                          <span className="inline-flex min-w-[104px] flex-col leading-[1.05]">
+                            <span>Общее</span>
+                            <span>кол-во заказов</span>
+                          </span>
+                        ),
+                        align: "right",
+                        cellClassName: "min-w-[118px]",
+                        render: (article) => formatNumber(article.ordered_report),
+                      },
+                      {
+                        key: "drrTotal",
+                        header: (
+                          <span className="inline-flex flex-col leading-[1.05]">
+                            <span>ДРР</span>
+                            <span>общ.</span>
+                          </span>
+                        ),
+                        align: "right",
+                        render: (article) => formatPercent(resolveCatalogArticleTotalDrr(article)),
+                      },
+                      {
                         key: "campaigns",
                         header: <CatalogCampaignColumnsHeader />,
                         render: (article) => {
@@ -7629,18 +7652,6 @@ export function CatalogPage() {
                         },
                       },
                       {
-                        key: "totalOrders",
-                        header: (
-                          <span className="inline-flex min-w-[104px] flex-col leading-[1.05]">
-                            <span>Общее</span>
-                            <span>кол-во заказов</span>
-                          </span>
-                        ),
-                        align: "right",
-                        cellClassName: "min-w-[118px]",
-                        render: (article) => formatNumber(article.ordered_report),
-                      },
-                      {
                         key: "bestOrderTime",
                         header: (
                           <span className="inline-flex w-[112px] flex-col leading-[1.05]">
@@ -7762,17 +7773,6 @@ export function CatalogPage() {
                             />
                           );
                         },
-                      },
-                      {
-                        key: "drrTotal",
-                        header: (
-                          <span className="inline-flex flex-col leading-[1.05]">
-                            <span>ДРР</span>
-                            <span>общ.</span>
-                          </span>
-                        ),
-                        align: "right",
-                        render: (article) => formatPercent(resolveCatalogArticleTotalDrr(article)),
                       },
                       {
                         key: "categoryAvgCr",
