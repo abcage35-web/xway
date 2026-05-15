@@ -36,6 +36,16 @@ type CatalogCampaignSlotKind = "unified" | "manual" | "cpc";
 type CatalogCampaignDisplayStatus = "active" | "paused" | "freeze" | "muted";
 type CatalogCampaignTypeKey = "cpm-manual" | "cpm-unified" | "cpc";
 type CatalogCampaignTypeMetricKey = "spend" | "views" | "clicks" | "atbs" | "orders" | "ctr" | "cr" | "cr1" | "cr2" | "drr";
+type CatalogRefreshStage = "fast" | "deep";
+
+interface CatalogRefreshProgressState {
+  stage: CatalogRefreshStage;
+  fastCompleted: number;
+  fastTotal: number;
+  deepCompleted: number;
+  deepTotal: number;
+  currentLabel?: string | null;
+}
 
 interface CatalogCampaignTypeTotals {
   views: number;
@@ -3303,6 +3313,28 @@ function formatCatalogShopRefreshSummary(shop: CatalogShop | null | undefined) {
   ].join(" · ");
 }
 
+function formatCatalogRefreshCurrentLabel(label: string | null | undefined) {
+  if (!label) {
+    return "";
+  }
+  return label.length > 34 ? `${label.slice(0, 31)}...` : label;
+}
+
+function formatCatalogRefreshProgressLabel(progress: CatalogRefreshProgressState | null) {
+  if (!progress) {
+    return null;
+  }
+  if (progress.stage === "fast") {
+    const current = formatCatalogRefreshCurrentLabel(progress.currentLabel);
+    return `Быстрое: кабинеты ${formatNumber(progress.fastCompleted)} / ${formatNumber(progress.fastTotal)}${current ? ` · ${current}` : ""}`;
+  }
+  const current = formatCatalogRefreshCurrentLabel(progress.currentLabel);
+  return [
+    `Быстрое готово ${formatNumber(progress.fastCompleted)} / ${formatNumber(progress.fastTotal)}`,
+    `Глубокое: товары ${formatNumber(progress.deepCompleted)} / ${formatNumber(progress.deepTotal)}${current ? ` · ${current}` : ""}`,
+  ].join(" · ");
+}
+
 function applyCatalogChartMetricsToPayload(
   payload: CatalogResponse,
   chartData: CatalogChartResponse | null,
@@ -3402,7 +3434,7 @@ export function CatalogPage() {
   const [refreshingAllCatalog, setRefreshingAllCatalog] = useState(false);
   const [refreshingShopIds, setRefreshingShopIds] = useState<string[]>([]);
   const [refreshingArticleRefs, setRefreshingArticleRefs] = useState<string[]>([]);
-  const [catalogRefreshProductProgress, setCatalogRefreshProductProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [catalogRefreshProductProgress, setCatalogRefreshProductProgress] = useState<CatalogRefreshProgressState | null>(null);
   const [catalogRefreshLogs, setCatalogRefreshLogs] = useState<CatalogRefreshLogEntry[]>([]);
   const [catalogRefreshPanelOpen, setCatalogRefreshPanelOpen] = useState(false);
   const [selectedCatalogRefreshLogRef, setSelectedCatalogRefreshLogRef] = useState<string | null>(null);
@@ -5014,6 +5046,7 @@ export function CatalogPage() {
       scope: CatalogRefreshLogScope;
       scopeLabel: string;
       includeAllKnownShops?: boolean;
+      onFastProgress?: (progress: { completed: number; total: number; currentLabel?: string | null }) => void;
     },
   ) => {
     const refs = [...new Set(productRefs)];
@@ -5040,6 +5073,7 @@ export function CatalogPage() {
     const turnoverOrdersByRef = new Map<string, number | string | null | undefined>();
     const absoluteChartRowsByRef = new Map<string, CatalogChartResponse["rows"]>();
     const refreshedProductRefs: string[] = [];
+    let completedShopCount = 0;
 
     for (const shopId of orderedShopIds) {
       const shopRefs = refsByShopId.get(shopId) ?? [];
@@ -5051,6 +5085,7 @@ export function CatalogPage() {
         sourcePayload.shops.find((shop) => String(shop.id) === shopId) ??
         loaderPayload.shops.find((shop) => String(shop.id) === shopId);
       const shopName = sourceShop?.name ?? `Кабинет ${shopId}`;
+      options.onFastProgress?.({ completed: completedShopCount, total: orderedShopIds.length, currentLabel: shopName });
       setCatalogRefreshStep(options.scopeLabel, `${shopName}: кабинет, артикулы и базовые данные`, shopRefs.length === 1 ? shopRefs[0] : undefined);
 
       try {
@@ -5207,12 +5242,15 @@ export function CatalogPage() {
           detail: `${shopName}: ${message}`,
         });
       }
+      completedShopCount += 1;
+      options.onFastProgress?.({ completed: completedShopCount, total: orderedShopIds.length, currentLabel: completedShopCount < orderedShopIds.length ? shopName : null });
     }
 
     return {
       knownArticlesByRef,
       turnoverOrdersByRef,
       absoluteChartRowsByRef,
+      shopCount: orderedShopIds.length,
       productRefs: refreshedProductRefs.length ? [...new Set(refreshedProductRefs)] : refs,
     };
   };
@@ -5229,6 +5267,7 @@ export function CatalogPage() {
       knownArticlesByRef?: Map<string, CatalogArticle>;
       knownTurnoverOrdersByRef?: Map<string, number | string | null | undefined>;
       knownChartRowsByRef?: Map<string, CatalogChartResponse["rows"]>;
+      mode?: "full" | "deep";
     } = {},
   ) => {
     const refs = [...new Set(productRefs)];
@@ -5247,6 +5286,7 @@ export function CatalogPage() {
     let firstErrorMessage: string | null = null;
     let currentStepErrorRefs = refs;
     const refreshedArticlesByRef = new Map<string, CatalogArticle>();
+    const runFastProductSteps = options.mode !== "deep";
 
     const resolveRefreshedArticle = (ref: string) =>
       refreshedArticlesByRef.get(ref) ?? options.knownArticlesByRef?.get(ref) ?? catalogArticleByRef.get(ref);
@@ -5273,6 +5313,7 @@ export function CatalogPage() {
     };
 
     try {
+      if (runFastProductSteps) {
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: остатки`, activityRef);
       if (options.skipCatalogRowRefresh) {
         refs.forEach((ref) => {
@@ -5418,6 +5459,8 @@ export function CatalogPage() {
             detail: formatCatalogAbsoluteMetricSummary(rows),
           };
         });
+      }
+
       }
 
       if (options.skipCatalogRowRefresh) {
@@ -5731,22 +5774,46 @@ export function CatalogPage() {
     });
 
     try {
-      setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
+      setCatalogRefreshProductProgress({
+        stage: "fast",
+        fastCompleted: 0,
+        fastTotal: 0,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: "подготовка",
+      });
       const baseRefresh = await refreshCatalogRowsByShop(productRefs, {
         signal: controller.signal,
         scope: "catalog",
         scopeLabel: "Обновление всех товаров",
         includeAllKnownShops: true,
+        onFastProgress: ({ completed, total, currentLabel }) => {
+          setCatalogRefreshProductProgress({
+            stage: "fast",
+            fastCompleted: completed,
+            fastTotal: total,
+            deepCompleted: 0,
+            deepTotal: productRefs.length,
+            currentLabel,
+          });
+        },
       });
       const knownArticlesByRef = baseRefresh.knownArticlesByRef;
       const knownTurnoverOrdersByRef = baseRefresh.turnoverOrdersByRef;
       const knownChartRowsByRef = baseRefresh.absoluteChartRowsByRef;
       productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
-      setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
+      setCatalogRefreshProductProgress({
+        stage: "deep",
+        fastCompleted: baseRefresh.shopCount,
+        fastTotal: baseRefresh.shopCount,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: null,
+      });
       setChartProgress({
         cacheKey: chartSourceCacheKey,
         selectionCount: productRefs.length,
-        loadedProductsCount: 0,
+        loadedProductsCount: knownChartRowsByRef.size,
         chunkCount: productRefs.length,
         loadedChunkCount: 0,
         errorCount: 0,
@@ -5754,6 +5821,15 @@ export function CatalogPage() {
 
       for (let index = 0; index < productRefs.length; index += 1) {
         const productRef = productRefs[index]!;
+        const productLabel = resolveCatalogRefreshProductLabel(productRef);
+        setCatalogRefreshProductProgress({
+          stage: "deep",
+          fastCompleted: baseRefresh.shopCount,
+          fastTotal: baseRefresh.shopCount,
+          deepCompleted: index,
+          deepTotal: productRefs.length,
+          currentLabel: productLabel,
+        });
         await refreshCatalogProductRefs([productRef], {
           refreshIssues: true,
           signal: controller.signal,
@@ -5764,8 +5840,16 @@ export function CatalogPage() {
           knownArticlesByRef,
           knownTurnoverOrdersByRef,
           knownChartRowsByRef,
+          mode: "deep",
         });
-        setCatalogRefreshProductProgress({ completed: index + 1, total: productRefs.length });
+        setCatalogRefreshProductProgress({
+          stage: "deep",
+          fastCompleted: baseRefresh.shopCount,
+          fastTotal: baseRefresh.shopCount,
+          deepCompleted: index + 1,
+          deepTotal: productRefs.length,
+          currentLabel: productLabel,
+        });
         if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
@@ -5856,20 +5940,53 @@ export function CatalogPage() {
     setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
 
     try {
-      setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
+      setCatalogRefreshProductProgress({
+        stage: "fast",
+        fastCompleted: 0,
+        fastTotal: 0,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: shop.name,
+      });
       const baseRefresh = await refreshCatalogRowsByShop(productRefs, {
         signal: controller.signal,
         scope: "shop",
         scopeLabel: `Обновление кабинета: ${shop.name}`,
+        onFastProgress: ({ completed, total, currentLabel }) => {
+          setCatalogRefreshProductProgress({
+            stage: "fast",
+            fastCompleted: completed,
+            fastTotal: total,
+            deepCompleted: 0,
+            deepTotal: productRefs.length,
+            currentLabel,
+          });
+        },
       });
       const knownArticlesByRef = baseRefresh.knownArticlesByRef;
       const knownTurnoverOrdersByRef = baseRefresh.turnoverOrdersByRef;
       const knownChartRowsByRef = baseRefresh.absoluteChartRowsByRef;
       productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
-      setCatalogRefreshProductProgress({ completed: 0, total: productRefs.length });
+      setCatalogRefreshProductProgress({
+        stage: "deep",
+        fastCompleted: baseRefresh.shopCount,
+        fastTotal: baseRefresh.shopCount,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: null,
+      });
 
       for (let index = 0; index < productRefs.length; index += 1) {
         const productRef = productRefs[index]!;
+        const productLabel = resolveCatalogRefreshProductLabel(productRef);
+        setCatalogRefreshProductProgress({
+          stage: "deep",
+          fastCompleted: baseRefresh.shopCount,
+          fastTotal: baseRefresh.shopCount,
+          deepCompleted: index,
+          deepTotal: productRefs.length,
+          currentLabel: productLabel,
+        });
         await refreshCatalogProductRefs([productRef], {
           refreshIssues: true,
           signal: controller.signal,
@@ -5879,8 +5996,16 @@ export function CatalogPage() {
           knownArticlesByRef,
           knownTurnoverOrdersByRef,
           knownChartRowsByRef,
+          mode: "deep",
         });
-        setCatalogRefreshProductProgress({ completed: index + 1, total: productRefs.length });
+        setCatalogRefreshProductProgress({
+          stage: "deep",
+          fastCompleted: baseRefresh.shopCount,
+          fastTotal: baseRefresh.shopCount,
+          deepCompleted: index + 1,
+          deepTotal: productRefs.length,
+          currentLabel: productLabel,
+        });
         if (index < productRefs.length - 1) {
           await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
         }
@@ -6193,7 +6318,7 @@ export function CatalogPage() {
               loadTargetCount={chartSourceSelectionCount}
               loadingProgressLabel={
                 catalogRefreshing && catalogRefreshProductProgress
-                  ? `Обновлено ${formatNumber(catalogRefreshProductProgress.completed)} / ${formatNumber(catalogRefreshProductProgress.total)}`
+                  ? formatCatalogRefreshProgressLabel(catalogRefreshProductProgress)
                   : null
               }
               chunkCount={chartProgress?.cacheKey === chartSourceCacheKey ? chartProgress.chunkCount : null}
