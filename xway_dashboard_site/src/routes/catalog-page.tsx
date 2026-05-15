@@ -5187,6 +5187,7 @@ export function CatalogPage() {
             start: turnoverStart,
             end: turnoverEnd,
             forceRefresh: true,
+            includeAux: false,
             signal: options.signal,
           });
           const turnoverOverrides: Record<string, number | string | null | undefined> = {};
@@ -5291,25 +5292,53 @@ export function CatalogPage() {
           chartProcessRefs.length === 1 ? chartProcessRefs[0] : activityRef,
         );
         try {
-          const chartResponse = await fetchCatalogChartWorkerSafe({
-            productRefs: chartProcessRefs,
-            start: chartSourceRangeStart,
-            end: chartSourceRangeEnd,
-            includeCampaignTypes: true,
-            forceRefresh: true,
-            signal: options.signal,
-            selectionCount: chartSourceSelectionCount,
-            chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
-            onWorkerLimit: (limitRefs) => {
-              appendCatalogRefreshLogsForRefs(limitRefs, {
-                status: "warning",
-                scope,
-                step: "Данные РК: графики",
-                message: "Уменьшаем чанк из-за лимита Worker",
-                detail: `Cloudflare вернул лимит Worker для ${formatNumber(limitRefs.length)} товаров.`,
-              });
-            },
-          });
+          let chartHasCampaignTypeBreakdown = true;
+          let chartLimitFallbackMessage: string | null = null;
+          let chartResponse: CatalogChartResponse;
+          try {
+            chartResponse = await fetchCatalogChartWorkerSafe({
+              productRefs: chartProcessRefs,
+              start: chartSourceRangeStart,
+              end: chartSourceRangeEnd,
+              includeCampaignTypes: true,
+              forceRefresh: true,
+              signal: options.signal,
+              selectionCount: chartSourceSelectionCount,
+              chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
+              onWorkerLimit: (limitRefs) => {
+                appendCatalogRefreshLogsForRefs(limitRefs, {
+                  status: "warning",
+                  scope,
+                  step: "Данные РК: графики",
+                  message: "Уменьшаем чанк из-за лимита Worker",
+                  detail: `Cloudflare вернул лимит Worker для ${formatNumber(limitRefs.length)} товаров.`,
+                });
+              },
+            });
+          } catch (error) {
+            if (isAbortError(error) || options.signal?.aborted || !(await isWorkerSubrequestLimitError(error))) {
+              throw error;
+            }
+            chartHasCampaignTypeBreakdown = false;
+            chartLimitFallbackMessage = await readApiErrorMessage(error);
+            appendCatalogRefreshLogsForRefs(chartProcessRefs, {
+              status: "warning",
+              scope,
+              step: "Данные РК: графики",
+              message: "РК-разбивка не загрузилась",
+              detail: `${chartLimitFallbackMessage} Пробую загрузить обычный график без разбивки по типам РК.`,
+            });
+            chartResponse = await fetchCatalogChartWorkerSafe({
+              productRefs: chartProcessRefs,
+              start: chartSourceRangeStart,
+              end: chartSourceRangeEnd,
+              includeCampaignTypes: false,
+              forceRefresh: true,
+              signal: options.signal,
+              selectionCount: chartSourceSelectionCount,
+              chunkSize: CATALOG_CHART_FETCH_CHUNK_SIZE,
+            });
+          }
           await mergeChartResponseForRefs(chartResponse, chartProcessRefs, options.progress);
 
           const chartRowsByRef = new Map<string, CatalogChartResponse["rows"]>();
@@ -5343,13 +5372,15 @@ export function CatalogPage() {
               };
             });
             appendCatalogRefreshLogsForRefs(loadedRefs, {
-              status: "success",
+              status: chartHasCampaignTypeBreakdown ? "success" : "warning",
               scope,
               step: "Данные РК: графики",
-              message: "Графики РК загружены",
+              message: chartHasCampaignTypeBreakdown ? "Графики РК загружены" : "График загружен без РК-разбивки",
             }, (ref) => ({
-              message: "Графики РК загружены",
-              detail: formatCatalogCampaignTypeMetricsSummary(resolveSelectedRowsForRef(ref)),
+              message: chartHasCampaignTypeBreakdown ? "Графики РК загружены" : "График загружен без РК-разбивки",
+              detail: chartHasCampaignTypeBreakdown
+                ? formatCatalogCampaignTypeMetricsSummary(resolveSelectedRowsForRef(ref))
+                : `${chartLimitFallbackMessage || "Worker уперся в лимит."} Абсолютные метрики сохранены, разбивка по типам РК пропущена.`,
             }));
             appendCatalogRefreshLogsForRefs(loadedRefs, {
               status: "success",
