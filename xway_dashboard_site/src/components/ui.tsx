@@ -523,6 +523,22 @@ export function RangeToolbar({
   filters?: ReactNode;
   extra?: ReactNode;
 }) {
+  const [draftStart, setDraftStart] = useState(start || "");
+  const [draftEnd, setDraftEnd] = useState(end || "");
+  const draftChanged = draftStart !== (start || "") || draftEnd !== (end || "");
+  const draftValid = Boolean(draftStart && draftEnd && draftStart <= draftEnd);
+
+  useEffect(() => {
+    setDraftStart(start || "");
+    setDraftEnd(end || "");
+  }, [start, end]);
+
+  const applyDraftRange = () => {
+    if (draftValid) {
+      onRangeChange({ start: draftStart, end: draftEnd });
+    }
+  };
+
   return (
     <div className="glass-panel rounded-[28px] p-3 sm:p-3.5">
       <div className="range-toolbar-main flex flex-wrap items-stretch gap-2.5">
@@ -549,8 +565,8 @@ export function RangeToolbar({
               <span className="shrink-0 text-[var(--color-muted)]">Начало</span>
               <input
                 type="date"
-                value={start || ""}
-                onChange={(event) => onRangeChange({ start: event.target.value, end: end || event.target.value })}
+                value={draftStart}
+                onChange={(event) => setDraftStart(event.target.value)}
                 className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
               />
             </label>
@@ -558,12 +574,20 @@ export function RangeToolbar({
               <span className="shrink-0 text-[var(--color-muted)]">Конец</span>
               <input
                 type="date"
-                value={end || ""}
-                onChange={(event) => onRangeChange({ start: start || event.target.value, end: event.target.value })}
+                value={draftEnd}
+                onChange={(event) => setDraftEnd(event.target.value)}
                 className="min-w-[7.2rem] flex-1 bg-transparent text-right text-[var(--color-ink)] outline-none"
               />
             </label>
           </div>
+          <button
+            type="button"
+            onClick={applyDraftRange}
+            disabled={!draftChanged || !draftValid}
+            className="metric-chip inline-flex h-[50px] items-center justify-center rounded-2xl px-4 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-strong)] disabled:cursor-not-allowed disabled:opacity-50 sm:w-[120px]"
+          >
+            Применить
+          </button>
         </div>
 
         {filters ? <div className="range-toolbar-filters min-w-0 flex-1">{filters}</div> : null}
