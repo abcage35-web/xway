@@ -136,6 +136,8 @@ const CATALOG_CHART_WORKER_DEADLINE_MS = 18000;
 const CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE = 1;
 const CATALOG_CAMPAIGN_TYPE_MAX_ATTEMPTS = 5;
 const CATALOG_ISSUES_WORKER_DEADLINE_MS = 18000;
+const CATALOG_WARNING_RETRY_ATTEMPTS = 4;
+const CATALOG_WARNING_RETRY_DELAY_MS = 2200;
 const CATALOG_ISSUE_TURNOVER_THRESHOLD_DEFAULT = 3;
 const CATALOG_ISSUE_DOWNTIME_THRESHOLD_DEFAULT = 1;
 const CATALOG_LOW_CR_CLICKS_THRESHOLD_DEFAULT = 20;
@@ -2922,6 +2924,10 @@ function isWorkerSubrequestLimitMessage(message: string) {
   return /too many subrequests|worker exceeded resource limits|cloudflare:\s*worker exceeded resource limits|\b1102\b/i.test(message);
 }
 
+function isCatalogRetryableWarningMessage(message: string) {
+  return /too many subrequests|worker exceeded resource limits|cloudflare:\s*worker exceeded resource limits|\b1102\b|\b(429|502|503|504)\b|temporarily unavailable|gateway timeout|timed?\s*out/i.test(message);
+}
+
 function catalogChartWorkerSubrequestLimitRefs(response: CatalogChartResponse | null, availableRefs?: Set<string>) {
   if (!response?.errors.length) {
     return [];
@@ -3376,6 +3382,11 @@ async function isWorkerSubrequestLimitError(error: unknown) {
   return isWorkerSubrequestLimitMessage(message);
 }
 
+async function isCatalogRetryableWarningError(error: unknown) {
+  const message = await readApiErrorMessage(error);
+  return isCatalogRetryableWarningMessage(message);
+}
+
 function filterShops(
   payload: CatalogResponse,
   filters: {
@@ -3824,7 +3835,7 @@ export function CatalogPage() {
     const safeSelectionCount = selectionCount ?? refs.length;
     const safeChunkSize = Math.max(1, chunkSize ?? (includeCampaignTypes ? CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE : CATALOG_CHART_FETCH_CHUNK_SIZE));
 
-    const fetchChunk = async (chunkRefs: string[]): Promise<CatalogChartResponse> => {
+    const fetchChunk = async (chunkRefs: string[], retryAttempt = 0): Promise<CatalogChartResponse> => {
       let response: CatalogChartResponse;
       try {
         let cursor: string | null = null;
@@ -3852,6 +3863,12 @@ export function CatalogPage() {
         }
         response = mergedResponse;
       } catch (error) {
+        if (await isCatalogRetryableWarningError(error)) {
+          if (retryAttempt < CATALOG_WARNING_RETRY_ATTEMPTS - 1) {
+            await waitForCatalogRetry(CATALOG_WARNING_RETRY_DELAY_MS, signal ?? new AbortController().signal);
+            return fetchChunk(chunkRefs, retryAttempt + 1);
+          }
+        }
         if (chunkRefs.length <= 1 || !(await isWorkerSubrequestLimitError(error))) {
           throw error;
         }
@@ -3859,7 +3876,7 @@ export function CatalogPage() {
         const retryChunkSize = Math.max(1, Math.ceil(chunkRefs.length / 2));
         let splitResponse: CatalogChartResponse | null = null;
         for (const retryRefs of chunkItems(chunkRefs, retryChunkSize)) {
-          const retryResponse = await fetchChunk(retryRefs);
+          const retryResponse = await fetchChunk(retryRefs, retryAttempt);
           splitResponse = mergeCatalogChartResponses(splitResponse, retryResponse, safeSelectionCount);
         }
         if (!splitResponse) {
@@ -3872,19 +3889,35 @@ export function CatalogPage() {
       }
 
       const limitRefs = catalogChartWorkerSubrequestLimitRefs(response, new Set(chunkRefs));
-      if (!limitRefs.length || limitRefs.length === 1) {
-        return response;
+      let nextResponse = response;
+      if (limitRefs.length > 1) {
+        onWorkerLimit?.(limitRefs);
+        const retryChunkSize = Math.max(1, Math.ceil(limitRefs.length / 2));
+        for (const retryRefs of chunkItems(limitRefs, retryChunkSize)) {
+          const retryResponse = await fetchChunk(retryRefs, retryAttempt);
+          if (signal?.aborted) {
+            return nextResponse;
+          }
+          nextResponse = mergeCatalogChartRetryResponse(nextResponse, retryResponse, safeSelectionCount, retryRefs);
+        }
       }
 
-      onWorkerLimit?.(limitRefs);
-      const retryChunkSize = Math.max(1, Math.ceil(limitRefs.length / 2));
-      let nextResponse = response;
-      for (const retryRefs of chunkItems(limitRefs, retryChunkSize)) {
-        const retryResponse = await fetchChunk(retryRefs);
-        if (signal?.aborted) {
-          return nextResponse;
+      const retryableErrorRefs = [
+        ...new Set(
+          nextResponse.errors
+            .filter((error) => chunkRefs.includes(error.product) && isCatalogRetryableWarningMessage(error.error))
+            .map((error) => error.product),
+        ),
+      ];
+      if (retryableErrorRefs.length && retryAttempt < CATALOG_WARNING_RETRY_ATTEMPTS - 1) {
+        await waitForCatalogRetry(CATALOG_WARNING_RETRY_DELAY_MS, signal ?? new AbortController().signal);
+        for (const retryRefs of chunkItems(retryableErrorRefs, Math.max(1, Math.min(retryableErrorRefs.length, safeChunkSize)))) {
+          const retryResponse = await fetchChunk(retryRefs, retryAttempt + 1);
+          if (signal?.aborted) {
+            return nextResponse;
+          }
+          nextResponse = mergeCatalogChartRetryResponse(nextResponse, retryResponse, safeSelectionCount, retryRefs);
         }
-        nextResponse = mergeCatalogChartRetryResponse(nextResponse, retryResponse, safeSelectionCount, retryRefs);
       }
       return nextResponse;
     };
@@ -5536,6 +5569,42 @@ export function CatalogPage() {
       });
     };
 
+    const fetchCatalogProductDetailsWithWarningRetry = async (
+      ref: string,
+      detailOptions: {
+        includeCampaignDetails?: boolean;
+        includeBestTime?: boolean;
+        warningFields: Array<keyof NonNullable<CatalogProductDetailRow["errors"]>>;
+      },
+    ) => {
+      let lastRow: CatalogProductDetailRow | null = null;
+      let lastErrors: string[] = [];
+      for (let attempt = 0; attempt < CATALOG_WARNING_RETRY_ATTEMPTS; attempt += 1) {
+        const response = await fetchCatalogProductDetails({
+          productRefs: [ref],
+          start: sourcePayload.range.current_start,
+          end: sourcePayload.range.current_end,
+          forceRefresh: options.forceDeepDetailsRefresh !== false || attempt > 0,
+          includeCampaignDetails: detailOptions.includeCampaignDetails,
+          includeBestTime: detailOptions.includeBestTime,
+          signal: options.signal,
+        });
+        const row = response.rows.find((item) => item.product_ref === ref) ?? null;
+        lastRow = row;
+        lastErrors = detailOptions.warningFields
+          .map((field) => row?.errors?.[field])
+          .filter((message): message is string => Boolean(message))
+          .map((message) => normalizeApiErrorMessage(message));
+        if (row && !lastErrors.length) {
+          return { row, detailErrors: [] };
+        }
+        if (attempt < CATALOG_WARNING_RETRY_ATTEMPTS - 1) {
+          await waitForCatalogRetry(CATALOG_WARNING_RETRY_DELAY_MS, options.signal ?? new AbortController().signal);
+        }
+      }
+      return { row: lastRow, detailErrors: lastErrors };
+    };
+
     try {
       if (runFastProductSteps) {
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: остатки`, activityRef);
@@ -5714,21 +5783,13 @@ export function CatalogPage() {
 
         if (catalogArticleHasCampaignSignals(article)) {
           try {
-            const detailResponse = await fetchCatalogProductDetails({
-              productRefs: [ref],
-              start: sourcePayload.range.current_start,
-              end: sourcePayload.range.current_end,
-              forceRefresh: options.forceDeepDetailsRefresh !== false,
+            const { row: detailRow, detailErrors } = await fetchCatalogProductDetailsWithWarningRetry(ref, {
               includeBestTime: false,
-              signal: options.signal,
+              warningFields: ["campaign_details", "campaign_schedule"],
             });
-            const detailRow = detailResponse.rows.find((row) => row.product_ref === ref);
             if (detailRow) {
               const nextArticle = mergeCatalogProductDetailRow(article, detailRow, { mergeBestTime: false });
               article = nextArticle;
-              const detailErrors = [detailRow.errors?.campaign_details, detailRow.errors?.campaign_schedule]
-                .filter((message): message is string => Boolean(message))
-                .map((message) => normalizeApiErrorMessage(message));
               refreshedArticlesByRef.set(ref, nextArticle);
               setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: nextArticle }));
               appendCatalogRefreshLogsForRefs([ref], {
@@ -5758,22 +5819,14 @@ export function CatalogPage() {
         article = resolveRefreshedArticle(ref) ?? article;
         if (catalogArticleHasOrderSignals(article)) {
           try {
-            const bestTimeResponse = await fetchCatalogProductDetails({
-              productRefs: [ref],
-              start: sourcePayload.range.current_start,
-              end: sourcePayload.range.current_end,
-              forceRefresh: options.forceDeepDetailsRefresh !== false,
+            const { row: bestTimeRow, detailErrors } = await fetchCatalogProductDetailsWithWarningRetry(ref, {
               includeCampaignDetails: false,
               includeBestTime: true,
-              signal: options.signal,
+              warningFields: ["best_order_time"],
             });
-            const bestTimeRow = bestTimeResponse.rows.find((row) => row.product_ref === ref);
             if (bestTimeRow) {
               const nextArticle = mergeCatalogProductDetailRow(article, bestTimeRow, { mergeCampaignDetails: false });
               article = nextArticle;
-              const detailErrors = [bestTimeRow.errors?.best_order_time]
-                .filter((message): message is string => Boolean(message))
-                .map((message) => normalizeApiErrorMessage(message));
               refreshedArticlesByRef.set(ref, nextArticle);
               setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: nextArticle }));
               appendCatalogRefreshLogsForRefs([ref], {

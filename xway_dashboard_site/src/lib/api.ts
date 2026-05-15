@@ -12,7 +12,10 @@ function buildBaseUrl(request?: Request) {
 }
 
 function isRetryableXwayUnavailable(status: number, text: string) {
-  return status === 503 || /\b503\b|temporarily unavailable|XWAY request failed \(503\)/i.test(text);
+  return (
+    [429, 502, 503, 504].includes(status) ||
+    /\b(429|502|503|504)\b|temporarily unavailable|gateway timeout|timed?\s*out|XWAY request failed \((429|502|503|504)\)/i.test(text)
+  );
 }
 
 function waitForRequestRetry(ms: number, signal?: AbortSignal) {
