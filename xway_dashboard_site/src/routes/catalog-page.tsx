@@ -6399,7 +6399,7 @@ export function CatalogPage() {
     }
   };
 
-  const handleRefreshShopCatalog = async (shop: CatalogShop) => {
+  const handleRefreshShopCabinet = async (shop: CatalogShop) => {
     const shopId = String(shop.id);
     if (refreshingAllCatalog || refreshingShopIds.length || refreshingShopIds.includes(shopId)) {
       return;
@@ -6466,6 +6466,98 @@ export function CatalogPage() {
         }
         setCatalogRefreshActivity({
           title: controller.signal.aborted ? "Обновление отменено" : "Обновление кабинета завершено",
+          detail: `${shop.name}: ${formatNumber(productRefs.length)} товаров.`,
+        });
+      }
+      setRefreshingShopIds((current) => current.filter((id) => id !== shopId));
+      setCatalogRefreshProductProgress(null);
+    }
+  };
+
+  const handleRefreshShopCatalog = async (shop: CatalogShop) => {
+    const shopId = String(shop.id);
+    if (refreshingAllCatalog || refreshingShopIds.length || refreshingShopIds.includes(shopId)) {
+      return;
+    }
+
+    const sourceShop = sourcePayload.shops.find((candidate) => String(candidate.id) === shopId) ?? shop;
+    let productRefs = sourceShop.articles.map((article) => `${sourceShop.id}:${article.product_id}`);
+
+    catalogRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogRefreshAbortRef.current = controller;
+    setCatalogRefreshError(null);
+    setRefreshingShopIds((current) => (current.includes(shopId) ? current : [...current, shopId]));
+
+    try {
+      setCatalogRefreshProductProgress({
+        stage: "fast",
+        fastCompleted: 0,
+        fastTotal: 0,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: shop.name,
+      });
+      const baseRefresh = await refreshCatalogRowsByShop(productRefs, {
+        signal: controller.signal,
+        scope: "shop",
+        scopeLabel: `Обновление товаров кабинета: ${shop.name}`,
+        shopIds: [shopId],
+        onFastProgress: ({ completed, total, currentLabel }) => {
+          setCatalogRefreshProductProgress({
+            stage: "fast",
+            fastCompleted: completed,
+            fastTotal: total,
+            deepCompleted: 0,
+            deepTotal: productRefs.length,
+            currentLabel,
+          });
+        },
+      });
+      const knownArticlesByRef = baseRefresh.knownArticlesByRef;
+      const knownTurnoverOrdersByRef = baseRefresh.turnoverOrdersByRef;
+      const knownChartRowsByRef = baseRefresh.absoluteChartRowsByRef;
+      productRefs = baseRefresh.productRefs.length ? baseRefresh.productRefs : productRefs;
+      setCatalogRefreshProductProgress({
+        stage: "deep",
+        fastCompleted: baseRefresh.shopCount,
+        fastTotal: baseRefresh.shopCount,
+        deepCompleted: 0,
+        deepTotal: productRefs.length,
+        currentLabel: null,
+      });
+
+      await runCatalogDeepRefreshQueue(productRefs, {
+        signal: controller.signal,
+        scope: "shop",
+        scopeLabel: `Обновление товаров кабинета: ${shop.name}`,
+        fastCompleted: baseRefresh.shopCount,
+        fastTotal: baseRefresh.shopCount,
+        knownArticlesByRef,
+        knownTurnoverOrdersByRef,
+        knownChartRowsByRef,
+        campaignChartMode: "deferred",
+        forceDeepDetailsRefresh: false,
+        refreshIssuesBatch: true,
+      });
+    } catch (error) {
+      if (!isAbortError(error) && !controller.signal.aborted) {
+        setCatalogRefreshError(await readApiErrorMessage(error));
+      }
+    } finally {
+      if (catalogRefreshAbortRef.current === controller) {
+        catalogRefreshAbortRef.current = null;
+        if (controller.signal.aborted) {
+          appendCatalogRefreshLogs({
+            status: "cancelled",
+            scope: "shop",
+            step: "Обновление товаров кабинета",
+            message: "Проходка по товарам кабинета остановлена",
+            detail: shop.name,
+          });
+        }
+        setCatalogRefreshActivity({
+          title: controller.signal.aborted ? "Обновление отменено" : "Обновление товаров кабинета завершено",
           detail: `${shop.name}: ${formatNumber(productRefs.length)} товаров.`,
         });
       }
@@ -7046,12 +7138,21 @@ export function CatalogPage() {
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => void handleRefreshShopCatalog(shop)}
+                    onClick={() => void handleRefreshShopCabinet(shop)}
                     disabled={catalogRefreshing}
                     className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
                   >
                     <RefreshCw className={cn("size-4", isShopRefreshing && "animate-spin")} />
                     Обновить кабинет
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshShopCatalog(shop)}
+                    disabled={catalogRefreshing}
+                    className="metric-chip inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-brand-500)] disabled:cursor-progress disabled:opacity-70"
+                  >
+                    <RefreshCw className={cn("size-4", isShopRefreshing && "animate-spin")} />
+                    Обновить товары
                   </button>
                   <button
                     type="button"
