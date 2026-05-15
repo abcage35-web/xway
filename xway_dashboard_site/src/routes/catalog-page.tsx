@@ -447,14 +447,20 @@ function mergeCatalogCampaignStates(baseStates: CatalogCampaignState[] = [], det
   return [...statesByKey.values()];
 }
 
-function mergeCatalogProductDetailRow(article: CatalogArticle, row: CatalogProductDetailRow): CatalogArticle {
+function mergeCatalogProductDetailRow(
+  article: CatalogArticle,
+  row: CatalogProductDetailRow,
+  options: { mergeCampaignDetails?: boolean; mergeBestTime?: boolean } = {},
+): CatalogArticle {
+  const mergeCampaignDetails = options.mergeCampaignDetails ?? true;
+  const mergeBestTime = options.mergeBestTime ?? true;
   const hasCampaignError = Boolean(row.errors?.campaign_details);
   const hasBestTimeError = Boolean(row.errors?.best_order_time);
   return {
     ...article,
-    campaign_states: hasCampaignError ? article.campaign_states : mergeCatalogCampaignStates(article.campaign_states, row.campaign_states ?? []),
-    campaign_type_totals: hasCampaignError ? article.campaign_type_totals : row.campaign_type_totals ?? article.campaign_type_totals,
-    best_order_time: hasBestTimeError ? article.best_order_time ?? null : row.best_order_time ?? null,
+    campaign_states: !mergeCampaignDetails || hasCampaignError ? article.campaign_states : mergeCatalogCampaignStates(article.campaign_states, row.campaign_states ?? []),
+    campaign_type_totals: !mergeCampaignDetails || hasCampaignError ? article.campaign_type_totals : row.campaign_type_totals ?? article.campaign_type_totals,
+    best_order_time: !mergeBestTime || hasBestTimeError ? article.best_order_time ?? null : row.best_order_time ?? null,
   };
 }
 
@@ -5348,6 +5354,24 @@ export function CatalogPage() {
       });
     };
 
+    const logDetailSourceError = async (step: string, error: unknown, errorRef: string, fallbackDetail: string) => {
+      if (isAbortError(error) || options.signal?.aborted) {
+        throw error;
+      }
+      const message = await readApiErrorMessage(error);
+      const workerLimit = isWorkerSubrequestLimitMessage(message);
+      if (!workerLimit) {
+        rememberStepError(message);
+      }
+      appendCatalogRefreshLogsForRefs([errorRef], {
+        status: workerLimit ? "warning" : "error",
+        scope,
+        step,
+        message: workerLimit ? "Пропущено из-за лимита Worker" : "Не загрузилось",
+        detail: workerLimit ? `${message} ${fallbackDetail}` : message,
+      });
+    };
+
     try {
       if (runFastProductSteps) {
       setCatalogRefreshStep(scopeLabel, `${targetLabel}: остатки`, activityRef);
@@ -5506,30 +5530,85 @@ export function CatalogPage() {
       }
       for (const ref of detailRefs) {
         currentStepErrorRefs = [ref];
+        let article = resolveRefreshedArticle(ref);
+        if (!article) {
+          appendCatalogRefreshLogsForRefs([ref], {
+            status: "warning",
+            scope,
+            step: "Данные РК: детали",
+            message: "Нет базовой строки товара",
+            detail: "Детали РК нельзя применить, пока строка товара не загружена.",
+          });
+          continue;
+        }
+
         try {
           const detailResponse = await fetchCatalogProductDetails({
             productRefs: [ref],
             start: sourcePayload.range.current_start,
             end: sourcePayload.range.current_end,
             forceRefresh: true,
+            includeBestTime: false,
             signal: options.signal,
           });
           const detailRow = detailResponse.rows.find((row) => row.product_ref === ref);
-          const baseArticle = resolveRefreshedArticle(ref);
-          if (detailRow && baseArticle) {
-            const article = mergeCatalogProductDetailRow(baseArticle, detailRow);
-            const detailErrors = [detailRow.errors?.campaign_details, detailRow.errors?.best_order_time]
+          if (detailRow) {
+            const nextArticle = mergeCatalogProductDetailRow(article, detailRow, { mergeBestTime: false });
+            article = nextArticle;
+            const detailErrors = [detailRow.errors?.campaign_details]
               .filter((message): message is string => Boolean(message))
               .map((message) => normalizeApiErrorMessage(message));
-            refreshedArticlesByRef.set(ref, article);
-            setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: article }));
+            refreshedArticlesByRef.set(ref, nextArticle);
+            setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: nextArticle }));
             appendCatalogRefreshLogsForRefs([ref], {
               status: detailErrors.length ? "warning" : "success",
               scope,
-              step: "Данные РК: детали",
-              message: detailErrors.length ? "Детали РК загружены частично" : "Детали РК загружены",
+              step: "Данные РК: лимиты",
+              message: detailErrors.length ? "Лимиты РК загружены частично" : "Лимиты РК загружены",
               detail: [
                 formatCatalogCampaignLimitSummary(article),
+                ...detailErrors,
+              ].join(" · "),
+            });
+          } else {
+            appendCatalogRefreshLogsForRefs([ref], {
+              status: "warning",
+              scope,
+              step: "Данные РК: лимиты",
+              message: "Товар не найден в ответе лимитов",
+              detail: "API ответил без строки этого товара.",
+            });
+          }
+        } catch (error) {
+          await logDetailSourceError("Данные РК: лимиты", error, ref, "Оставляю статусы и лимиты из кабинетной строки.");
+        }
+
+        article = resolveRefreshedArticle(ref) ?? article;
+        try {
+          const bestTimeResponse = await fetchCatalogProductDetails({
+            productRefs: [ref],
+            start: sourcePayload.range.current_start,
+            end: sourcePayload.range.current_end,
+            forceRefresh: true,
+            includeCampaignDetails: false,
+            includeBestTime: true,
+            signal: options.signal,
+          });
+          const bestTimeRow = bestTimeResponse.rows.find((row) => row.product_ref === ref);
+          if (bestTimeRow) {
+            const nextArticle = mergeCatalogProductDetailRow(article, bestTimeRow, { mergeCampaignDetails: false });
+            article = nextArticle;
+            const detailErrors = [bestTimeRow.errors?.best_order_time]
+              .filter((message): message is string => Boolean(message))
+              .map((message) => normalizeApiErrorMessage(message));
+            refreshedArticlesByRef.set(ref, nextArticle);
+            setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: nextArticle }));
+            appendCatalogRefreshLogsForRefs([ref], {
+              status: detailErrors.length ? "warning" : "success",
+              scope,
+              step: "Данные РК: лучшие часы",
+              message: detailErrors.length ? "Лучшие часы загружены частично" : "Лучшие часы загружены",
+              detail: [
                 formatCatalogBestOrderTimeSummary(article),
                 ...detailErrors,
               ].join(" · "),
@@ -5538,13 +5617,13 @@ export function CatalogPage() {
             appendCatalogRefreshLogsForRefs([ref], {
               status: "warning",
               scope,
-              step: "Данные РК: детали",
-              message: detailRow ? "Нет базовой строки товара" : "Товар не найден в ответе деталей",
-              detail: detailRow ? "Детали РК пришли, но строка товара еще не загружена." : "API ответил без строки этого товара.",
+              step: "Данные РК: лучшие часы",
+              message: "Товар не найден в ответе лучших часов",
+              detail: "API ответил без строки этого товара.",
             });
           }
         } catch (error) {
-          await logStepError("Данные РК: детали", error, [ref]);
+          await logDetailSourceError("Данные РК: лучшие часы", error, ref, "Лучшие часы будут пропущены, остальные данные продолжают грузиться.");
         }
       }
       currentStepErrorRefs = refs;

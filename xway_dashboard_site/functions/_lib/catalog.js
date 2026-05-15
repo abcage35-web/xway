@@ -1086,7 +1086,10 @@ export async function collectCatalog(env, { start = null, end = null, mode = "co
   };
 }
 
-export async function collectCatalogProductDetails(env, { productRefs = [], start = null, end = null, forceRefresh = false, includeBestTime = true } = {}) {
+export async function collectCatalogProductDetails(
+  env,
+  { productRefs = [], start = null, end = null, forceRefresh = false, includeCampaignDetails = true, includeBestTime = true } = {},
+) {
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const refs = catalogProductRefsFromInput(productRefs);
   const rows = [];
@@ -1094,21 +1097,22 @@ export async function collectCatalogProductDetails(env, { productRefs = [], star
 
   for (const { productRef, shopId, productId } of refs) {
     const [stataResult, bestTimeResult] = await Promise.allSettled([
-      client.productStata(shopId, productId),
+      includeCampaignDetails ? client.productStata(shopId, productId) : Promise.resolve(null),
       includeBestTime ? client.productOrdersHeatMap(shopId, productId) : Promise.resolve(null),
     ]);
     const rowErrors = {};
     let campaignStates = [];
-    let campaignTypeTotals = {};
+    let campaignTypeTotals = null;
     let bestOrderTime = null;
 
-    if (stataResult.status === "fulfilled") {
-      const campaigns = cloneValue(stataResult.value?.campaign_wb || []);
-      campaignStates = normalizeCatalogCampaignStates(stataResult.value, [{ campaign_wb: campaigns }]);
-      campaignTypeTotals = buildCatalogCampaignTypeTotalsFromCampaigns(campaigns);
-    } else {
-      rowErrors.campaign_details = catalogErrorMessage(stataResult.reason);
-      errors.push({ product: productRef, source: "campaign_details", error: rowErrors.campaign_details });
+    if (includeCampaignDetails) {
+      if (stataResult.status === "fulfilled") {
+        const campaigns = Array.isArray(stataResult.value?.campaign_wb) ? stataResult.value.campaign_wb : [];
+        campaignStates = normalizeCatalogCampaignStates({}, [{ campaign_wb: campaigns }]);
+      } else {
+        rowErrors.campaign_details = catalogErrorMessage(stataResult.reason);
+        errors.push({ product: productRef, source: "campaign_details", error: rowErrors.campaign_details });
+      }
     }
 
     if (includeBestTime) {

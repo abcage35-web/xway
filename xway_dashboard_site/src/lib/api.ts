@@ -428,6 +428,7 @@ export async function fetchCatalogProductDetails(options: {
   start?: string | null;
   end?: string | null;
   forceRefresh?: boolean;
+  includeCampaignDetails?: boolean;
   includeBestTime?: boolean;
   signal?: AbortSignal;
 }) {
@@ -436,6 +437,9 @@ export async function fetchCatalogProductDetails(options: {
     url.searchParams.set("products", options.productRefs.join(","));
   }
   appendRange(url.searchParams, options.start, options.end);
+  if (options.includeCampaignDetails === false) {
+    url.searchParams.set("campaign_details", "0");
+  }
   if (options.includeBestTime === false) {
     url.searchParams.set("best_time", "0");
   }

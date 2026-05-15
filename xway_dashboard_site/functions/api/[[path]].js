@@ -151,6 +151,7 @@ async function handleNativeRequest(context, pathname) {
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
         forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+        includeCampaignDetails: requestUrl.searchParams.get("campaign_details") !== "0" && requestUrl.searchParams.get("include_campaign_details") !== "0",
         includeBestTime: requestUrl.searchParams.get("best_time") !== "0",
       }),
     );
