@@ -36,7 +36,7 @@ type CatalogCampaignSlotKind = "unified" | "manual" | "cpc";
 type CatalogCampaignDisplayStatus = "active" | "paused" | "freeze" | "muted";
 type CatalogCampaignTypeKey = "cpm-manual" | "cpm-unified" | "cpc";
 type CatalogCampaignTypeMetricKey = "spend" | "views" | "clicks" | "atbs" | "orders" | "ctr" | "cr" | "cr1" | "cr2" | "drr";
-type CatalogRefreshStage = "fast" | "deep";
+type CatalogRefreshStage = "fast" | "deep" | "issues";
 
 interface CatalogRefreshProgressState {
   stage: CatalogRefreshStage;
@@ -44,6 +44,8 @@ interface CatalogRefreshProgressState {
   fastTotal: number;
   deepCompleted: number;
   deepTotal: number;
+  issuesCompleted?: number;
+  issuesTotal?: number;
   currentLabel?: string | null;
 }
 
@@ -370,6 +372,14 @@ interface CatalogIssueFetchResult {
   failedRefs: string[];
 }
 
+interface CatalogIssueFetchProgress {
+  completed: number;
+  total: number;
+  attempt: number;
+  attemptsTotal: number;
+  currentLabel?: string | null;
+}
+
 interface CatalogIssueCachePayload {
   day: string;
   rowsByRef: Record<string, CatalogIssueCacheEntry>;
@@ -398,6 +408,8 @@ interface CatalogRefreshActivity {
   title: string;
   detail: string;
   productRef?: string;
+  progressCompleted?: number;
+  progressTotal?: number;
 }
 
 type CatalogRefreshLogDisplayStatus = CatalogRefreshLogStatus | "active";
@@ -405,6 +417,8 @@ type CatalogRefreshLogDisplayStatus = CatalogRefreshLogStatus | "active";
 type CatalogRefreshLogDisplayEntry = CatalogRefreshLogEntry & {
   displayStatus?: CatalogRefreshLogDisplayStatus;
   pending?: boolean;
+  progressCompleted?: number;
+  progressTotal?: number;
 };
 
 interface CatalogRefreshLogGroup {
@@ -3802,6 +3816,16 @@ function formatCatalogRefreshProgressLabel(progress: CatalogRefreshProgressState
     const current = formatCatalogRefreshCurrentLabel(progress.currentLabel);
     return `Быстрое: кабинеты ${formatNumber(progress.fastCompleted)} / ${formatNumber(progress.fastTotal)}${current ? ` · ${current}` : ""}`;
   }
+  if (progress.stage === "issues") {
+    const current = formatCatalogRefreshCurrentLabel(progress.currentLabel);
+    const issuesCompleted = progress.issuesCompleted ?? 0;
+    const issuesTotal = progress.issuesTotal ?? progress.deepTotal;
+    return [
+      `Быстрое готово ${formatNumber(progress.fastCompleted)} / ${formatNumber(progress.fastTotal)}`,
+      `Глубокое готово ${formatNumber(progress.deepCompleted)} / ${formatNumber(progress.deepTotal)}`,
+      `Ошибки за вчера: ${formatNumber(issuesCompleted)} / ${formatNumber(issuesTotal)}${current ? ` · ${current}` : ""}`,
+    ].join(" · ");
+  }
   const current = formatCatalogRefreshCurrentLabel(progress.currentLabel);
   return [
     `Быстрое готово ${formatNumber(progress.fastCompleted)} / ${formatNumber(progress.fastTotal)}`,
@@ -6388,10 +6412,23 @@ export function CatalogPage() {
   const fetchCatalogIssueRowsForRefs = async (
     refs: string[],
     signal: AbortSignal,
-    options: { forceRefresh?: boolean } = {},
+    options: {
+      forceRefresh?: boolean;
+      onProgress?: (progress: CatalogIssueFetchProgress) => void;
+    } = {},
   ): Promise<CatalogIssueFetchResult> => {
     const rows: CatalogIssueCacheEntry[] = [];
     const errorMessages = new Set<string>();
+    const uniqueRefs = [...new Set(refs)];
+    const completedRefs = new Set<string>();
+    const reportProgress = (progress: Omit<CatalogIssueFetchProgress, "completed" | "total" | "attemptsTotal">) => {
+      options.onProgress?.({
+        ...progress,
+        completed: Math.min(completedRefs.size, uniqueRefs.length),
+        total: uniqueRefs.length,
+        attemptsTotal: CATALOG_ISSUES_MAX_ATTEMPTS,
+      });
+    };
 
     const fetchIssueRowsChunk = async (chunkRefs: string[]): Promise<CatalogIssueCacheEntry[]> => {
       let cursor: string | null = null;
@@ -6447,25 +6484,37 @@ export function CatalogPage() {
       }
     };
 
-    let pendingRefs = [...new Set(refs)];
+    let pendingRefs = uniqueRefs;
+    reportProgress({ attempt: 1, currentLabel: "подготовка" });
     for (let attempt = 0; attempt < CATALOG_ISSUES_MAX_ATTEMPTS && pendingRefs.length; attempt += 1) {
       const failedRefs = new Set<string>();
       const chunks = chunkItems(pendingRefs, CATALOG_ISSUES_FETCH_CHUNK_SIZE);
-      for (const chunk of chunks) {
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex]!;
+        const chunkLabel = `пакет ${formatNumber(chunkIndex + 1)} / ${formatNumber(chunks.length)}`;
+        reportProgress({ attempt: attempt + 1, currentLabel: chunkLabel });
         const result = await fetchIssueRowsAdaptive(chunk);
         if (signal.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }
         rows.push(...result.rows);
+        result.loadedRefs.forEach((ref) => completedRefs.add(ref));
         result.failedRefs.forEach((ref) => failedRefs.add(ref));
+        reportProgress({ attempt: attempt + 1, currentLabel: chunkLabel });
       }
       pendingRefs = [...failedRefs];
       if (pendingRefs.length && attempt < CATALOG_ISSUES_MAX_ATTEMPTS - 1) {
+        reportProgress({ attempt: attempt + 1, currentLabel: `повтор: ${formatNumber(pendingRefs.length)} осталось` });
         await waitForCatalogIssuesRetry(CATALOG_ISSUES_RETRY_DELAY_MS, signal);
       }
     }
 
     const loadedRefs = [...new Set(rows.map((row) => row.product_ref))];
+    pendingRefs.forEach((ref) => completedRefs.add(ref));
+    reportProgress({
+      attempt: CATALOG_ISSUES_MAX_ATTEMPTS,
+      currentLabel: pendingRefs.length ? `не проверено ${formatNumber(pendingRefs.length)}` : null,
+    });
     const result = {
       rows,
       loadedRefs,
@@ -6487,6 +6536,7 @@ export function CatalogPage() {
       scope: CatalogRefreshLogScope;
       scopeLabel: string;
       forceRefresh?: boolean;
+      onProgress?: (progress: CatalogIssueFetchProgress) => void;
     },
   ) => {
     const refs = [...new Set(productRefs)];
@@ -6494,7 +6544,27 @@ export function CatalogPage() {
       return;
     }
     setCatalogRefreshStep(options.scopeLabel, `${formatNumber(refs.length)} товаров: ошибки за вчера`);
-    const result = await fetchCatalogIssueRowsForRefs(refs, options.signal, { forceRefresh: options.forceRefresh });
+    const updateIssuesProgress = (progress: CatalogIssueFetchProgress) => {
+      const current = progress.currentLabel ? ` · ${progress.currentLabel}` : "";
+      setCatalogRefreshActivity({
+        title: options.scopeLabel,
+        detail: `${formatNumber(progress.total)} товаров: ошибки за вчера · ${formatNumber(progress.completed)} / ${formatNumber(progress.total)}${current}`,
+        progressCompleted: progress.completed,
+        progressTotal: progress.total,
+      });
+      options.onProgress?.(progress);
+    };
+    updateIssuesProgress({
+      completed: 0,
+      total: refs.length,
+      attempt: 1,
+      attemptsTotal: CATALOG_ISSUES_MAX_ATTEMPTS,
+      currentLabel: "подготовка",
+    });
+    const result = await fetchCatalogIssueRowsForRefs(refs, options.signal, {
+      forceRefresh: options.forceRefresh,
+      onProgress: updateIssuesProgress,
+    });
     const rowsByRef = new Map(result.rows.map((row) => [row.product_ref, row]));
     if (result.loadedRefs.length) {
       setArticleIssueCacheByRef((current) => {
@@ -6636,11 +6706,31 @@ export function CatalogPage() {
     );
 
     if (options.refreshIssues !== false && options.refreshIssuesBatch) {
+      const syncIssuesProgress = (progress: CatalogIssueFetchProgress) => {
+        setCatalogRefreshProductProgress({
+          stage: "issues",
+          fastCompleted: options.fastCompleted,
+          fastTotal: options.fastTotal,
+          deepCompleted: total,
+          deepTotal: total,
+          issuesCompleted: progress.completed,
+          issuesTotal: progress.total,
+          currentLabel: progress.currentLabel,
+        });
+      };
+      syncIssuesProgress({
+        completed: 0,
+        total: refs.length,
+        attempt: 1,
+        attemptsTotal: CATALOG_ISSUES_MAX_ATTEMPTS,
+        currentLabel: "подготовка",
+      });
       await refreshCatalogIssuesForRefsBatch(refs, {
         signal: options.signal,
         scope: options.scope,
         scopeLabel: options.scopeLabel,
         forceRefresh: options.forceDeepDetailsRefresh,
+        onProgress: syncIssuesProgress,
       });
     }
   };
@@ -7110,6 +7200,8 @@ export function CatalogPage() {
         message: catalogRefreshActivity.detail,
         productRef: catalogRefreshActivity.productRef,
         productLabel: catalogRefreshActivity.productRef ? resolveCatalogRefreshProductLabel(catalogRefreshActivity.productRef) : undefined,
+        progressCompleted: catalogRefreshActivity.progressCompleted,
+        progressTotal: catalogRefreshActivity.progressTotal,
       });
     }
     sourceEntries.forEach((entry) => {
@@ -8317,7 +8409,18 @@ export function CatalogPage() {
                         {CATALOG_REFRESH_LOG_DISPLAY_STATUS_LABELS[group.status]}
                       </span>
                       <small>
-                        {formatNumber(group.entries.filter((entry) => entry.status === "success").length)}/{formatNumber(group.entries.length)}
+                        {(() => {
+                          const progressEntry = group.entries.find(
+                            (entry) =>
+                              entry.pending &&
+                              typeof entry.progressCompleted === "number" &&
+                              typeof entry.progressTotal === "number" &&
+                              entry.progressTotal > 0,
+                          );
+                          return progressEntry
+                            ? `${formatNumber(progressEntry.progressCompleted ?? 0)}/${formatNumber(progressEntry.progressTotal ?? 0)}`
+                            : `${formatNumber(group.entries.filter((entry) => entry.status === "success").length)}/${formatNumber(group.entries.length)}`;
+                        })()}
                       </small>
                     </div>
                   </div>
