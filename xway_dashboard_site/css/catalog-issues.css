@@ -1026,7 +1026,8 @@
   display: grid;
   gap: 8px;
   padding: 10px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .catalog-refresh-log-entry {
@@ -1099,6 +1100,7 @@
 
 .catalog-refresh-log-tile {
   display: grid;
+  min-width: 0;
   gap: 9px;
   padding: 10px;
   border: 1px solid var(--line);
@@ -1127,9 +1129,14 @@
 
 .catalog-refresh-log-tile-head {
   display: flex;
+  min-width: 0;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.catalog-refresh-log-tile-head > .min-w-0 {
+  min-width: 0;
 }
 
 .catalog-refresh-log-tile-head > .min-w-0 > span {
@@ -1181,6 +1188,7 @@
 .catalog-refresh-log-task {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
+  min-width: 0;
   gap: 7px;
   align-items: flex-start;
   padding: 7px 8px;
@@ -1236,16 +1244,19 @@
 
 .catalog-refresh-log-task-body {
   min-width: 0;
+  max-width: 100%;
 }
 
 .catalog-refresh-log-task-main {
   display: flex;
+  min-width: 0;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
 
 .catalog-refresh-log-task-main strong {
+  min-width: 0;
   overflow: hidden;
   color: var(--ink);
   font-size: 12px;
@@ -1265,18 +1276,20 @@
 .catalog-refresh-log-task p,
 .catalog-refresh-log-task em,
 .catalog-refresh-log-task-more {
+  max-width: 100%;
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 11.5px;
   line-height: 1.32;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .catalog-refresh-log-task em {
   display: block;
-  overflow: hidden;
   color: #c5bfd3;
   font-style: normal;
-  text-overflow: ellipsis;
+  white-space: normal;
 }
 
 .catalog-refresh-log-task-more {

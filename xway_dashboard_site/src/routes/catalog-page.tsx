@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ExternalLink, FileText, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ExternalLink, FileText, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues, fetchCatalogProductDetails } from "../lib/api";
@@ -304,6 +304,7 @@ type CatalogSortField =
   | "stock"
   | "turnover"
   | "campaigns"
+  | "bestOrderTime"
   | "spend"
   | "views"
   | "clicks"
@@ -319,12 +320,13 @@ type CatalogSortField =
   | "categoryAvgCr";
 
 type CatalogSortDirection = "asc" | "desc";
-type CatalogSortValue = `${CatalogSortField}:${CatalogSortDirection}`;
+type CatalogSortValue = "none" | `${CatalogSortField}:${CatalogSortDirection}`;
 
 const CATALOG_SORT_FIELD_OPTIONS: Array<{ value: CatalogSortField; label: string }> = [
   { value: "stock", label: "Остаток" },
   { value: "turnover", label: "Оборачиваемость" },
   { value: "campaigns", label: "Кол-во РК" },
+  { value: "bestOrderTime", label: "Лучшее время" },
   { value: "spend", label: "Расход" },
   { value: "views", label: "Показы" },
   { value: "clicks", label: "Клики" },
@@ -346,12 +348,15 @@ const CATALOG_SORT_DIRECTION_OPTIONS: Array<{ value: CatalogSortDirection; label
   { value: "asc", label: "по возрастанию" },
 ];
 
-const CATALOG_SORT_OPTIONS: Array<{ value: CatalogSortValue; label: string }> = CATALOG_SORT_FIELD_OPTIONS.flatMap((field) =>
-  CATALOG_SORT_DIRECTION_OPTIONS.map((direction) => ({
-    value: `${field.value}:${direction.value}` as CatalogSortValue,
-    label: `${field.label}: ${direction.label}`,
-  })),
-);
+const CATALOG_SORT_OPTIONS: Array<{ value: CatalogSortValue; label: string }> = [
+  { value: "none", label: "Без сортировки" },
+  ...CATALOG_SORT_FIELD_OPTIONS.flatMap((field) =>
+    CATALOG_SORT_DIRECTION_OPTIONS.map((direction) => ({
+      value: `${field.value}:${direction.value}` as CatalogSortValue,
+      label: `${field.label}: ${direction.label}`,
+    })),
+  ),
+];
 
 interface CatalogIssueCacheEntry {
   product_ref: string;
@@ -800,6 +805,19 @@ function mergeCatalogCampaignTypeTotalsPreservingSignal(
   return baseTotals;
 }
 
+function mergeCatalogCampaignTypeTotalsByRefPreservingSignal(
+  current: Record<string, CatalogCampaignTypeTotalsByKey>,
+  incoming: Record<string, CatalogCampaignTypeTotalsByKey>,
+) {
+  const next = { ...current };
+  Object.entries(incoming).forEach(([ref, incomingTotals]) => {
+    if (catalogCampaignTypeTotalsHasSignal(incomingTotals) || !catalogCampaignTypeTotalsHasSignal(next[ref])) {
+      next[ref] = incomingTotals;
+    }
+  });
+  return next;
+}
+
 function buildCatalogCampaignTypeTotals(rows: CatalogChartResponse["rows"]): CatalogCampaignTypeTotalsByKey {
   const totals = createEmptyCatalogCampaignTypeTotalsByKey();
 
@@ -827,13 +845,17 @@ function resolveCatalogCampaignTypeTotalsForArticle(
   chartData: CatalogChartResponse | null,
 ) {
   const directTotals = totalsByRef[productRef];
-  if (directTotals) {
+  if (catalogCampaignTypeTotalsHasSignal(directTotals)) {
     return directTotals;
   }
 
   const articleTotals = normalizeCatalogCampaignTypeTotals(article.campaign_type_totals);
   if (catalogCampaignTypeTotalsHasSignal(articleTotals)) {
     return articleTotals;
+  }
+
+  if (directTotals) {
+    return directTotals;
   }
 
   const chartTotals = resolveCatalogCampaignTypeTotalsForRef(productRef, {}, chartData);
@@ -3802,7 +3824,9 @@ function applyCatalogChartMetricsToPayload(
       }
       const rows = productRows.filter((row) => row.day >= start && row.day <= end);
       const totals = sumCatalogChartRows(rows);
-      const campaignTypeTotals = isCatalogArticleDisabled(article) ? {} : buildCatalogCampaignTypeTotals(rows);
+      const campaignTypeTotals = isCatalogArticleDisabled(article)
+        ? {}
+        : mergeCatalogCampaignTypeTotalsPreservingSignal(article.campaign_type_totals, buildCatalogCampaignTypeTotals(rows));
       return {
         ...article,
         expense_sum: totals.expense_sum,
@@ -3857,7 +3881,7 @@ export function CatalogPage() {
   const [stockTo, setStockTo] = useState("");
   const [turnoverFrom, setTurnoverFrom] = useState("");
   const [turnoverTo, setTurnoverTo] = useState("");
-  const [sortField, setSortField] = useState<CatalogSortField>("stock");
+  const [sortField, setSortField] = useState<CatalogSortField | null>(null);
   const [sortDirection, setSortDirection] = useState<CatalogSortDirection>("desc");
   const [quickView, setQuickView] = useState<CatalogQuickView>(() => readCatalogQuickView());
   const [quickViewSettingsOpen, setQuickViewSettingsOpen] = useState(false);
@@ -4215,7 +4239,7 @@ export function CatalogPage() {
           return matchesNumericRange(stockValue, stockFrom, stockTo) && matchesNumericRange(turnoverValue, turnoverFrom, turnoverTo);
         });
       const categoryAverageCrByValue = buildCategoryAverageCrMap(filteredArticles);
-      const nextArticles = filteredArticles.sort((left, right) => {
+      const nextArticles = sortField ? filteredArticles.sort((left, right) => {
         const resolveSortValue = (article: CatalogArticle) => {
           switch (sortField) {
             case "article":
@@ -4228,6 +4252,8 @@ export function CatalogPage() {
               return computeTurnoverDays(article.stock, turnoverOrdersByRef.get(`${shop.id}:${article.product_id}`)) ?? Number.NEGATIVE_INFINITY;
             case "campaigns":
               return article.campaign_states.length;
+            case "bestOrderTime":
+              return toNumber(article.best_order_time?.ranges?.[0]?.start_hour) ?? Number.NEGATIVE_INFINITY;
             case "spend":
               return toNumber(article.expense_sum) ?? Number.NEGATIVE_INFINITY;
             case "views":
@@ -4270,7 +4296,7 @@ export function CatalogPage() {
           result = left.article.localeCompare(right.article, "ru");
         }
         return sortDirection === "asc" ? result : -result;
-      });
+      }) : filteredArticles;
 
       if (!nextArticles.length) {
         return null;
@@ -4649,7 +4675,7 @@ export function CatalogPage() {
           return;
         }
         if (Object.keys(result.totalsByRef).length) {
-          setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...result.totalsByRef }));
+          setCatalogRowCampaignTypesByRef((current) => mergeCatalogCampaignTypeTotalsByRefPreservingSignal(current, result.totalsByRef));
         }
       })();
     }, 260);
@@ -5241,7 +5267,7 @@ export function CatalogPage() {
     setStockTo("");
     setTurnoverFrom("");
     setTurnoverTo("");
-    setSortField("stock");
+    setSortField(null);
     setSortDirection("desc");
     setQuickView("all");
   };
@@ -5257,6 +5283,40 @@ export function CatalogPage() {
   const resolveShopRefreshProductRefs = (shop: CatalogShop) => {
     const visibleShop = visibleShops.find((candidate) => String(candidate.id) === String(shop.id)) ?? shop;
     return visibleShop.articles.map((article) => `${visibleShop.id}:${article.product_id}`);
+  };
+  const toggleCatalogHeaderSort = (field: CatalogSortField) => {
+    if (sortField !== field) {
+      setSortField(field);
+      setSortDirection("desc");
+      return;
+    }
+    if (sortDirection === "desc") {
+      setSortDirection("asc");
+      return;
+    }
+    setSortField(null);
+    setSortDirection("desc");
+  };
+  const renderCatalogSortableHeader = (
+    field: CatalogSortField,
+    label: ReactNode,
+    options: { align?: "left" | "right"; className?: string; ariaLabel?: string } = {},
+  ) => {
+    const active = sortField === field;
+    const directionLabel = active ? (sortDirection === "desc" ? "по убыванию" : "по возрастанию") : "без сортировки";
+    const Icon = active ? (sortDirection === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
+    return (
+      <button
+        type="button"
+        onClick={() => toggleCatalogHeaderSort(field)}
+        className={cn("catalog-sort-header", options.align === "right" && "is-right", active && "is-active", options.className)}
+        aria-label={`${options.ariaLabel || "Сортировка"}: ${directionLabel}`}
+        title={`${options.ariaLabel || "Сортировка"}: ${directionLabel}`}
+      >
+        <span className="catalog-sort-header-label">{label}</span>
+        <Icon className="catalog-sort-header-icon" aria-hidden="true" />
+      </button>
+    );
   };
   const articleIssuesCollectLabel = articleIssuesLoading
     ? "Собираем ошибки..."
@@ -5464,7 +5524,7 @@ export function CatalogPage() {
         nextTypeTotals[productRefs[0]!] = buildCatalogCampaignTypeTotals(response.rows);
       }
       if (Object.keys(nextTypeTotals).length) {
-        setCatalogRowCampaignTypesByRef((current) => ({ ...current, ...nextTypeTotals }));
+        setCatalogRowCampaignTypesByRef((current) => mergeCatalogCampaignTypeTotalsByRefPreservingSignal(current, nextTypeTotals));
       }
     }
   };
@@ -7229,8 +7289,13 @@ export function CatalogPage() {
               />
               <SearchableSelect<CatalogSortValue>
                 label="Сортировать по"
-                value={`${sortField}:${sortDirection}` as CatalogSortValue}
+                value={sortField ? (`${sortField}:${sortDirection}` as CatalogSortValue) : "none"}
                 onChange={(value) => {
+                  if (value === "none") {
+                    setSortField(null);
+                    setSortDirection("desc");
+                    return;
+                  }
                   const [field, direction] = value.split(":");
                   setSortField(field as CatalogSortField);
                   setSortDirection(direction as CatalogSortDirection);
@@ -7800,14 +7865,21 @@ export function CatalogPage() {
                           );
                         },
                       },
-                      { key: "stock", header: "Остаток", align: "right", render: (article) => formatNumber(article.stock) },
+                      {
+                        key: "stock",
+                        header: renderCatalogSortableHeader("stock", "Остаток", { align: "right", ariaLabel: "Остаток" }),
+                        align: "right",
+                        render: (article) => formatNumber(article.stock),
+                      },
                       {
                         key: "turnover",
-                        header: (
+                        header: renderCatalogSortableHeader(
+                          "turnover",
                           <span className="inline-flex flex-col leading-[1.05]">
                             <span>Оборач.</span>
                             <span>3 дн</span>
-                          </span>
+                          </span>,
+                          { align: "right", ariaLabel: "Оборачиваемость за 3 дня" },
                         ),
                         align: "right",
                         render: (article) =>
@@ -7817,11 +7889,13 @@ export function CatalogPage() {
                       },
                       {
                         key: "totalOrders",
-                        header: (
+                        header: renderCatalogSortableHeader(
+                          "totalOrders",
                           <span className="inline-flex min-w-[104px] flex-col leading-[1.05]">
                             <span>Заказы</span>
                             <span>(всего)</span>
-                          </span>
+                          </span>,
+                          { align: "right", ariaLabel: "Заказы всего" },
                         ),
                         align: "right",
                         cellClassName: "min-w-[118px]",
@@ -7829,11 +7903,13 @@ export function CatalogPage() {
                       },
                       {
                         key: "drrTotal",
-                        header: (
+                        header: renderCatalogSortableHeader(
+                          "drrTotal",
                           <span className="inline-flex flex-col leading-[1.05]">
                             <span>ДРР</span>
                             <span>(всего)</span>
-                          </span>
+                          </span>,
+                          { align: "right", ariaLabel: "ДРР всего" },
                         ),
                         align: "right",
                         render: (article) => formatPercent(resolveCatalogArticleTotalDrr(article)),
@@ -7885,11 +7961,13 @@ export function CatalogPage() {
                       },
                       {
                         key: "bestOrderTime",
-                        header: (
+                        header: renderCatalogSortableHeader(
+                          "bestOrderTime",
                           <span className="inline-flex w-[112px] flex-col leading-[1.05]">
                             <span>Лучшее</span>
                             <span>время</span>
-                          </span>
+                          </span>,
+                          { ariaLabel: "Лучшее время" },
                         ),
                         cellClassName: "w-[128px] min-w-[128px]",
                         render: (article) => {
@@ -7935,7 +8013,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "spend",
-                        header: "Расход",
+                        header: renderCatalogSortableHeader("spend", "Расход", { align: "right", ariaLabel: "Расход" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -7957,7 +8035,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "views",
-                        header: "Показы",
+                        header: renderCatalogSortableHeader("views", "Показы", { align: "right", ariaLabel: "Показы" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -7979,7 +8057,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "clicks",
-                        header: "Клики",
+                        header: renderCatalogSortableHeader("clicks", "Клики", { align: "right", ariaLabel: "Клики" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8001,7 +8079,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "atbs",
-                        header: "Корзины",
+                        header: renderCatalogSortableHeader("atbs", "Корзины", { align: "right", ariaLabel: "Корзины" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8023,7 +8101,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "orders",
-                        header: "Заказы",
+                        header: renderCatalogSortableHeader("orders", "Заказы", { align: "right", ariaLabel: "Заказы" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8045,7 +8123,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "ctr",
-                        header: "CTR",
+                        header: renderCatalogSortableHeader("ctr", "CTR", { align: "right", ariaLabel: "CTR" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8067,7 +8145,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "cr1",
-                        header: "CR1",
+                        header: renderCatalogSortableHeader("cr1", "CR1", { align: "right", ariaLabel: "CR1" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8089,7 +8167,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "cr2",
-                        header: "CR2",
+                        header: renderCatalogSortableHeader("cr2", "CR2", { align: "right", ariaLabel: "CR2" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8111,7 +8189,7 @@ export function CatalogPage() {
                       },
                       {
                         key: "drr",
-                        header: "ДРР",
+                        header: renderCatalogSortableHeader("drr", "ДРР", { align: "right", ariaLabel: "ДРР" }),
                         align: "right",
                         cellClassName: "catalog-campaign-type-metric-cell",
                         render: (article) => {
@@ -8133,11 +8211,13 @@ export function CatalogPage() {
                       },
                       {
                         key: "categoryAvgCr",
-                        header: (
+                        header: renderCatalogSortableHeader(
+                          "categoryAvgCr",
                           <span className="inline-flex flex-col leading-[1.05]">
                             <span>Ср. CR</span>
                             <span>кат.</span>
-                          </span>
+                          </span>,
+                          { align: "right", ariaLabel: "Средний CR категории" },
                         ),
                         align: "right",
                         render: (article) => formatPercent(categoryAverageCrByValue.get(normalizeCategoryValue(article.category_keyword))),

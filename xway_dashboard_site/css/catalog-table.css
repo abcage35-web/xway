@@ -35,7 +35,50 @@
 
 .catalog-shop-section .metric-table-sticky-header-clone.is-fixed,
 .metric-table-sticky-header-clone.is-fixed {
-  pointer-events: none;
+  pointer-events: auto;
+}
+
+.catalog-sort-header {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: 1.05;
+  text-align: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.catalog-sort-header.is-right {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.catalog-sort-header-label {
+  min-width: 0;
+}
+
+.catalog-sort-header-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  opacity: 0.68;
+  transition:
+    color 0.16s ease,
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.catalog-sort-header:hover .catalog-sort-header-icon,
+.catalog-sort-header.is-active .catalog-sort-header-icon {
+  color: var(--color-brand-500);
+  opacity: 1;
 }
 
 .catalog-best-time-cell {

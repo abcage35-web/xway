@@ -566,13 +566,13 @@ function SplitMetricChart({
       </div>
 
       {isOrdersPanel && primaryVisible ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-[var(--color-muted)]">
+        <div className="mt-3 flex flex-wrap gap-2">
           {CATALOG_ORDER_SPLIT_SERIES.map((series) => (
             <span
               key={series.key}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[rgba(128,122,147,0.22)] bg-white/60 px-2.5 py-1"
+              className="inline-flex items-center gap-2 rounded-full border border-[rgba(75,123,255,0.22)] bg-white/90 px-3 py-1.5 text-[11px] font-semibold tracking-[0.04em] text-[var(--color-ink)] shadow-[0_8px_18px_rgba(31,23,53,0.06)]"
             >
-              <span className="size-2 rounded-full" style={{ backgroundColor: series.color }} />
+              <span className="size-2.5 rounded-full" style={{ backgroundColor: series.color }} />
               {series.label}
             </span>
           ))}
