@@ -10,7 +10,6 @@ type CatalogTooltipSeriesKey = CatalogSeriesKey | CatalogDrrSeriesKey;
 type ChartMode = "combined" | "split";
 type SplitPanelKey = "views" | "clicks" | "atbs" | "orders" | "crf";
 type CrfRenderMode = "line" | "bar";
-export type OrdersDisplayMode = "all" | "campaign-types";
 type LegendItem = {
   key: CatalogSeriesKey;
   label: string;
@@ -49,13 +48,6 @@ type CatalogChartXAxisTickProps = {
   metrics: CatalogChartAxisMetric[];
   compact?: boolean;
 };
-type CatalogOrderTypeSeries = {
-  key: string;
-  dataKey: string;
-  label: string;
-  color: string;
-  order: number;
-};
 
 const CHART_GRID = "#e7e3ee";
 const CHART_SYNC_ID = "catalog-selection-chart";
@@ -72,11 +64,6 @@ const DEFAULT_SPLIT_HIDDEN_SERIES: Record<SplitPanelKey, CatalogSeriesKey[]> = {
   orders: [],
   crf: [],
 };
-const CATALOG_ORDER_TYPE_SERIES: CatalogOrderTypeSeries[] = [
-  { key: "cpm-manual", dataKey: "orders_type_cpm_manual", label: "CPM · Ручная", color: "#2ea36f", order: 1 },
-  { key: "cpm-unified", dataKey: "orders_type_cpm_unified", label: "CPM · Единая", color: "#4b7bff", order: 2 },
-  { key: "cpc", dataKey: "orders_type_cpc", label: "CPC", color: "#8b64f6", order: 3 },
-];
 
 function formatChartDateLabel(value: string | null | undefined) {
   const rawValue = String(value || "");
@@ -180,17 +167,6 @@ function formatTooltipValue(key: CatalogTooltipSeriesKey, value: unknown) {
     return formatCompactNumber(normalizedValue);
   }
   return formatNumber(normalizedValue);
-}
-
-function formatOrderTypeTooltipValue(value: unknown) {
-  const normalizedValue = Array.isArray(value) ? value[0] : value;
-  return formatNumber(normalizedValue);
-}
-
-function getCatalogOrderTypeValue(row: CatalogChartRow, typeKey: string) {
-  const value = row.orders_by_campaign_type?.[typeKey];
-  const numeric = typeof value === "number" ? value : Number(value ?? 0);
-  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 function ChartLegend({ items }: { items: LegendItem[] }) {
@@ -298,8 +274,7 @@ function CatalogChartTooltip({
     }
   });
   const visibleItems = CATALOG_TOOLTIP_SERIES.filter((series) => payloadByKey.has(series.key));
-  const orderTypeItems = CATALOG_ORDER_TYPE_SERIES.filter((series) => payloadByKey.has(series.dataKey));
-  if (!visibleItems.length && !orderTypeItems.length && spentSkuCount === null) {
+  if (!visibleItems.length && spentSkuCount === null) {
     return null;
   }
 
@@ -316,18 +291,6 @@ function CatalogChartTooltip({
                 {series.label}
               </span>
               <span className="font-medium text-[var(--color-ink)]">{formatTooltipValue(series.key, entry?.value)}</span>
-            </div>
-          );
-        })}
-        {orderTypeItems.map((series) => {
-          const entry = payloadByKey.get(series.dataKey);
-          return (
-            <div key={series.dataKey} className="flex items-center justify-between gap-4 text-sm">
-              <span className="inline-flex items-center gap-2 text-[var(--color-muted)]">
-                <span className="size-2.5 rounded-full" style={{ backgroundColor: entry?.color || series.color }} />
-                {series.label}
-              </span>
-              <span className="font-medium text-[var(--color-ink)]">{formatOrderTypeTooltipValue(entry?.value)}</span>
             </div>
           );
         })}
@@ -390,77 +353,6 @@ function CatalogChartValueTable({
   );
 }
 
-function OrderCampaignTypeLegend({
-  rows,
-  series,
-}: {
-  rows: CatalogChartDisplayRow[];
-  series: CatalogOrderTypeSeries[];
-}) {
-  if (!series.length) {
-    return null;
-  }
-
-  const grandTotal = series.reduce(
-    (sum, item) => sum + rows.reduce((seriesSum, row) => seriesSum + (Number(row[item.dataKey]) || 0), 0),
-    0,
-  );
-
-  return (
-    <div className="chart-legend">
-      {series.map((item) => {
-        const total = rows.reduce((sum, row) => sum + (Number(row[item.dataKey]) || 0), 0);
-        const share = grandTotal > 0 ? (total / grandTotal) * 100 : 0;
-        return (
-          <span
-            key={item.key}
-            className="chart-legend-item"
-            style={{ ["--swatch" as string]: item.color }}
-          >
-            <i />
-            {item.label} {formatNumber(total)} · {formatPercent(share)}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function OrdersDisplayToggle({
-  value,
-  onChange,
-}: {
-  value: OrdersDisplayMode;
-  onChange: (nextValue: OrdersDisplayMode) => void;
-}) {
-  return (
-    <div className="inline-flex items-center rounded-full border border-[rgba(75,123,255,0.14)] bg-white/84 p-1">
-      {([
-        ["all", "Все"],
-        ["campaign-types", "РК"],
-      ] as const).map(([mode, label]) => {
-        const active = value === mode;
-        return (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => onChange(mode)}
-            className={cn(
-              "rounded-full px-3 py-1 text-[11px] font-semibold transition",
-              active
-                ? "bg-[var(--color-active-bg)] text-[var(--color-active-ink)] hover:bg-[var(--color-active-bg-hover)]"
-                : "text-[var(--color-muted)]",
-            )}
-            aria-pressed={active}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function catalogChartAxisHeight(metrics: CatalogChartAxisMetric[], compact = false) {
   const visibleMetricCount = metrics.filter((metric) => metric.active !== false).length;
   return (compact ? 30 : 38) + visibleMetricCount * (compact ? 14 : 16);
@@ -507,9 +399,6 @@ function SplitMetricChart({
   rateKey,
   hiddenKeys,
   onToggleKey,
-  ordersDisplayMode = "all",
-  onChangeOrdersDisplayMode,
-  orderCampaignTypeSeries = [],
 }: {
   title: string;
   rows: CatalogChartDisplayRow[];
@@ -517,9 +406,6 @@ function SplitMetricChart({
   rateKey?: CatalogSeriesKey;
   hiddenKeys: CatalogSeriesKey[];
   onToggleKey: (key: CatalogSeriesKey) => void;
-  ordersDisplayMode?: OrdersDisplayMode;
-  onChangeOrdersDisplayMode?: (nextMode: OrdersDisplayMode) => void;
-  orderCampaignTypeSeries?: CatalogOrderTypeSeries[];
 }) {
   const primaryMeta = getSeriesMeta(primaryKey)!;
   const expenseMeta = getSeriesMeta("expense_sum")!;
@@ -527,10 +413,7 @@ function SplitMetricChart({
   const primaryVisible = !hiddenKeys.includes(primaryKey);
   const expenseVisible = !hiddenKeys.includes("expense_sum");
   const rateVisible = rateKey ? !hiddenKeys.includes(rateKey) : false;
-  const showOrderTypeBars = primaryKey === "orders" && ordersDisplayMode === "campaign-types";
-  const hasOrderTypeBars = showOrderTypeBars && orderCampaignTypeSeries.length > 0;
-  const hasVisiblePrimary = primaryVisible && (!showOrderTypeBars || hasOrderTypeBars);
-  const hasVisibleSeries = hasVisiblePrimary || expenseVisible || rateVisible;
+  const hasVisibleSeries = primaryVisible || expenseVisible || rateVisible;
 
   return (
     <div className="rounded-[22px] border border-white/60 bg-white/52 px-4 py-4 shadow-[0_16px_38px_rgba(31,23,53,0.05)]">
@@ -541,9 +424,6 @@ function SplitMetricChart({
             Бары для основного объёма, расход линией, rate пунктиром.
           </p>
         </div>
-        {primaryKey === "orders" && onChangeOrdersDisplayMode ? (
-          <OrdersDisplayToggle value={ordersDisplayMode} onChange={onChangeOrdersDisplayMode} />
-        ) : null}
       </div>
 
       <div className="mt-3 h-[250px]">
@@ -571,22 +451,7 @@ function SplitMetricChart({
               <YAxis yAxisId="expense_sum" hide orientation="right" allowDecimals domain={["auto", "auto"]} />
               {rateKey ? <YAxis yAxisId={rateKey} hide orientation="right" allowDecimals domain={["auto", "auto"]} /> : null}
               <Tooltip isAnimationActive={false} content={(props) => <CatalogChartTooltip {...props} />} />
-              {primaryVisible && showOrderTypeBars ? (
-                orderCampaignTypeSeries.map((series) => (
-                  <Bar
-                    key={series.key}
-                    yAxisId={primaryKey}
-                    dataKey={series.dataKey}
-                    name={series.label}
-                    stackId="orders-by-campaign-type"
-                    fill={series.color}
-                    radius={[8, 8, 0, 0]}
-                    maxBarSize={24}
-                    fillOpacity={0.92}
-                    isAnimationActive={false}
-                  />
-                ))
-              ) : primaryVisible ? (
+              {primaryVisible ? (
                 <Bar
                   yAxisId={primaryKey}
                   dataKey={primaryKey}
@@ -661,7 +526,6 @@ function SplitMetricChart({
             : []),
         ]}
       />
-      {showOrderTypeBars && primaryVisible ? <OrderCampaignTypeLegend rows={rows} series={orderCampaignTypeSeries} /> : null}
     </div>
   );
 }
@@ -936,10 +800,6 @@ export function CatalogSelectionChart({
   rangeLabel,
   windowDays,
   onRetryErrors,
-  ordersDisplayMode,
-  onChangeOrdersDisplayMode,
-  orderTypeLoading = false,
-  orderTypeError = null,
 }: {
   rows: CatalogChartRow[];
   totals: CatalogChartTotals | null;
@@ -955,10 +815,6 @@ export function CatalogSelectionChart({
   rangeLabel: string;
   windowDays: number;
   onRetryErrors?: () => void;
-  ordersDisplayMode?: OrdersDisplayMode;
-  onChangeOrdersDisplayMode?: (nextMode: OrdersDisplayMode) => void;
-  orderTypeLoading?: boolean;
-  orderTypeError?: string | null;
 }) {
   const [chartMode, setChartMode] = useState<ChartMode>("combined");
   const [hiddenSeries, setHiddenSeries] = useState<CatalogSeriesKey[]>(DEFAULT_HIDDEN_SERIES);
@@ -967,22 +823,13 @@ export function CatalogSelectionChart({
   );
   const [hiddenDrrSeries, setHiddenDrrSeries] = useState<CatalogDrrSeriesKey[]>([]);
   const [crfRenderMode, setCrfRenderMode] = useState<CrfRenderMode>("line");
-  const [internalOrdersDisplayMode, setInternalOrdersDisplayMode] = useState<OrdersDisplayMode>("all");
-  const resolvedOrdersDisplayMode = ordersDisplayMode ?? internalOrdersDisplayMode;
-  const setResolvedOrdersDisplayMode = onChangeOrdersDisplayMode ?? setInternalOrdersDisplayMode;
   const loadingTargetCount = loadTargetCount ?? selectionCount;
 
   const activeSeries = CATALOG_SERIES.filter((series) => !hiddenSeries.includes(series.key));
   const chartRows: CatalogChartDisplayRow[] = rows.map((row) => ({
     ...row,
     label: formatChartDateLabel(row.day_label || row.day),
-    ...Object.fromEntries(
-      CATALOG_ORDER_TYPE_SERIES.map((series) => [series.dataKey, getCatalogOrderTypeValue(row, series.key)]),
-    ),
   }));
-  const visibleOrderTypeSeries = CATALOG_ORDER_TYPE_SERIES.filter((series) =>
-    chartRows.some((row) => (Number(row[series.dataKey]) || 0) > 0),
-  ).sort((left, right) => left.order - right.order);
   const skuAxisMetrics: CatalogChartAxisMetric[] = [
     {
       key: "spent_sku_count",
@@ -1057,16 +904,6 @@ export function CatalogSelectionChart({
                   <RefreshCw className={cn("size-3.5", isLoading && "animate-spin")} />
                 </button>
               ) : null}
-            </span>
-          ) : null}
-          {orderTypeLoading ? (
-            <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1.5 text-xs">
-              <LoaderCircle className="size-4 animate-spin text-brand-200" />
-              Р“СЂСѓР·РёРј Р Рљ
-            </span>
-          ) : orderTypeError ? (
-            <span className="inline-flex rounded-full bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
-              Р Рљ РЅРµ РґРѕРіСЂСѓР¶РµРЅС‹
             </span>
           ) : null}
         </div>
@@ -1193,9 +1030,6 @@ export function CatalogSelectionChart({
                   rateKey={config.rateKey}
                   hiddenKeys={splitHiddenSeries[config.panel]}
                   onToggleKey={(key) => toggleSplitPanelKey(config.panel, key)}
-                  ordersDisplayMode={resolvedOrdersDisplayMode}
-                  onChangeOrdersDisplayMode={setResolvedOrdersDisplayMode}
-                  orderCampaignTypeSeries={visibleOrderTypeSeries}
                 />
               ))}
             </div>

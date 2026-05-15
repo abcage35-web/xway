@@ -16,7 +16,7 @@ import {
   type CatalogChartCacheEntry,
   type CatalogChartProgressState,
 } from "../features/catalog/chart-service";
-import { CatalogSelectionChart, type OrdersDisplayMode } from "../components/catalog-selection-chart";
+import { CatalogSelectionChart } from "../components/catalog-selection-chart";
 import { SearchableMultiSelect, SearchableSelect, type SearchableMultiSelectOption } from "../components/searchable-multi-select";
 import { MetricCard, MetricTable, PageHero, RangeToolbar, SearchField, SectionCard } from "../components/ui";
 
@@ -2906,18 +2906,6 @@ async function fetchCatalogCampaignTypeTotalsForRefs({
   return { totalsByRef, failedRefs: pendingRefs };
 }
 
-function catalogChartHasCampaignTypeData(response: CatalogChartResponse | null) {
-  if (!response) {
-    return false;
-  }
-  const hasTypeValues = (row: CatalogChartResponse["rows"][number]) =>
-    Object.values(row.orders_by_campaign_type || {}).some((value) => (toNumber(value) ?? 0) > 0) ||
-    Object.values(row.metrics_by_campaign_type || {}).some((metrics) =>
-      Object.values(metrics || {}).some((value) => (toNumber(value) ?? 0) > 0),
-    );
-  return response.rows.some(hasTypeValues) || (response.product_rows || []).some((product) => product.rows.some(hasTypeValues));
-}
-
 function formatIssueIncidents(count: number) {
   const abs = Math.abs(count) % 100;
   const last = abs % 10;
@@ -3554,10 +3542,6 @@ export function CatalogPage() {
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartProgress, setChartProgress] = useState<CatalogChartProgressState | null>(null);
-  const [chartOrdersDisplayMode, setChartOrdersDisplayMode] = useState<OrdersDisplayMode>("all");
-  const [chartCampaignTypesLoading, setChartCampaignTypesLoading] = useState(false);
-  const [chartCampaignTypesError, setChartCampaignTypesError] = useState<string | null>(null);
-  const [chartCampaignTypesLoadedKey, setChartCampaignTypesLoadedKey] = useState<string | null>(null);
   const [catalogArticleOverridesByRef, setCatalogArticleOverridesByRef] = useState<Record<string, CatalogArticle>>({});
   const [catalogPayloadOverride, setCatalogPayloadOverride] = useState<CatalogResponse | null>(null);
   const [turnoverPayloadOverride, setTurnoverPayloadOverride] = useState<CatalogResponse | null>(null);
@@ -3590,7 +3574,6 @@ export function CatalogPage() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const chartFetchAbortRef = useRef<AbortController | null>(null);
-  const chartCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRowCampaignTypesAbortRef = useRef<AbortController | null>(null);
   const catalogRefreshAbortRef = useRef<AbortController | null>(null);
   const chartAutoRetrySignatureRef = useRef<string | null>(null);
@@ -4195,7 +4178,6 @@ export function CatalogPage() {
   useEffect(() => {
     return () => {
       chartFetchAbortRef.current?.abort();
-      chartCampaignTypesAbortRef.current?.abort();
       articleIssuesAbortRef.current?.abort();
       if (articleIssuesCopyResetRef.current !== null) {
         window.clearTimeout(articleIssuesCopyResetRef.current);
@@ -4278,10 +4260,6 @@ export function CatalogPage() {
 
   useEffect(() => {
     chartFetchAbortRef.current?.abort();
-    chartCampaignTypesAbortRef.current?.abort();
-    setChartCampaignTypesLoading(false);
-    setChartCampaignTypesError(null);
-    setChartCampaignTypesLoadedKey(null);
     chartAutoRetrySignatureRef.current = null;
     if (catalogRefreshing || chartCollapsed) {
       setChartLoading(false);
@@ -4441,94 +4419,6 @@ export function CatalogPage() {
       controller.abort();
     };
   }, [catalogRefreshing, chartCollapsed, chartSourceCacheKey, chartSourceProductRefsKey, chartSourceRangeStart, chartSourceRangeEnd, chartSourceSelectionCount]);
-
-  const loadChartCampaignTypes = async () => {
-    if (
-      chartCampaignTypesLoading ||
-      chartLoading ||
-      !chartSourceSelectionCount ||
-      chartCampaignTypesLoadedKey === chartSourceCacheKey ||
-      catalogChartHasCampaignTypeData(chartSourceData)
-    ) {
-      return;
-    }
-
-    chartCampaignTypesAbortRef.current?.abort();
-    const controller = new AbortController();
-    chartCampaignTypesAbortRef.current = controller;
-    setChartCampaignTypesLoading(true);
-    setChartCampaignTypesError(null);
-
-    try {
-      let nextResponse: CatalogChartResponse | null = null;
-      const campaignTypeRefs = chartSourceProductRefs.filter((ref) => !isCatalogArticleDisabled(catalogArticleByRef.get(ref)));
-      const productChunks = chunkItems(campaignTypeRefs, CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE);
-      if (!productChunks.length) {
-        setChartCampaignTypesLoadedKey(chartSourceCacheKey);
-        return;
-      }
-      for (let chunkIndex = 0; chunkIndex < productChunks.length; chunkIndex += 1) {
-        const chunkRefs = productChunks[chunkIndex]!;
-        const chunkResponse = await fetchCatalogChartWorkerSafe({
-          productRefs: chunkRefs,
-          start: chartSourceRangeStart,
-          end: chartSourceRangeEnd,
-          includeCampaignTypes: true,
-          signal: controller.signal,
-          selectionCount: chartSourceSelectionCount,
-          chunkSize: CATALOG_CAMPAIGN_TYPE_FETCH_CHUNK_SIZE,
-        });
-        if (controller.signal.aborted) {
-          return;
-        }
-        nextResponse = mergeCatalogChartResponses(nextResponse, chunkResponse, chartSourceSelectionCount);
-        if (chunkIndex < productChunks.length - 1) {
-          await waitForCatalogRetry(CATALOG_CHART_CHUNK_DELAY_MS, controller.signal);
-        }
-      }
-
-      if (!controller.signal.aborted && nextResponse) {
-        setChartCampaignTypesLoadedKey(chartSourceCacheKey);
-        setChartSourceData(nextResponse);
-        setChartProgress((current) =>
-          current?.cacheKey === chartSourceCacheKey
-            ? {
-                ...current,
-                loadedProductsCount: nextResponse.loaded_products_count,
-                errorCount: nextResponse.errors.length,
-              }
-            : current,
-        );
-        rememberCatalogChartCacheEntry(chartSourceCacheKey, {
-          response: nextResponse,
-          productRefsKey: chartSourceProductRefsKey,
-          rangeStart: chartSourceRangeStart,
-          rangeEnd: chartSourceRangeEnd,
-        });
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setChartCampaignTypesError(error instanceof Error ? error.message : "Не удалось догрузить детализацию РК.");
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setChartCampaignTypesLoading(false);
-      }
-    }
-  };
-
-  const handleChartOrdersDisplayModeChange = (nextMode: OrdersDisplayMode) => {
-    setChartOrdersDisplayMode(nextMode);
-    if (nextMode === "campaign-types") {
-      void loadChartCampaignTypes();
-    }
-  };
-
-  useEffect(() => {
-    if (chartOrdersDisplayMode === "campaign-types" && !chartLoading && chartSourceData && !catalogChartHasCampaignTypeData(chartSourceData)) {
-      void loadChartCampaignTypes();
-    }
-  });
 
   const retryChartErrors = async (maxPasses = CATALOG_CHART_MAX_RETRY_PASSES) => {
     if (!chartSourceData?.errors.length || chartLoading) {
@@ -6264,7 +6154,6 @@ export function CatalogPage() {
     setRefreshingAllCatalog(true);
     chartCacheRef.current.clear();
     chartFetchAbortRef.current?.abort();
-    chartCampaignTypesAbortRef.current?.abort();
     catalogRowCampaignTypesAbortRef.current?.abort();
     setChartLoading(false);
     setCatalogPayloadOverride(null);
@@ -6276,8 +6165,6 @@ export function CatalogPage() {
     setChartSourceData(null);
     setChartProgress(null);
     setChartError(null);
-    setChartCampaignTypesLoadedKey(null);
-    setChartCampaignTypesError(null);
     setCatalogRowCampaignTypesRefreshToken((current) => current + 1);
 
     let productRefs = catalogProductRefsFromPayloads([loaderPayload, sourcePayload]);
@@ -6786,10 +6673,6 @@ export function CatalogPage() {
               rangeLabel={chartRangeLabel}
               windowDays={chartWindow}
               onRetryErrors={chartSourceData?.errors.length ? retryChartErrors : undefined}
-              ordersDisplayMode={chartOrdersDisplayMode}
-              onChangeOrdersDisplayMode={handleChartOrdersDisplayModeChange}
-              orderTypeLoading={chartCampaignTypesLoading}
-              orderTypeError={chartCampaignTypesError}
             />
           ) : (
             <div className="text-sm text-[var(--color-muted)]">
