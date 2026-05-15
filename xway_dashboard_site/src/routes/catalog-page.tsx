@@ -752,6 +752,24 @@ function buildCatalogCampaignLimitRows(states: CatalogCampaignState[]): CatalogC
   ];
 }
 
+function formatCatalogCampaignLimitChipValue(value: number | string | null | undefined) {
+  const numeric = toNumber(value);
+  if (numeric === null) {
+    return "—";
+  }
+  const abs = Math.abs(numeric);
+  if (abs >= 1_000_000_000) {
+    return `${formatNumber(numeric / 1_000_000_000, 1)}млрд`;
+  }
+  if (abs >= 1_000_000) {
+    return `${formatNumber(numeric / 1_000_000, 1)}м`;
+  }
+  if (abs >= 1_000) {
+    return `${formatNumber(numeric / 1_000, 1)}к`;
+  }
+  return formatNumber(numeric);
+}
+
 function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] }) {
   if (!rows.length) {
     return null;
@@ -787,7 +805,7 @@ function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] })
           {limitChipRows.map((row) => {
             const isConfigured = row.total !== null || row.active;
             const chipLabel = row.key === "budget" ? "Бюджет" : "Лимит";
-            const chipValue = row.total !== null ? `${formatCompactNumber(row.total)} ₽` : "нет";
+            const chipValue = row.total !== null ? formatCatalogCampaignLimitChipValue(row.total) : "нет";
             const chipTitle = `${chipLabel}: ${
               isConfigured
                 ? `${row.active ? "включен" : "выключен"} · ${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`
