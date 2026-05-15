@@ -382,8 +382,8 @@
   position: relative;
   display: grid;
   align-content: center;
-  gap: 8px;
-  min-height: 70px;
+  gap: 7px;
+  min-height: 86px;
   padding: 8px 10px 9px;
   border-radius: 14px;
   border: 1px solid rgba(128, 122, 147, 0.16);
@@ -405,7 +405,7 @@
 
 .catalog-campaign-slot-empty {
   min-width: 0;
-  min-height: 70px;
+  min-height: 86px;
 }
 
 .catalog-campaign-card-head {
@@ -491,6 +491,69 @@
   min-width: var(--campaign-limit-min-width, 0);
   border-radius: inherit;
   background: linear-gradient(90deg, var(--campaign-limit-fill), color-mix(in srgb, var(--campaign-limit-fill) 72%, white));
+}
+
+.catalog-campaign-limit-chips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.catalog-campaign-limit-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  min-height: 17px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--campaign-limit-chip-color, var(--muted)) 30%, transparent);
+  background: color-mix(in srgb, var(--campaign-limit-chip-color, var(--muted)) 13%, transparent);
+  color: var(--campaign-limit-chip-color, var(--muted));
+  font-size: 0.54rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.catalog-campaign-limit-chip.is-budget {
+  --campaign-limit-chip-color: #f0a53a;
+}
+
+.catalog-campaign-limit-chip.is-spend {
+  --campaign-limit-chip-color: #3e9d69;
+}
+
+.catalog-campaign-limit-chip.is-active {
+  background: color-mix(in srgb, var(--campaign-limit-chip-color, var(--muted)) 21%, transparent);
+  border-color: color-mix(in srgb, var(--campaign-limit-chip-color, var(--muted)) 42%, transparent);
+}
+
+.catalog-campaign-limit-chip.is-empty {
+  --campaign-limit-chip-color: var(--muted);
+  opacity: 0.62;
+}
+
+.catalog-campaign-limit-chip > span,
+.catalog-campaign-limit-chip > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catalog-campaign-limit-chip > span {
+  flex: 0 1 auto;
+}
+
+.catalog-campaign-limit-chip > strong {
+  flex: 1 1 auto;
+  max-width: 46px;
+  color: currentColor;
+  font-size: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .catalog-campaign-copy {

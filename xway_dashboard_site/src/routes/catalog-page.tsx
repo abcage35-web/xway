@@ -754,6 +754,7 @@ function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] })
   if (!rows.length) {
     return null;
   }
+  const limitChipRows = rows.filter((row) => row.key === "budget" || row.key === "spend");
 
   return (
     <div className="catalog-campaign-limit-bars">
@@ -779,6 +780,30 @@ function CatalogCampaignLimitBars({ rows }: { rows: CatalogCampaignLimitRow[] })
           </div>
         );
       })}
+      {limitChipRows.length ? (
+        <div className="catalog-campaign-limit-chips">
+          {limitChipRows.map((row) => {
+            const isConfigured = row.total !== null || row.active;
+            const chipLabel = row.key === "budget" ? "Бюджет" : "Лимит";
+            const chipValue = row.total !== null ? `${formatCompactNumber(row.total)} ₽` : "нет";
+            const chipTitle = `${chipLabel}: ${
+              isConfigured
+                ? `${row.active ? "включен" : "выключен"} · ${formatMoney(row.current, true)} / ${row.total !== null ? formatMoney(row.total, true) : "лимит не задан"}`
+                : "ограничение не задано"
+            }`;
+            return (
+              <span
+                key={`${row.key}-chip`}
+                className={cn("catalog-campaign-limit-chip", `is-${row.key}`, !isConfigured && "is-empty", row.active && "is-active")}
+                title={chipTitle}
+              >
+                <span>{chipLabel}</span>
+                <strong>{chipValue}</strong>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
