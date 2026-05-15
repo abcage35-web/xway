@@ -7555,6 +7555,41 @@ export function CatalogPage() {
                         },
                       },
                       {
+                        key: "bestOrderTime",
+                        header: (
+                          <span className="inline-flex w-[112px] flex-col leading-[1.05]">
+                            <span>Лучшее</span>
+                            <span>время</span>
+                          </span>
+                        ),
+                        cellClassName: "w-[128px] min-w-[128px]",
+                        render: (article) => {
+                          const ranges = article.best_order_time?.ranges || [];
+                          if (!ranges.length) {
+                            return (
+                              <span
+                                className="inline-flex max-w-[128px] items-center rounded-full bg-[var(--color-surface-soft)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[var(--color-muted)]"
+                                title={formatCatalogBestOrderTimeTitle(article)}
+                              >
+                                —
+                              </span>
+                            );
+                          }
+                          return (
+                            <div className="flex max-w-[128px] flex-col items-start gap-1" title={formatCatalogBestOrderTimeTitle(article)}>
+                              {ranges.map((range) => (
+                                <span
+                                  key={`${article.article}-${range.start_hour}-${range.end_hour}`}
+                                  className="inline-flex max-w-full items-center rounded-full bg-[rgba(139,100,246,0.14)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[#bfa9ff]"
+                                >
+                                  {range.label}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        },
+                      },
+                      {
                         key: "campaignType",
                         header: <span className="catalog-campaign-type-header">Тип РК</span>,
                         cellClassName: "catalog-campaign-type-cell",
@@ -7675,41 +7710,6 @@ export function CatalogPage() {
                               metric="orders"
                               fallback={formatNumber(article.orders)}
                             />
-                          );
-                        },
-                      },
-                      {
-                        key: "bestOrderTime",
-                        header: (
-                          <span className="inline-flex w-[112px] flex-col leading-[1.05]">
-                            <span>Лучшее</span>
-                            <span>время</span>
-                          </span>
-                        ),
-                        cellClassName: "w-[128px] min-w-[128px]",
-                        render: (article) => {
-                          const ranges = article.best_order_time?.ranges || [];
-                          if (!ranges.length) {
-                            return (
-                              <span
-                                className="inline-flex max-w-[128px] items-center rounded-full bg-[var(--color-surface-soft)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[var(--color-muted)]"
-                                title={formatCatalogBestOrderTimeTitle(article)}
-                              >
-                                —
-                              </span>
-                            );
-                          }
-                          return (
-                            <div className="flex max-w-[128px] flex-col items-start gap-1" title={formatCatalogBestOrderTimeTitle(article)}>
-                              {ranges.map((range) => (
-                                <span
-                                  key={`${article.article}-${range.start_hour}-${range.end_hour}`}
-                                  className="inline-flex max-w-full items-center rounded-full bg-[rgba(139,100,246,0.14)] px-2.5 py-1 text-[11px] font-semibold leading-tight text-[#bfa9ff]"
-                                >
-                                  {range.label}
-                                </span>
-                              ))}
-                            </div>
                           );
                         },
                       },
