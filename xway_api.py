@@ -1339,6 +1339,16 @@ def _catalog_product_refs_by_shop(product_refs: Optional[Iterable[str]]) -> Dict
     return refs_by_shop
 
 
+def _catalog_shop_ids(shop_ids: Optional[Iterable[Any]]) -> Set[int]:
+    result: Set[int] = set()
+    for raw_value in shop_ids or []:
+        try:
+            result.add(int(raw_value))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def _products_cache_key(
     storage_state_path: str,
     range_payload: Dict[str, str],
@@ -3549,6 +3559,7 @@ def collect_catalog(
     mode: str = "compact",
     force_refresh: bool = False,
     product_refs: Optional[Iterable[str]] = None,
+    shop_ids: Optional[Iterable[Any]] = None,
     include_aux: bool = True,
 ) -> Dict[str, Any]:
     normalized_mode = "full" if str(mode).lower() == "full" else "compact"
@@ -3556,15 +3567,20 @@ def collect_catalog(
     api = XwayApi(storage_state_path, start=start, end=end, force_refresh=force_refresh)
     range_payload = api.range
     refs_by_shop = _catalog_product_refs_by_shop(product_refs)
-    is_partial = bool(refs_by_shop)
+    requested_shop_ids = _catalog_shop_ids(shop_ids)
+    is_partial = bool(refs_by_shop or requested_shop_ids)
     cache_key = _catalog_cache_key(storage_state_path, range_payload, normalized_mode)
     cached = None if force_refresh or is_partial or not include_aux else _get_cached_catalog(cache_key)
     if cached is not None:
         return cached
 
     shops = api.list_shops()
-    if refs_by_shop:
-        shops = [shop for shop in shops if int(shop["id"]) in refs_by_shop]
+    if refs_by_shop or requested_shop_ids:
+        shops = [
+            shop for shop in shops
+            if (not refs_by_shop or int(shop["id"]) in refs_by_shop)
+            and (not requested_shop_ids or int(shop["id"]) in requested_shop_ids)
+        ]
     max_workers = min(8, max(1, len(shops)))
     catalog_shops: List[Dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:

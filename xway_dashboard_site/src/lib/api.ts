@@ -274,12 +274,16 @@ export async function fetchCatalog(options: {
   signal?: AbortSignal;
   forceRefresh?: boolean;
   productRefs?: string[];
+  shopIds?: Array<number | string>;
   includeAux?: boolean;
 }) {
   const url = new URL("/api/catalog", buildBaseUrl(options.request));
   url.searchParams.set("mode", "compact");
   if (options.productRefs?.length) {
     url.searchParams.set("products", options.productRefs.join(","));
+  }
+  if (options.shopIds?.length) {
+    url.searchParams.set("shops", options.shopIds.map((id) => String(id)).join(","));
   }
   if (options.includeAux === false) {
     url.searchParams.set("aux", "0");

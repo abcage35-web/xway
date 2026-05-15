@@ -976,6 +976,14 @@ function catalogProductRefsByShop(productRefs = []) {
   return refsByShop;
 }
 
+function catalogShopIdSet(shopIds = []) {
+  return new Set(
+    (shopIds || [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value)),
+  );
+}
+
 function normalizeCatalogCursor(value, total) {
   const parsed = Number.parseInt(String(value ?? "0"), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -1000,12 +1008,16 @@ function normalizeDeadlineMs(value, fallback = CATALOG_CHART_DEFAULT_DEADLINE_MS
   return Math.max(3000, Math.min(parsed, 25000));
 }
 
-export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false, productRefs = [], includeAux = true } = {}) {
+export async function collectCatalog(env, { start = null, end = null, mode = "compact", forceRefresh = false, productRefs = [], shopIds = [], includeAux = true } = {}) {
   const normalizedMode = String(mode || "").toLowerCase() === "full" ? "full" : "compact";
   const includeExtended = normalizedMode === "full";
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const refsByShop = catalogProductRefsByShop(productRefs);
-  const shops = (await client.listShops()).filter((shop) => !refsByShop.size || refsByShop.has(Number(shop?.id)));
+  const requestedShopIds = catalogShopIdSet(shopIds);
+  const shops = (await client.listShops()).filter((shop) => {
+    const shopId = Number(shop?.id);
+    return (!refsByShop.size || refsByShop.has(shopId)) && (!requestedShopIds.size || requestedShopIds.has(shopId));
+  });
   const catalogShops = await mapWithConcurrency(shops, CATALOG_SHOP_FETCH_CONCURRENCY, (shop) =>
     collectShopCatalog(shop, client, includeExtended, refsByShop.get(Number(shop?.id)) || null, includeAux),
   );

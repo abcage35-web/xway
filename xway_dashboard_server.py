@@ -179,6 +179,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 for item in query.get("products", [""])[0].split(",")
                 if item.strip()
             )
+            shop_ids = tuple(
+                item.strip()
+                for item in query.get("shops", [""])[0].split(",")
+                if item.strip()
+            )
             try:
                 payload = collect_catalog(
                     STORAGE_STATE,
@@ -187,6 +192,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     mode=catalog_mode,
                     force_refresh=force_refresh,
                     product_refs=product_refs,
+                    shop_ids=shop_ids,
                     include_aux=include_aux,
                 )
             except Exception as exc:
