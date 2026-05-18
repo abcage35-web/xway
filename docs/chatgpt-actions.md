@@ -90,6 +90,7 @@ Optional D1 shared cache:
 
 ```text
 XWAY_SHARED_CACHE_DB=<Cloudflare D1 binding>
+XWAY_CACHE_NAMESPACE=xway-production
 ```
 
 D1 is the preferred shared cache for dashboard/API data that should be visible to all users after one user has loaded it. It stores reusable source responses and cacheable catalog API responses. Setup details are in `docs/d1-shared-cache.md`.

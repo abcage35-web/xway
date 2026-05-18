@@ -4,7 +4,8 @@
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-04-04",
   "vars": {
-    "XWAY_DEFAULT_ARTICLES": "44392513,60149847"
+    "XWAY_DEFAULT_ARTICLES": "44392513,60149847",
+    "XWAY_CACHE_NAMESPACE": "xway-production"
   },
   "kv_namespaces": [
     {

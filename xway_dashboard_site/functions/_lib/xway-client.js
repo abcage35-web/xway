@@ -329,7 +329,7 @@ export class XwayApiClient {
     this.cookieHeader = buildCookieHeader(storageState);
     this.csrfToken = String(env.XWAY_CSRF_TOKEN || env.XWAY_CSRFTOKEN || "").trim() || csrfTokenFromState(storageState);
     this.baseOrigin = "https://am.xway.ru";
-    this.cacheNamespace = sanitizeOrigin(env.CF_PAGES_URL || env.API_ORIGIN || "xway");
+    this.cacheNamespace = sanitizeOrigin(env.XWAY_CACHE_NAMESPACE || env.CF_PAGES_URL || env.API_ORIGIN || "xway");
     this.forceRefresh = Boolean(forceRefresh);
   }
 

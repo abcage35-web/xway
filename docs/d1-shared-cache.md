@@ -16,6 +16,14 @@ Recommended database name:
 xway-shared-cache
 ```
 
+Set a stable cache namespace for production:
+
+```text
+XWAY_CACHE_NAMESPACE=xway-production
+```
+
+This prevents D1 keys from changing after every Pages deployment.
+
 If you configure bindings through `wrangler.jsonc`, add the `database_id` returned by Cloudflare:
 
 ```jsonc

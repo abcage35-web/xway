@@ -89,7 +89,7 @@ function normalizeApiCacheKey(url) {
 }
 
 function sharedApiCacheNamespace(env, pathname) {
-  const originNamespace = sanitizeOrigin(env.CF_PAGES_URL || env.API_ORIGIN || "xway");
+  const originNamespace = sanitizeOrigin(env.XWAY_CACHE_NAMESPACE || env.CF_PAGES_URL || env.API_ORIGIN || "xway");
   return `api-response:${originNamespace}:${pathname}`;
 }
 
