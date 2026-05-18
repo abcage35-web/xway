@@ -1,6 +1,7 @@
 const SHARED_CACHE_TABLE = "xway_shared_cache";
-const DEFAULT_MAX_VALUE_BYTES = 1800000;
+const DEFAULT_MAX_VALUE_BYTES = 500000;
 const D1_FAILURE_BACKOFF_MS = 60000;
+const CHUNK_MARKER = "__xway_chunked_v1";
 
 let d1UnavailableUntil = 0;
 
@@ -9,6 +10,98 @@ function byteLength(value) {
     return new TextEncoder().encode(value).length;
   }
   return value.length;
+}
+
+function chunkCacheKey(key, index) {
+  return `${key}::${CHUNK_MARKER}:${index}`;
+}
+
+function isChunkedPayload(payload) {
+  return Boolean(payload && typeof payload === "object" && payload[CHUNK_MARKER] === true);
+}
+
+function splitByByteLength(value, maxBytes) {
+  if (maxBytes === null || byteLength(value) <= maxBytes) {
+    return [value];
+  }
+
+  const chunks = [];
+  let offset = 0;
+  while (offset < value.length) {
+    let low = 1;
+    let high = value.length - offset;
+    let best = 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidate = value.slice(offset, offset + mid);
+      if (byteLength(candidate) <= maxBytes) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    chunks.push(value.slice(offset, offset + best));
+    offset += best;
+  }
+  return chunks;
+}
+
+async function readChunkedValue(db, namespace, key, manifest, now) {
+  const chunkCount = Number(manifest.chunk_count || 0);
+  if (!Number.isFinite(chunkCount) || chunkCount <= 0 || chunkCount > 10000) {
+    return null;
+  }
+
+  const chunks = [];
+  for (let index = 0; index < chunkCount; index += 1) {
+    const row = await db
+      .prepare(
+        `SELECT value_json
+         FROM ${SHARED_CACHE_TABLE}
+         WHERE namespace = ? AND cache_key = ? AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .bind(String(namespace), chunkCacheKey(key, index), now)
+      .first();
+    if (!row?.value_json) {
+      return null;
+    }
+    chunks.push(row.value_json);
+  }
+
+  return unwrapValue(JSON.parse(chunks.join("")));
+}
+
+async function deleteSharedCacheChunks(db, namespace, key) {
+  const existing = await db
+    .prepare(`SELECT value_json FROM ${SHARED_CACHE_TABLE} WHERE namespace = ? AND cache_key = ?`)
+    .bind(String(namespace), String(key))
+    .first();
+  if (!existing?.value_json) {
+    return;
+  }
+
+  let manifest = null;
+  try {
+    manifest = JSON.parse(existing.value_json);
+  } catch {
+    return;
+  }
+  if (!isChunkedPayload(manifest)) {
+    return;
+  }
+
+  const chunkCount = Number(manifest.chunk_count || 0);
+  if (!Number.isFinite(chunkCount) || chunkCount <= 0 || chunkCount > 10000) {
+    return;
+  }
+
+  for (let index = 0; index < chunkCount; index += 1) {
+    await db
+      .prepare(`DELETE FROM ${SHARED_CACHE_TABLE} WHERE namespace = ? AND cache_key = ?`)
+      .bind(String(namespace), chunkCacheKey(key, index))
+      .run();
+  }
 }
 
 function shouldSkipD1() {
@@ -74,7 +167,11 @@ export async function readSharedCache(env, namespace, key, { maxAgeMs = null } =
       return null;
     }
 
-    return unwrapValue(JSON.parse(row.value_json));
+    const payload = JSON.parse(row.value_json);
+    if (isChunkedPayload(payload)) {
+      return readChunkedValue(db, namespace, key, payload, now);
+    }
+    return unwrapValue(payload);
   } catch (error) {
     rememberD1Failure(error);
     return null;
@@ -90,12 +187,49 @@ export async function writeSharedCache(env, namespace, key, value, { ttlMs = nul
   try {
     const valueJson = JSON.stringify(wrapValue(value));
     const sizeBytes = byteLength(valueJson);
-    if (maxBytes !== null && sizeBytes > maxBytes) {
-      return false;
-    }
-
     const now = Date.now();
     const expiresAt = ttlMs === null ? null : now + Math.max(0, Number(ttlMs) || 0);
+    await deleteSharedCacheChunks(db, namespace, key);
+
+    if (maxBytes !== null && sizeBytes > maxBytes) {
+      const chunks = splitByByteLength(valueJson, maxBytes);
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        await db
+          .prepare(
+            `INSERT INTO ${SHARED_CACHE_TABLE} (namespace, cache_key, value_json, size_bytes, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(namespace, cache_key) DO UPDATE SET
+               value_json = excluded.value_json,
+               size_bytes = excluded.size_bytes,
+               created_at = excluded.created_at,
+               expires_at = excluded.expires_at`,
+          )
+          .bind(String(namespace), chunkCacheKey(key, index), chunk, byteLength(chunk), now, expiresAt)
+          .run();
+      }
+
+      const manifestJson = JSON.stringify({
+        [CHUNK_MARKER]: true,
+        chunk_count: chunks.length,
+        total_size_bytes: sizeBytes,
+        created_at: new Date(now).toISOString(),
+      });
+      await db
+        .prepare(
+          `INSERT INTO ${SHARED_CACHE_TABLE} (namespace, cache_key, value_json, size_bytes, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(namespace, cache_key) DO UPDATE SET
+             value_json = excluded.value_json,
+             size_bytes = excluded.size_bytes,
+             created_at = excluded.created_at,
+             expires_at = excluded.expires_at`,
+        )
+        .bind(String(namespace), String(key), manifestJson, sizeBytes, now, expiresAt)
+        .run();
+      return true;
+    }
+
     await db
       .prepare(
         `INSERT INTO ${SHARED_CACHE_TABLE} (namespace, cache_key, value_json, size_bytes, created_at, expires_at)
@@ -122,6 +256,7 @@ export async function deleteSharedCache(env, namespace, key) {
   }
 
   try {
+    await deleteSharedCacheChunks(db, namespace, key);
     await db
       .prepare(`DELETE FROM ${SHARED_CACHE_TABLE} WHERE namespace = ? AND cache_key = ?`)
       .bind(String(namespace), String(key))
