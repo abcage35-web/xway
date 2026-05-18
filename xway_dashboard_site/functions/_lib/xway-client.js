@@ -11,9 +11,11 @@ const PRODUCT_STATA_CACHE_TTL_MS = 180000;
 const PRODUCT_INFO_CACHE_TTL_MS = 180000;
 const PRODUCT_DYNAMICS_CACHE_TTL_MS = 180000;
 const PRODUCT_STOCKS_RULE_CACHE_TTL_MS = 180000;
+const PRODUCT_ORDERS_HEATMAP_CACHE_TTL_MS = 180000;
 const CAMPAIGN_DAILY_EXACT_CACHE_TTL_MS = 180000;
 const CAMPAIGN_SCHEDULE_CACHE_TTL_MS = 180000;
 const PRODUCT_DAILY_STATS_CHUNK_DAYS = 30;
+const PRODUCT_ORDERS_HEATMAP_CHUNK_DAYS = 7;
 const CAMPAIGN_DAILY_EXACT_CONCURRENCY = 1;
 const XWAY_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const XWAY_REQUEST_MAX_ATTEMPTS = 3;
@@ -28,6 +30,7 @@ const cacheStore = {
   productInfo: new Map(),
   productDynamics: new Map(),
   productStocksRule: new Map(),
+  productOrdersHeatMap: new Map(),
   campaignDailyExact: new Map(),
   campaignSchedule: new Map(),
 };
@@ -267,6 +270,59 @@ function splitIsoDateRange(start, end, chunkDays = PRODUCT_DAILY_STATS_CHUNK_DAY
     });
   }
   return ranges;
+}
+
+function isoDateRangeDays(start, end) {
+  const startDate = parseIsoDate(start);
+  const endDate = parseIsoDate(end);
+  if (!startDate || !endDate || startDate > endDate) {
+    return 0;
+  }
+  return Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+}
+
+function isRetryableXwayError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /\b(429|502|503|504|1102)\b|Worker exceeded resource limits|temporarily unavailable|gateway timeout|timed?\s*out/i.test(message);
+}
+
+function aggregateOrdersHeatMapPayloads(payloads, start, end) {
+  const byHour = {};
+  let overallOrders = 0;
+  let hasOverallOrders = false;
+  let statisticsFrom = null;
+
+  for (const payload of payloads || []) {
+    if (!payload || typeof payload !== "object") {
+      continue;
+    }
+    const payloadOverallOrders = Number(payload.overall_orders);
+    if (Number.isFinite(payloadOverallOrders)) {
+      overallOrders += payloadOverallOrders;
+      hasOverallOrders = true;
+    }
+    if (!statisticsFrom && payload.statistics_from) {
+      statisticsFrom = payload.statistics_from;
+    }
+    for (let hour = 0; hour < 24; hour += 1) {
+      const key = String(hour);
+      const value = Number(payload.by_hour?.[key]?.value);
+      byHour[key] = {
+        ...(byHour[key] || {}),
+        value: (Number(byHour[key]?.value) || 0) + (Number.isFinite(value) ? value : 0),
+      };
+    }
+  }
+
+  return {
+    period_from: start,
+    period_to: end,
+    statistics_from: statisticsFrom,
+    overall_orders: hasOverallOrders ? overallOrders : null,
+    by_hour: byHour,
+    partial: payloads.some((payload) => payload?.partial),
+    aggregated_from_chunks: true,
+  };
 }
 
 function buildStatDynReferer(baseReferer, start, end) {
@@ -735,14 +791,56 @@ export class XwayApiClient {
     });
   }
 
+  async productOrdersHeatMapRange(shopId, productId, start = this.range.current_start, end = this.range.current_end, { allowSplit = true } = {}) {
+    const cacheKey = `${this.cacheNamespace}:product-orders-heat-map:${shopId}:${productId}:${start}:${end}`;
+    const cached = await this.readSourceCache(cacheStore.productOrdersHeatMap, cacheKey, PRODUCT_ORDERS_HEATMAP_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/orders-heat-map`, {
+        referer: this.buildProductReferer(shopId, productId),
+        params: {
+          from: start,
+          to: end,
+        },
+      });
+      await this.writeSourceCache(cacheStore.productOrdersHeatMap, cacheKey, payload);
+      return payload;
+    } catch (error) {
+      const days = isoDateRangeDays(start, end);
+      if (!allowSplit || days <= 1 || !isRetryableXwayError(error)) {
+        throw error;
+      }
+
+      const chunkDays = days <= PRODUCT_ORDERS_HEATMAP_CHUNK_DAYS ? Math.max(1, Math.ceil(days / 2)) : PRODUCT_ORDERS_HEATMAP_CHUNK_DAYS;
+      const ranges = splitIsoDateRange(start, end, chunkDays);
+      const payloads = [];
+      for (const range of ranges) {
+        try {
+          payloads.push(await this.productOrdersHeatMapRange(shopId, productId, range.start, range.end, { allowSplit: true }));
+        } catch (chunkError) {
+          if (isRetryableXwayError(chunkError)) {
+            payloads.push({
+              period_from: range.start,
+              period_to: range.end,
+              partial: true,
+              by_hour: {},
+            });
+            continue;
+          }
+          throw chunkError;
+        }
+      }
+      const payload = aggregateOrdersHeatMapPayloads(payloads, start, end);
+      await this.writeSourceCache(cacheStore.productOrdersHeatMap, cacheKey, payload);
+      return payload;
+    }
+  }
+
   async productOrdersHeatMap(shopId, productId) {
-    return this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/orders-heat-map`, {
-      referer: this.buildProductReferer(shopId, productId),
-      params: {
-        from: this.range.current_start,
-        to: this.range.current_end,
-      },
-    });
+    return this.productOrdersHeatMapRange(shopId, productId, this.range.current_start, this.range.current_end);
   }
 
   async campaignSchedule(shopId, productId, campaignId) {
