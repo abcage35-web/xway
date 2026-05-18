@@ -167,6 +167,7 @@ const CATALOG_SUMMARY_METRIC_KEYS = [
 ] as const;
 
 type CatalogIssueKind = CatalogArticleYesterdayIssues["issues"][number]["kind"];
+type CatalogIssueFilterKind = CatalogIssueKind | "no_errors";
 type CatalogIssueVisibilityState = Record<Extract<CatalogIssueKind, "budget" | "limit" | "schedule_setup" | "turnover">, boolean>;
 type CatalogSummaryMetricKey = (typeof CATALOG_SUMMARY_METRIC_KEYS)[number];
 type CatalogSummarySparkline = {
@@ -3943,6 +3944,7 @@ export function CatalogPage() {
   const [articleIssueCacheByRef, setArticleIssueCacheByRef] = useState<Record<string, CatalogIssueCacheEntry>>(() => readCatalogIssuesCache(shiftIsoDate(getTodayIso(), -1)));
   const [articleIssueSettingsOpen, setArticleIssueSettingsOpen] = useState(false);
   const [articleIssueSettings, setArticleIssueSettings] = useState<CatalogIssueSettingsState>(() => readCatalogIssueSettings());
+  const [catalogIssueFilterKinds, setCatalogIssueFilterKinds] = useState<CatalogIssueFilterKind[]>([]);
   const [selectedArticleIssueRef, setSelectedArticleIssueRef] = useState<string | null>(null);
   const [selectedArticleIssueKind, setSelectedArticleIssueKind] = useState<CatalogIssueKind | null>(null);
   const [summaryMetricSettingsOpen, setSummaryMetricSettingsOpen] = useState(false);
@@ -4338,7 +4340,7 @@ export function CatalogPage() {
     })
     .filter(Boolean) as CatalogShop[];
   const quickViewMetrics = buildCatalogQuickViewMetrics(baseVisibleShops, turnoverOrdersByRef, quickViewSettings);
-  const visibleShops = baseVisibleShops
+  const quickViewVisibleShops = baseVisibleShops
     .map((shop) => {
       if (quickView === "all") {
         return shop;
@@ -4362,45 +4364,9 @@ export function CatalogPage() {
       };
     })
     .filter(Boolean) as CatalogShop[];
-  const visibleProductRefs = catalogProductRefsFromShops(visibleShops);
-  const visibleTotals = computeCatalogTotals(visibleShops);
-  const compareTurnoverOrdersByRef = new Map(
-    (comparePayload?.shops || []).flatMap((shop) =>
-      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
-    ),
-  );
-  const compareVisibleShops = comparePayload
-    ? filterShops(comparePayload, {
-        query: deferredQuery,
-        selectedShopIds,
-        selectedCategories,
-        selectedSkus,
-      })
-        .map((shop) => {
-          const articles = shop.articles.filter((article) => {
-            const turnoverDays = computeTurnoverDays(article.stock, compareTurnoverOrdersByRef.get(`${shop.id}:${article.product_id}`));
-            if (!matchesNumericRange(toNumber(article.stock), stockFrom, stockTo) || !matchesNumericRange(turnoverDays, turnoverFrom, turnoverTo)) {
-              return false;
-            }
-            return quickView === "all" || matchesCatalogQuickView(article, quickView, turnoverDays, quickViewSettings);
-          });
-
-          if (!articles.length) {
-            return null;
-          }
-
-          return {
-            ...shop,
-            articles,
-          };
-        })
-        .filter(Boolean) as CatalogShop[]
-    : [];
-  const compareVisibleTotals = comparePayload ? computeCatalogTotals(compareVisibleShops) : null;
-  const compareVisibleArticlesCount = compareVisibleShops.reduce((sum, shop) => sum + shop.articles.length, 0);
-  const issueShopOptions = buildShopOptionsFromShops(visibleShops);
+  const issueShopOptions = buildShopOptionsFromShops(quickViewVisibleShops);
   const issueShopOptionKey = issueShopOptions.map((option) => option.value).join(",");
-  const issueScopedShops = visibleShops.filter(
+  const issueScopedShops = quickViewVisibleShops.filter(
     (shop) => !selectedIssueShopIds.length || selectedIssueShopIds.includes(String(shop.id)),
   );
   const visibleIssueTargets = [...new Map(
@@ -4423,35 +4389,8 @@ export function CatalogPage() {
     ),
   ).values()].filter((item) => (toNumber(item.stock) ?? 0) > 0) as CatalogIssueTargetMeta[];
   const visibleIssueTargetRefs = visibleIssueTargets.map((item) => item.ref);
-  const visibleArticles = [...new Map(
-    visibleShops.flatMap((shop) =>
-      shop.articles.map((article) => [
-        `${shop.id}:${article.product_id}`,
-        {
-          shopId: shop.id,
-          productId: article.product_id,
-        },
-      ]),
-    ),
-  ).values()];
-  const chartSourceArticles = [...new Map(
-    sourcePayload.shops.flatMap((shop) =>
-      shop.articles.map((article) => [
-        `${shop.id}:${article.product_id}`,
-        {
-          shopId: shop.id,
-          productId: article.product_id,
-        },
-      ]),
-    ),
-  ).values()];
+  const visibleIssueTargetRefSet = new Set(visibleIssueTargetRefs);
   const visibleIssueTargetRefsKey = visibleIssueTargetRefs.join(",");
-  const chartSelectionCount = visibleArticles.length;
-  const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
-  const chartProductRefsKey = chartProductRefs.join(",");
-  const chartSourceSelectionCount = chartSourceArticles.length;
-  const chartSourceProductRefs = chartSourceArticles.map((item) => `${item.shopId}:${item.productId}`);
-  const chartSourceProductRefsKey = chartSourceProductRefs.join(",");
   const chartRangeEnd = selectedRangeEnd;
   const chartSourceWindow = chartWindow === 60 ? 60 : DEFAULT_CATALOG_CHART_WINDOW;
   const chartSourceRangeStart = chartWindow === 60 ? shiftIsoDate(sourcePayload.range.current_end, -(chartSourceWindow - 1)) : sourcePayload.range.current_start;
@@ -4461,24 +4400,7 @@ export function CatalogPage() {
     selectedRangeSpanDays !== null && chartWindow === resolveCatalogChartWindow(selectedRangeSpanDays)
       ? selectedRangeStart
       : shiftIsoDate(chartRangeEnd, -(chartWindow - 1));
-  const chartSourceCacheKey = `${chartSourceRangeStart}|${chartSourceRangeEnd}|${chartSourceProductRefsKey}`;
   const chartRangeLabel = formatDateRange(chartRangeStart, chartRangeEnd);
-  const chartData = useMemo(
-    () =>
-      chartSourceData
-        ? aggregateCatalogChartResponse(chartSourceData, chartProductRefs, chartRangeStart, chartRangeEnd)
-        : null,
-    [chartSourceData, chartProductRefsKey, chartRangeStart, chartRangeEnd],
-  );
-  const catalogRowCampaignTypeFallbackRefs = chartProductRefs.filter((ref) => {
-    const article = catalogArticleByRef.get(ref);
-    return !isCatalogArticleDisabled(article) && !article?.campaign_type_totals;
-  });
-  const catalogRowCampaignTypeFallbackRefsKey = catalogRowCampaignTypeFallbackRefs.join(",");
-  const catalogRowCampaignTypesRangeStart = payload.range.current_start;
-  const catalogRowCampaignTypesRangeEnd = payload.range.current_end;
-  const catalogRowCampaignTypesRangeKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}`;
-  const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${catalogRowCampaignTypeFallbackRefsKey}|${catalogRowCampaignTypesRefreshToken}`;
   const yesterdayIso = shiftIsoDate(getTodayIso(), -1);
   const yesterdayLabel = formatDate(yesterdayIso);
   const yesterdaySentenceLabel = yesterdayLabel.replace(/\.$/, "");
@@ -4503,6 +4425,116 @@ export function CatalogPage() {
     },
     {} as Record<CatalogIssueKind, number>,
   );
+  const articleIssueRowsByRefAllKinds = new Map(articleIssueRowsAllKinds.map((item) => [item.ref, item]));
+  const articleIssueNoErrorCount = visibleIssueTargetRefs.filter((ref) => Boolean(articleIssueCacheByRef[ref]) && !articleIssueRowsByRefAllKinds.has(ref)).length;
+  const catalogIssueFilterKindSet = new Set(catalogIssueFilterKinds);
+  const matchesCatalogIssueFilter = (ref: string) => {
+    if (!catalogIssueFilterKinds.length) {
+      return true;
+    }
+    if (!visibleIssueTargetRefSet.has(ref)) {
+      return false;
+    }
+    const issueRow = articleIssueRowsByRefAllKinds.get(ref);
+    return catalogIssueFilterKinds.some((kind) => {
+      if (kind === "no_errors") {
+        return Boolean(articleIssueCacheByRef[ref]) && !issueRow;
+      }
+      return Boolean(issueRow?.issues.some((issue) => issue.kind === kind));
+    });
+  };
+  const visibleShops = quickViewVisibleShops
+    .map((shop) => {
+      const articles = shop.articles.filter((article) => matchesCatalogIssueFilter(`${shop.id}:${article.product_id}`));
+      return articles.length ? { ...shop, articles } : null;
+    })
+    .filter(Boolean) as CatalogShop[];
+  const visibleProductRefs = catalogProductRefsFromShops(visibleShops);
+  const visibleProductRefSet = new Set(visibleProductRefs);
+  const visibleTotals = computeCatalogTotals(visibleShops);
+  const compareTurnoverOrdersByRef = new Map<string, number | string | null | undefined>(
+    (comparePayload?.shops || []).flatMap((shop) =>
+      shop.articles.map((article) => [`${shop.id}:${article.product_id}`, article.ordered_report] as const),
+    ),
+  );
+  const compareVisibleShops = comparePayload
+    ? filterShops(comparePayload, {
+        query: deferredQuery,
+        selectedShopIds,
+        selectedCategories,
+        selectedSkus,
+      })
+        .map((shop) => {
+          const articles = shop.articles.filter((article) => {
+            const ref = `${shop.id}:${article.product_id}`;
+            const turnoverDays = computeTurnoverDays(article.stock, compareTurnoverOrdersByRef.get(ref));
+            if (!visibleProductRefSet.has(ref)) {
+              return false;
+            }
+            if (!matchesNumericRange(toNumber(article.stock), stockFrom, stockTo) || !matchesNumericRange(turnoverDays, turnoverFrom, turnoverTo)) {
+              return false;
+            }
+            return quickView === "all" || matchesCatalogQuickView(article, quickView, turnoverDays, quickViewSettings);
+          });
+
+          if (!articles.length) {
+            return null;
+          }
+
+          return {
+            ...shop,
+            articles,
+          };
+        })
+        .filter(Boolean) as CatalogShop[]
+    : [];
+  const compareVisibleTotals = comparePayload ? computeCatalogTotals(compareVisibleShops) : null;
+  const compareVisibleArticlesCount = compareVisibleShops.reduce((sum, shop) => sum + shop.articles.length, 0);
+  const visibleArticles = [...new Map(
+    visibleShops.flatMap((shop) =>
+      shop.articles.map((article) => [
+        `${shop.id}:${article.product_id}`,
+        {
+          shopId: shop.id,
+          productId: article.product_id,
+        },
+      ]),
+    ),
+  ).values()];
+  const chartSourceArticles = [...new Map(
+    sourcePayload.shops.flatMap((shop) =>
+      shop.articles.map((article) => [
+        `${shop.id}:${article.product_id}`,
+        {
+          shopId: shop.id,
+          productId: article.product_id,
+        },
+      ]),
+    ),
+  ).values()];
+  const chartSelectionCount = visibleArticles.length;
+  const chartProductRefs = visibleArticles.map((item) => `${item.shopId}:${item.productId}`);
+  const chartProductRefsKey = chartProductRefs.join(",");
+  const chartSourceSelectionCount = chartSourceArticles.length;
+  const chartSourceProductRefs = chartSourceArticles.map((item) => `${item.shopId}:${item.productId}`);
+  const chartSourceProductRefsKey = chartSourceProductRefs.join(",");
+  const chartSourceCacheKey = `${chartSourceRangeStart}|${chartSourceRangeEnd}|${chartSourceProductRefsKey}`;
+  const chartData = useMemo(
+    () =>
+      chartSourceData
+        ? aggregateCatalogChartResponse(chartSourceData, chartProductRefs, chartRangeStart, chartRangeEnd)
+        : null,
+    [chartSourceData, chartProductRefsKey, chartRangeStart, chartRangeEnd],
+  );
+  const catalogRowCampaignTypeFallbackRefs = chartProductRefs.filter((ref) => {
+    const article = catalogArticleByRef.get(ref);
+    return !isCatalogArticleDisabled(article) && !article?.campaign_type_totals;
+  });
+  const catalogRowCampaignTypeFallbackRefsKey = catalogRowCampaignTypeFallbackRefs.join(",");
+  const catalogRowCampaignTypesRangeStart = payload.range.current_start;
+  const catalogRowCampaignTypesRangeEnd = payload.range.current_end;
+  const catalogRowCampaignTypesRangeKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}`;
+  const catalogRowCampaignTypesKey = `${catalogRowCampaignTypesRangeStart}|${catalogRowCampaignTypesRangeEnd}|${catalogRowCampaignTypeFallbackRefsKey}|${catalogRowCampaignTypesRefreshToken}`;
   const articleIssuesHoursTotal = articleIssueRows.reduce((sum, item) => sum + getArticleIssueHoursTotal(item), 0);
   const articleIssuesEstimatedGapTotal = articleIssueRows.reduce((sum, item) => sum + getArticleIssueEstimatedGapTotal(item), 0);
   const articleIssuesPanelState = !articleIssuesTotalCount
@@ -4621,6 +4653,11 @@ export function CatalogPage() {
         [kind]: !current.visibleKinds[kind],
       },
     }));
+  };
+  const toggleCatalogIssueFilterKind = (kind: CatalogIssueFilterKind) => {
+    setCatalogIssueFilterKinds((current) =>
+      current.includes(kind) ? current.filter((item) => item !== kind) : [...current, kind],
+    );
   };
 
   useEffect(() => {
@@ -5299,6 +5336,7 @@ export function CatalogPage() {
     setSortField(null);
     setSortDirection("desc");
     setQuickView("all");
+    setCatalogIssueFilterKinds([]);
   };
   const activeListFilterCount =
     (query.trim() ? 1 : 0) +
@@ -5307,7 +5345,8 @@ export function CatalogPage() {
     (selectedSkus.length ? 1 : 0) +
     (stockFrom || stockTo ? 1 : 0) +
     (turnoverFrom || turnoverTo ? 1 : 0) +
-    (quickView !== "all" ? 1 : 0);
+    (quickView !== "all" ? 1 : 0) +
+    (catalogIssueFilterKinds.length ? 1 : 0);
   const catalogRefreshUsesFilters = activeListFilterCount > 0;
   const resolveShopRefreshProductRefs = (shop: CatalogShop) => {
     const visibleShop = visibleShops.find((candidate) => String(candidate.id) === String(shop.id)) ?? shop;
@@ -7588,25 +7627,29 @@ export function CatalogPage() {
           <div className="catalog-issues-kind-row" aria-label="Типы ошибок">
             <button
               type="button"
-              onClick={() =>
-                setArticleIssueSettings((current) => ({
-                  ...current,
-                  visibleKinds: DEFAULT_CATALOG_ISSUE_VISIBILITY,
-                }))
-              }
-              aria-pressed={enabledIssueKinds.length === CATALOG_ISSUE_KIND_ORDER.length}
-              className={cn("catalog-issue-filter-chip", enabledIssueKinds.length === CATALOG_ISSUE_KIND_ORDER.length && "is-active")}
+              onClick={() => setCatalogIssueFilterKinds([])}
+              aria-pressed={!catalogIssueFilterKinds.length}
+              className={cn("catalog-issue-filter-chip", !catalogIssueFilterKinds.length && "is-active")}
             >
               Все
               <span>{formatNumber(articleIssueRowsAllKinds.length)}</span>
             </button>
+            <button
+              type="button"
+              onClick={() => toggleCatalogIssueFilterKind("no_errors")}
+              aria-pressed={catalogIssueFilterKindSet.has("no_errors")}
+              className={cn("catalog-issue-filter-chip is-no_errors", catalogIssueFilterKindSet.has("no_errors") && "is-active")}
+            >
+              Нет ошибок
+              <span>{formatNumber(articleIssueNoErrorCount)}</span>
+            </button>
             {CATALOG_ISSUE_KIND_ORDER.map((kind) => {
-              const isActive = articleIssueSettings.visibleKinds[kind];
+              const isActive = catalogIssueFilterKindSet.has(kind);
               return (
                 <button
                   key={kind}
                   type="button"
-                  onClick={() => toggleArticleIssueKind(kind)}
+                  onClick={() => toggleCatalogIssueFilterKind(kind)}
                   aria-pressed={isActive}
                   className={cn("catalog-issue-filter-chip", `is-${kind}`, isActive && "is-active")}
                 >

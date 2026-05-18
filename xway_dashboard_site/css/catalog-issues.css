@@ -183,6 +183,12 @@
   color: var(--blue);
 }
 
+.catalog-issue-filter-chip.is-no_errors.is-active {
+  border-color: rgba(70, 160, 108, 0.26);
+  background: rgba(70, 160, 108, 0.1);
+  color: var(--good);
+}
+
 .catalog-issues-shop-select {
   min-width: 210px;
   max-width: 260px;
