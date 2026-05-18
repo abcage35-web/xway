@@ -1,4 +1,5 @@
 import { cloneValue, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, mapWithConcurrency, resolveRange, sanitizeOrigin } from "./utils.js";
+import { readSharedCache, writeSharedCache } from "./shared-cache.js";
 
 const SOURCE_CACHE_VERSION = "v1";
 const SOURCE_CACHE_PREFIX = "xway-source";
@@ -54,6 +55,10 @@ function sourceCacheBinding(env) {
 
 function sourceCacheKey(namespace, key) {
   return `${SOURCE_CACHE_PREFIX}:${SOURCE_CACHE_VERSION}:${namespace}:${key}`;
+}
+
+function sourceD1Namespace(namespace) {
+  return `${SOURCE_CACHE_PREFIX}:${SOURCE_CACHE_VERSION}:${namespace}`;
 }
 
 function unwrapSourceCachePayload(payload) {
@@ -366,6 +371,12 @@ export class XwayApiClient {
       return memoryCached;
     }
 
+    const d1Cached = await readSharedCache(this.env, sourceD1Namespace(this.cacheNamespace), key, { maxAgeMs: ttlMs });
+    if (d1Cached !== null && d1Cached !== undefined) {
+      setCached(map, key, d1Cached);
+      return cloneValue(d1Cached);
+    }
+
     const cache = sourceCacheBinding(this.env);
     if (!cache) {
       return null;
@@ -378,6 +389,7 @@ export class XwayApiClient {
         return null;
       }
       setCached(map, key, value);
+      await writeSharedCache(this.env, sourceD1Namespace(this.cacheNamespace), key, value, { ttlMs });
       return cloneValue(value);
     } catch {
       return null;
@@ -386,6 +398,7 @@ export class XwayApiClient {
 
   async writeSourceCache(map, key, value) {
     setCached(map, key, value);
+    await writeSharedCache(this.env, sourceD1Namespace(this.cacheNamespace), key, value);
 
     const cache = sourceCacheBinding(this.env);
     if (!cache) {

@@ -1,9 +1,11 @@
 import { asFloat, iterIsoDays } from "../utils.js";
+import { readSharedCache, writeSharedCache } from "../shared-cache.js";
 import { buildAiContextPayload } from "./context.js";
 import { collectMpvibeArticle } from "./mpvibe-client.js";
 import { collectWbPublicFeedbacks } from "./wb-public.js";
 
 const AI_RECOMMENDATION_CACHE_VERSION = "v1";
+const AI_RECOMMENDATION_D1_NAMESPACE = "ai-recommendation-data";
 
 function parseIsoDate(value) {
   const text = String(value || "").trim();
@@ -469,17 +471,34 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
   const cache = aiCacheBinding(context.env);
   const cacheKey = aiCacheKey(article, range, { detailLevel, campaignIds, includeXwayCharts, includeXwayIssues });
 
-  if (cache && !forceRefresh) {
-    const cached = await cache.get(cacheKey, "json");
-    if (cached) {
+  if (!forceRefresh) {
+    const d1Cached = await readSharedCache(context.env, AI_RECOMMENDATION_D1_NAMESPACE, cacheKey);
+    if (d1Cached) {
       return {
-        ...cached,
+        ...d1Cached,
         cache: {
           hit: true,
           key: cacheKey,
+          source: "d1",
           refreshed: false,
         },
       };
+    }
+
+    if (cache) {
+      const cached = await cache.get(cacheKey, "json");
+      if (cached) {
+        await writeSharedCache(context.env, AI_RECOMMENDATION_D1_NAMESPACE, cacheKey, cached);
+        return {
+          ...cached,
+          cache: {
+            hit: true,
+            key: cacheKey,
+            source: "kv",
+            refreshed: false,
+          },
+        };
+      }
     }
   }
 
@@ -592,10 +611,13 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
     analysis_contract: buildAnalysisContract(),
     cache: {
       hit: false,
-      key: cache ? cacheKey : null,
+      key: cacheKey,
+      source: null,
       refreshed: forceRefresh,
     },
   };
+
+  await writeSharedCache(context.env, AI_RECOMMENDATION_D1_NAMESPACE, cacheKey, payload);
 
   if (cache) {
     await cache.put(cacheKey, JSON.stringify(payload));

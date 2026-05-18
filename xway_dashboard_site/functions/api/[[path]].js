@@ -4,6 +4,7 @@ import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { handleAiRequest } from "../_lib/ai/handler.js";
 import { isAiRoute } from "../_lib/ai/auth.js";
 import { collectProducts } from "../_lib/products.js";
+import { hasSharedD1Cache, readSharedCache, writeSharedCache } from "../_lib/shared-cache.js";
 import { errorResponse, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -16,6 +17,15 @@ const HOP_BY_HOP_HEADERS = new Set([
   "trailer",
   "transfer-encoding",
   "upgrade",
+]);
+
+const SHARED_API_CACHE_VERSION = "v1";
+const SHARED_API_CACHEABLE_ROUTES = new Set([
+  "/api/catalog",
+  "/api/catalog-chart",
+  "/api/catalog-product-details",
+  "/api/catalog-issues",
+  "/api/products",
 ]);
 
 function copyResponseHeaders(headers) {
@@ -37,6 +47,76 @@ function withSourceHeader(response, source) {
     statusText: response.statusText,
     headers,
   });
+}
+
+function withHeader(response, key, value) {
+  const headers = new Headers(response.headers);
+  headers.set(key, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function isForceRefreshRequest(url) {
+  return url.searchParams.get("refresh") === "1" || url.searchParams.get("force_refresh") === "1";
+}
+
+function normalizeCsvParam(url, name) {
+  const value = url.searchParams.get(name);
+  if (!value) {
+    return;
+  }
+  url.searchParams.set(name, value.split(",").map((item) => item.trim()).filter(Boolean).sort().join(","));
+}
+
+function normalizeApiCacheKey(url) {
+  const normalized = new URL(url.toString());
+  normalized.searchParams.delete("refresh");
+  normalized.searchParams.delete("force_refresh");
+  normalizeCsvParam(normalized, "articles");
+  normalizeCsvParam(normalized, "products");
+  normalizeCsvParam(normalized, "shops");
+
+  const params = [...normalized.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+    const keyResult = leftKey.localeCompare(rightKey);
+    return keyResult || leftValue.localeCompare(rightValue);
+  });
+  normalized.search = "";
+  params.forEach(([key, value]) => normalized.searchParams.append(key, value));
+  return `${SHARED_API_CACHE_VERSION}:${normalized.pathname}${normalized.search}`;
+}
+
+function sharedApiCacheNamespace(env, pathname) {
+  const originNamespace = sanitizeOrigin(env.CF_PAGES_URL || env.API_ORIGIN || "xway");
+  return `api-response:${originNamespace}:${pathname}`;
+}
+
+async function readSharedApiResponse(context, pathname, requestUrl) {
+  if (!["GET", "HEAD"].includes(context.request.method) || !SHARED_API_CACHEABLE_ROUTES.has(pathname) || isForceRefreshRequest(requestUrl)) {
+    return null;
+  }
+  return readSharedCache(context.env, sharedApiCacheNamespace(context.env, pathname), normalizeApiCacheKey(requestUrl));
+}
+
+function writeSharedApiResponse(context, pathname, requestUrl, response) {
+  if (!["GET", "HEAD"].includes(context.request.method) || !SHARED_API_CACHEABLE_ROUTES.has(pathname) || !response.ok || !hasSharedD1Cache(context.env)) {
+    return;
+  }
+
+  const cacheWrite = (async () => {
+    try {
+      const payload = await response.clone().json();
+      await writeSharedCache(context.env, sharedApiCacheNamespace(context.env, pathname), normalizeApiCacheKey(requestUrl), payload);
+    } catch {
+      // Shared API cache is an optimization only.
+    }
+  })();
+
+  if (typeof context.waitUntil === "function") {
+    context.waitUntil(cacheWrite);
+  }
 }
 
 function searchParamsInteger(url, key) {
@@ -88,6 +168,10 @@ async function handleNativeRequest(context, pathname) {
       native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/products", "/api/cluster-detail", "/api/ai/*"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
+      shared_cache: {
+        d1: hasSharedD1Cache(context.env),
+        kv: Boolean(context.env.XWAY_AI_CACHE && typeof context.env.XWAY_AI_CACHE.get === "function" && typeof context.env.XWAY_AI_CACHE.put === "function"),
+      },
       has_storage_state: hasNativeStorageState(context.env),
       auth_sources: {
         storage_state_json: Boolean(String(context.env.XWAY_STORAGE_STATE_JSON || "").trim()),
@@ -227,9 +311,17 @@ export async function onRequest(context) {
   }
 
   if (nativeRoutes.has(pathname)) {
+    const cachedPayload = await readSharedApiResponse(context, pathname, requestUrl);
+    if (cachedPayload !== null && cachedPayload !== undefined) {
+      return withSourceHeader(withHeader(jsonResponse(cachedPayload), "x-xway-shared-cache", "hit"), "native");
+    }
+
     if (pathname === "/api/health" || hasNativeStorageState(context.env)) {
       try {
-        return withSourceHeader(await handleNativeRequest(context, pathname), "native");
+        const nativeResponse = await handleNativeRequest(context, pathname);
+        writeSharedApiResponse(context, pathname, requestUrl, nativeResponse);
+        const cacheStatus = SHARED_API_CACHEABLE_ROUTES.has(pathname) && hasSharedD1Cache(context.env) ? "miss" : "skip";
+        return withSourceHeader(withHeader(nativeResponse, "x-xway-shared-cache", cacheStatus), "native");
       } catch (error) {
         if (!apiOrigin || pathname === "/api/health") {
           return errorResponse(500, error instanceof Error ? error.message : "Native handler failed.");

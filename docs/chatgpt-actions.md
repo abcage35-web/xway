@@ -86,6 +86,14 @@ XWAY_AI_CACHE=<Cloudflare KV namespace binding>
 
 If the KV binding exists, `/api/ai/recommendation-data` returns cached article analytics for the same article and date range. The same KV namespace also stores reusable XWAY source responses such as shop listings, product stats, `stata` payloads and campaign daily slices. `/api/ai/refresh-article`, `/api/catalog?refresh=1`, `/api/catalog-chart?refresh=1` and `/api/products?force_refresh=1` bypass source-cache reads and overwrite fresh data.
 
+Optional D1 shared cache:
+
+```text
+XWAY_SHARED_CACHE_DB=<Cloudflare D1 binding>
+```
+
+D1 is the preferred shared cache for dashboard/API data that should be visible to all users after one user has loaded it. It stores reusable source responses and cacheable catalog API responses. Setup details are in `docs/d1-shared-cache.md`.
+
 ## Custom GPT setup
 
 Create a GPT in the shared ChatGPT workspace.

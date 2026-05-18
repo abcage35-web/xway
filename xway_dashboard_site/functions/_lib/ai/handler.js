@@ -1,4 +1,5 @@
 import { errorResponse, jsonResponse } from "../utils.js";
+import { hasSharedD1Cache } from "../shared-cache.js";
 import { requireAiAuth } from "./auth.js";
 import { buildAiContextPayload } from "./context.js";
 import { buildAiOpenApiSpec } from "./openapi.js";
@@ -44,6 +45,7 @@ export async function handleAiRequest(context, pathname) {
       auth_configured: Boolean(String(context.env.XWAY_AI_API_KEY || "").trim()),
       openai_configured: Boolean(String(context.env.OPENAI_API_KEY || "").trim()),
       ai_cache_configured: Boolean(context.env.XWAY_AI_CACHE && typeof context.env.XWAY_AI_CACHE.get === "function" && typeof context.env.XWAY_AI_CACHE.put === "function"),
+      shared_d1_cache_configured: hasSharedD1Cache(context.env),
       mpvibe_configured: Boolean(String(context.env.MPVIBE_COOKIE_HEADER || context.env.MPVIBE_REFRESH_COOKIE_HEADER || context.env.MPVIBE_AUTHORIZATION || "").trim()),
       mpvibe_refresh_configured: Boolean(String(context.env.MPVIBE_REFRESH_COOKIE_HEADER || context.env.MPVIBE_COOKIE_HEADER || "").trim()),
       wb_feedback_roots_configured: Boolean(String(context.env.WB_FEEDBACK_ROOTS_JSON || "").trim()),

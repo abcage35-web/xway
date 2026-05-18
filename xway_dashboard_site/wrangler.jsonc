@@ -11,7 +11,15 @@
       "binding": "XWAY_AI_CACHE",
       "id": "30375e32cbf24daf9f53361ef7a552d3"
     }
-  ]
+  ],
+  // Optional D1 binding for the shared server-side cache:
+  // "d1_databases": [
+  //   {
+  //     "binding": "XWAY_SHARED_CACHE_DB",
+  //     "database_name": "xway-shared-cache",
+  //     "database_id": "<D1_DATABASE_ID>"
+  //   }
+  // ]
   // Configure in Cloudflare dashboard or via wrangler secrets:
   // - API_ORIGIN: optional reserve proxy origin for routes not handled by Pages Functions
   // - XWAY_STORAGE_STATE_JSON or XWAY_STORAGE_STATE_BASE64: auth state for native XWAY API calls
@@ -21,4 +29,5 @@
   // - MPVIBE_REFRESH_COOKIE_HEADER, MPVIBE_COOKIE_HEADER, or MPVIBE_AUTHORIZATION: optional MPVibe data source for AI analytics
   // - WB_FEEDBACK_ROOTS_JSON: optional article -> WB feedback root id mapping
   // - XWAY_AI_CACHE: optional KV namespace binding for shared AI response cache, MPVibe token cache, and XWAY source cache
+  // - XWAY_SHARED_CACHE_DB: optional D1 binding for shared API/source cache visible to all users
 }
