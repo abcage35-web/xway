@@ -14,6 +14,21 @@ function canUseIndexedDb() {
   return typeof globalThis !== "undefined" && "indexedDB" in globalThis && Boolean(globalThis.indexedDB);
 }
 
+function resetPersistentCacheDb(db?: IDBDatabase | null) {
+  openDbPromise = null;
+  try {
+    db?.close();
+  } catch {
+    // IndexedDB is an optimization only.
+  }
+}
+
+function attachPersistentCacheDbLifecycle(db: IDBDatabase) {
+  const reset = () => resetPersistentCacheDb(db);
+  db.onversionchange = reset;
+  (db as IDBDatabase & { onclose?: ((this: IDBDatabase, ev: Event) => unknown) | null }).onclose = reset;
+}
+
 function openPersistentCacheDb() {
   if (!canUseIndexedDb()) {
     return Promise.resolve(null);
@@ -33,21 +48,31 @@ function openPersistentCacheDb() {
     };
 
     request.onsuccess = () => {
+      attachPersistentCacheDbLifecycle(request.result);
       resolve(request.result);
     };
 
     request.onerror = () => {
-      openDbPromise = null;
+      resetPersistentCacheDb();
       resolve(null);
     };
 
     request.onblocked = () => {
-      openDbPromise = null;
+      resetPersistentCacheDb();
       resolve(null);
     };
   });
 
   return openDbPromise;
+}
+
+function openPersistentCacheTransaction(db: IDBDatabase, mode: IDBTransactionMode) {
+  try {
+    return db.transaction(STORE_NAME, mode);
+  } catch {
+    resetPersistentCacheDb(db);
+    return null;
+  }
 }
 
 export async function readPersistentApiCache<T>(key: string): Promise<T | null> {
@@ -57,7 +82,11 @@ export async function readPersistentApiCache<T>(key: string): Promise<T | null> 
   }
 
   return new Promise<T | null>((resolve) => {
-    const transaction = db.transaction(STORE_NAME, "readonly");
+    const transaction = openPersistentCacheTransaction(db, "readonly");
+    if (!transaction) {
+      resolve(null);
+      return;
+    }
     const request = transaction.objectStore(STORE_NAME).get(key);
 
     request.onsuccess = () => {
@@ -76,7 +105,11 @@ export async function writePersistentApiCache<T>(key: string, value: T): Promise
   }
 
   await new Promise<void>((resolve) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const transaction = openPersistentCacheTransaction(db, "readwrite");
+    if (!transaction) {
+      resolve();
+      return;
+    }
     transaction.objectStore(STORE_NAME).put({
       key,
       value,
@@ -96,7 +129,11 @@ export async function deletePersistentApiCache(key: string): Promise<void> {
   }
 
   await new Promise<void>((resolve) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const transaction = openPersistentCacheTransaction(db, "readwrite");
+    if (!transaction) {
+      resolve();
+      return;
+    }
     transaction.objectStore(STORE_NAME).delete(key);
 
     transaction.oncomplete = () => resolve();
@@ -112,7 +149,11 @@ export async function deletePersistentApiCacheWhere(shouldDelete: (key: string) 
   }
 
   await new Promise<void>((resolve) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const transaction = openPersistentCacheTransaction(db, "readwrite");
+    if (!transaction) {
+      resolve();
+      return;
+    }
     const request = transaction.objectStore(STORE_NAME).openCursor();
 
     request.onsuccess = () => {
