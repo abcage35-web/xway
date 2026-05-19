@@ -1,4 +1,5 @@
 import { collectCatalog, collectCatalogChart, collectCatalogProductDetails } from "../_lib/catalog.js";
+import { applyCatalogArticleSnapshots, writeCatalogArticleSnapshots } from "../_lib/catalog-article-snapshots.js";
 import { collectCatalogIssues } from "../_lib/catalog-issues.js";
 import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { handleAiRequest } from "../_lib/ai/handler.js";
@@ -27,6 +28,14 @@ const SHARED_API_CACHEABLE_ROUTES = new Set([
   "/api/catalog-issues",
   "/api/products",
 ]);
+
+async function readJsonRequest(request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
 
 function copyResponseHeaders(headers) {
   const nextHeaders = new Headers();
@@ -165,7 +174,7 @@ async function handleNativeRequest(context, pathname) {
     return jsonResponse({
       ok: true,
       backend: hasNativeStorageState(context.env) ? "cloudflare-native" : "proxy-only",
-      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/products", "/api/cluster-detail", "/api/ai/*"],
+      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/ai/*"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       shared_cache: {
@@ -192,17 +201,27 @@ async function handleNativeRequest(context, pathname) {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    return jsonResponse(
-      await collectCatalog(context.env, {
-        start: searchParamsValue(requestUrl, "start"),
-        end: searchParamsValue(requestUrl, "end"),
-        mode: searchParamsValue(requestUrl, "mode") || "compact",
-        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
-        productRefs,
-        shopIds,
-        includeAux: requestUrl.searchParams.get("aux") !== "0" && requestUrl.searchParams.get("include_aux") !== "0",
-      }),
-    );
+    const payload = await collectCatalog(context.env, {
+      start: searchParamsValue(requestUrl, "start"),
+      end: searchParamsValue(requestUrl, "end"),
+      mode: searchParamsValue(requestUrl, "mode") || "compact",
+      forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+      productRefs,
+      shopIds,
+      includeAux: requestUrl.searchParams.get("aux") !== "0" && requestUrl.searchParams.get("include_aux") !== "0",
+    });
+    return jsonResponse(await applyCatalogArticleSnapshots(context.env, payload));
+  }
+
+  if (pathname === "/api/catalog-article-snapshots") {
+    if (context.request.method !== "POST") {
+      return errorResponse(405, "Use POST for catalog article snapshots.");
+    }
+    const payload = await readJsonRequest(context.request);
+    if (!payload) {
+      return errorResponse(400, "Invalid JSON payload.");
+    }
+    return jsonResponse(await writeCatalogArticleSnapshots(context.env, payload));
   }
 
   if (pathname === "/api/catalog-chart") {
@@ -300,7 +319,7 @@ export async function onRequest(context) {
   const requestUrl = new URL(context.request.url);
   const pathname = requestUrl.pathname;
   const apiOrigin = sanitizeOrigin(context.env.API_ORIGIN);
-  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/products", "/api/cluster-detail"]);
+  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail"]);
 
   if (isAiRoute(pathname)) {
     try {
@@ -313,10 +332,11 @@ export async function onRequest(context) {
   if (nativeRoutes.has(pathname)) {
     const cachedPayload = await readSharedApiResponse(context, pathname, requestUrl);
     if (cachedPayload !== null && cachedPayload !== undefined) {
-      return withSourceHeader(withHeader(jsonResponse(cachedPayload), "x-xway-shared-cache", "hit"), "native");
+      const hydratedPayload = pathname === "/api/catalog" ? await applyCatalogArticleSnapshots(context.env, cachedPayload) : cachedPayload;
+      return withSourceHeader(withHeader(jsonResponse(hydratedPayload), "x-xway-shared-cache", "hit"), "native");
     }
 
-    if (pathname === "/api/health" || hasNativeStorageState(context.env)) {
+    if (pathname === "/api/health" || pathname === "/api/catalog-article-snapshots" || hasNativeStorageState(context.env)) {
       try {
         const nativeResponse = await handleNativeRequest(context, pathname);
         writeSharedApiResponse(context, pathname, requestUrl, nativeResponse);

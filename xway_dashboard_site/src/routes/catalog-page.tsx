@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ExternalLink, FileText, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData, useNavigate } from "react-router";
-import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues, fetchCatalogProductDetails } from "../lib/api";
+import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues, fetchCatalogProductDetails, saveCatalogArticleSnapshots } from "../lib/api";
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import { readPersistentApiCache, writePersistentApiCache } from "../lib/persistent-api-cache";
@@ -4003,6 +4003,23 @@ export function CatalogPage() {
     catalogRefreshAbortRef.current?.abort();
   };
   const resolveCatalogRefreshProductLabel = (productRef: string) => catalogArticleMetaByRef.get(productRef)?.label ?? productRef;
+  const persistCatalogArticleSnapshots = (entries: Array<[string, CatalogArticle | null | undefined]>) => {
+    const rows = entries
+      .map(([productRef, article]) => (article ? { product_ref: productRef, article } : null))
+      .filter((row): row is { product_ref: string; article: CatalogArticle } => Boolean(row));
+    if (!rows.length) {
+      return;
+    }
+    chunkItems(rows, 50).forEach((chunk) => {
+      void saveCatalogArticleSnapshots({
+        start: sourcePayload.range.current_start,
+        end: sourcePayload.range.current_end,
+        rows: chunk,
+      }).catch(() => {
+        // Shared snapshots are best effort; failed writes must not break refresh.
+      });
+    });
+  };
   const catalogRefreshStepStartKey = (productRef: string | null | undefined, step: string) =>
     `${productRef || CATALOG_REFRESH_STEP_GLOBAL_REF}::${step}`;
   const markCatalogRefreshLogStepStart = (step: string, productRef?: string | null) => {
@@ -5864,6 +5881,7 @@ export function CatalogPage() {
     let firstErrorMessage: string | null = null;
     let currentStepErrorRefs = refs;
     const refreshedArticlesByRef = new Map<string, CatalogArticle>();
+    const snapshotArticlesByRef = new Map<string, CatalogArticle>();
     const runFastProductSteps = options.mode !== "deep";
 
     const resolveRefreshedArticle = (ref: string) =>
@@ -6131,6 +6149,7 @@ export function CatalogPage() {
               const nextArticle = mergeCatalogProductDetailRow(article, detailRow, { mergeBestTime: false });
               article = nextArticle;
               refreshedArticlesByRef.set(ref, nextArticle);
+              snapshotArticlesByRef.set(ref, nextArticle);
               setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: nextArticle }));
               appendCatalogRefreshLogsForRefs([ref], {
                 status: detailErrors.length ? "warning" : "success",
@@ -6169,6 +6188,7 @@ export function CatalogPage() {
               const nextArticle = mergeCatalogProductDetailRow(article, bestTimeRow, { mergeCampaignDetails: false });
               article = nextArticle;
               refreshedArticlesByRef.set(ref, nextArticle);
+              snapshotArticlesByRef.set(ref, nextArticle);
               setCatalogArticleOverridesByRef((current) => ({ ...current, [ref]: nextArticle }));
               appendCatalogRefreshLogsForRefs([ref], {
                 status: detailErrors.length ? "warning" : "success",
@@ -6313,6 +6333,34 @@ export function CatalogPage() {
           const chartErrorsByRef = new Map((chartResponse.errors || []).map((item) => [item.product, normalizeApiErrorMessage(item.error)]));
           const loadedChartRefs = new Set(chartRowsByRef.keys());
           const loadedRefs = chartProcessRefs.filter((ref) => loadedChartRefs.has(ref) && !chartErrorsByRef.has(ref));
+          if (loadedRefs.length && chartHasCampaignTypeBreakdown) {
+            const articleUpdates: Array<[string, CatalogArticle]> = [];
+            loadedRefs.forEach((ref) => {
+              const currentArticle = resolveRefreshedArticle(ref);
+              if (!currentArticle) {
+                return;
+              }
+              const nextArticle = {
+                ...currentArticle,
+                campaign_type_totals: mergeCatalogCampaignTypeTotalsPreservingSignal(
+                  currentArticle.campaign_type_totals,
+                  buildCatalogCampaignTypeTotals(resolveRowsForRef(ref)),
+                ),
+              };
+              refreshedArticlesByRef.set(ref, nextArticle);
+              snapshotArticlesByRef.set(ref, nextArticle);
+              articleUpdates.push([ref, nextArticle]);
+            });
+            if (articleUpdates.length) {
+              setCatalogArticleOverridesByRef((current) => {
+                const next = { ...current };
+                articleUpdates.forEach(([ref, article]) => {
+                  next[ref] = article;
+                });
+                return next;
+              });
+            }
+          }
           if (loadedRefs.length) {
             const absoluteLoadedRefs = loadedRefs.filter((ref) => !options.knownChartRowsByRef?.has(ref));
             if (absoluteLoadedRefs.length) {
@@ -6444,6 +6492,7 @@ export function CatalogPage() {
         setCatalogRefreshError(firstErrorMessage);
       }
     } finally {
+      persistCatalogArticleSnapshots([...snapshotArticlesByRef.entries()]);
       setRefreshingArticleRefs((current) => current.filter((ref) => !refs.includes(ref)));
     }
   };

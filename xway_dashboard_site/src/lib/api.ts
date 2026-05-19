@@ -2,7 +2,7 @@ import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignStat
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
-const API_RESPONSE_CACHE_VERSION = "v4";
+const API_RESPONSE_CACHE_VERSION = "v5";
 
 function buildBaseUrl(request?: Request) {
   if (request) {
@@ -734,6 +734,41 @@ export async function fetchCatalogProductDetails(options: {
   );
   await mergeCatalogProductDetailsIntoFullCache(url, response);
   return response;
+}
+
+export async function saveCatalogArticleSnapshots(options: {
+  start?: string | null;
+  end?: string | null;
+  rows: Array<{ product_ref: string; article: CatalogArticle }>;
+  signal?: AbortSignal;
+}) {
+  if (!options.rows.length) {
+    return { ok: true, saved: 0, skipped: 0, requested: 0 };
+  }
+  const url = new URL("/api/catalog-article-snapshots", window.location.origin);
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      start: options.start,
+      end: options.end,
+      rows: options.rows,
+    }),
+    signal: options.signal,
+  });
+  const text = await response.text();
+  let data: { ok?: boolean; error?: string; saved?: number; skipped?: number; requested?: number } = {};
+  try {
+    data = text ? JSON.parse(text) : data;
+  } catch {
+    // The caller treats snapshot persistence as best effort.
+  }
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || text || response.statusText);
+  }
+  return data;
 }
 
 export async function fetchCatalogIssues(options: {

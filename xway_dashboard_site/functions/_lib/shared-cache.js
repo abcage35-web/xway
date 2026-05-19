@@ -178,6 +178,63 @@ export async function readSharedCache(env, namespace, key, { maxAgeMs = null } =
   }
 }
 
+export async function readSharedCacheMany(env, namespace, keys, { maxAgeMs = null } = {}) {
+  const db = sharedD1CacheBinding(env);
+  if (!db || shouldSkipD1()) {
+    return new Map();
+  }
+
+  const uniqueKeys = [...new Set((keys || []).map((key) => String(key || "").trim()).filter(Boolean))];
+  const valuesByKey = new Map();
+  if (!uniqueKeys.length) {
+    return valuesByKey;
+  }
+
+  try {
+    const now = Date.now();
+    const chunkedKeys = [];
+    for (let offset = 0; offset < uniqueKeys.length; offset += 80) {
+      const keyChunk = uniqueKeys.slice(offset, offset + 80);
+      const placeholders = keyChunk.map(() => "?").join(", ");
+      const result = await db
+        .prepare(
+          `SELECT cache_key, value_json, created_at
+           FROM ${SHARED_CACHE_TABLE}
+           WHERE namespace = ? AND cache_key IN (${placeholders}) AND (expires_at IS NULL OR expires_at > ?)`,
+        )
+        .bind(String(namespace), ...keyChunk, now)
+        .all();
+
+      for (const row of result?.results || []) {
+        if (!row?.cache_key || !row?.value_json) {
+          continue;
+        }
+        const createdAt = Number(row.created_at || 0);
+        if (maxAgeMs !== null && Number.isFinite(createdAt) && now - createdAt > maxAgeMs) {
+          continue;
+        }
+        const payload = JSON.parse(row.value_json);
+        if (isChunkedPayload(payload)) {
+          chunkedKeys.push(String(row.cache_key));
+          continue;
+        }
+        valuesByKey.set(String(row.cache_key), unwrapValue(payload));
+      }
+    }
+
+    for (const key of chunkedKeys) {
+      const value = await readSharedCache(env, namespace, key, { maxAgeMs });
+      if (value !== null && value !== undefined) {
+        valuesByKey.set(key, value);
+      }
+    }
+    return valuesByKey;
+  } catch (error) {
+    rememberD1Failure(error);
+    return new Map();
+  }
+}
+
 export async function writeSharedCache(env, namespace, key, value, { ttlMs = null, maxBytes = DEFAULT_MAX_VALUE_BYTES } = {}) {
   const db = sharedD1CacheBinding(env);
   if (!db || shouldSkipD1()) {
