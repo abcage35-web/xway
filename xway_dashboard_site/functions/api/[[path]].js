@@ -221,7 +221,11 @@ async function handleNativeRequest(context, pathname) {
     if (!payload) {
       return errorResponse(400, "Invalid JSON payload.");
     }
-    return jsonResponse(await writeCatalogArticleSnapshots(context.env, payload));
+    try {
+      return jsonResponse(await writeCatalogArticleSnapshots(context.env, payload));
+    } catch (error) {
+      return errorResponse(400, error instanceof Error ? error.message : "Invalid catalog article snapshot payload.");
+    }
   }
 
   if (pathname === "/api/catalog-chart") {
