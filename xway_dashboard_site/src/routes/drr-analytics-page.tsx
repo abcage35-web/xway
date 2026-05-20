@@ -1215,7 +1215,13 @@ export function DrrAnalyticsPage() {
 
       <SectionCard
         title="Параметры"
-        caption="Диапазон считается от вчерашнего дня назад: при 3 днях это последние 3 полных дня."
+        caption={
+          <>
+            Диапазон считается от вчерашнего дня назад: при 3 днях это последние 3 полных дня.
+            <br />
+            Будет загружено: {formatDateRange(buildStatsRange(days).start, buildStatsRange(days).end)}
+          </>
+        }
         actions={
           <button
             type="button"
@@ -1275,9 +1281,6 @@ export function DrrAnalyticsPage() {
               />
             </label>
           ) : null}
-          <div className="drr-analytics-hint metric-chip">
-            Будет загружено: {formatDateRange(buildStatsRange(days).start, buildStatsRange(days).end)}
-          </div>
         </div>
         {error ? <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
       </SectionCard>
