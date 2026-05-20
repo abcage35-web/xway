@@ -125,7 +125,7 @@
 
 .drr-analytics-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(180px, 240px)) minmax(240px, 1fr);
+  grid-template-columns: repeat(3, minmax(180px, 240px)) minmax(240px, 1fr);
   gap: 10px;
   align-items: stretch;
 }
@@ -284,9 +284,21 @@
   color: var(--color-muted);
 }
 
+.drr-status-chip.is-error {
+  border: 1px solid rgba(255, 106, 126, 0.34);
+  background: rgba(255, 106, 126, 0.14);
+  color: #ff6a7e;
+}
+
 html[data-theme="dark"] .drr-status-chip.is-on {
   border-color: rgba(88, 192, 138, 0.3);
   background: rgba(30, 76, 55, 0.42);
+}
+
+html[data-theme="dark"] .drr-status-chip.is-error {
+  border-color: rgba(255, 106, 126, 0.36);
+  background: rgba(76, 29, 44, 0.72);
+  color: #ff9aaa;
 }
 
 @media (max-width: 920px) {

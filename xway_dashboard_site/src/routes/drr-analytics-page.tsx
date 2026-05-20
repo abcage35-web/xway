@@ -75,6 +75,8 @@ const DEFAULT_LIMIT = 30;
 const MAX_DAYS = 30;
 const MAX_LIMIT = 200;
 const STOCK_MIN_VALUE = 5;
+const DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD = 100;
+const AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY = "xway-drr-analytics-ad-off-error-stock-threshold";
 
 function clampInteger(value: string, fallback: number, min: number, max: number) {
   const parsed = Number.parseInt(value, 10);
@@ -82,6 +84,17 @@ function clampInteger(value: string, fallback: number, min: number, max: number)
     return fallback;
   }
   return Math.max(min, Math.min(max, parsed));
+}
+
+function readStoredAdOffThreshold() {
+  if (typeof window === "undefined") {
+    return String(DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD);
+  }
+  try {
+    return window.localStorage.getItem(AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY) || String(DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD);
+  } catch {
+    return String(DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD);
+  }
 }
 
 function buildStatsRange(days: number) {
@@ -279,6 +292,7 @@ export function DrrAnalyticsPage() {
   const [section, setSection] = useState<AnalyticsSection>("drr");
   const [daysInput, setDaysInput] = useState(String(DEFAULT_DAYS));
   const [limitInput, setLimitInput] = useState(String(DEFAULT_LIMIT));
+  const [adOffErrorStockThresholdInput, setAdOffErrorStockThresholdInput] = useState(readStoredAdOffThreshold);
   const [payload, setPayload] = useState<CatalogResponse | null>(null);
   const [wbByArticle, setWbByArticle] = useState<Record<string, WbCardInfo>>({});
   const [loading, setLoading] = useState(false);
@@ -292,6 +306,7 @@ export function DrrAnalyticsPage() {
 
   const days = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
   const limit = clampInteger(limitInput, DEFAULT_LIMIT, 1, MAX_LIMIT);
+  const adOffErrorStockThreshold = clampInteger(adOffErrorStockThresholdInput, DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD, 0, 1000000);
   const rows = useMemo(() => flattenCatalogRows(payload, loadedRange?.days ?? days), [days, loadedRange?.days, payload]);
 
   const topDrrRows = useMemo<DrrAnalyticsRow[]>(() => {
@@ -449,6 +464,14 @@ export function DrrAnalyticsPage() {
         setWbLoading(false);
       });
   }, [topDrrRows, wbByArticle]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY, String(adOffErrorStockThreshold));
+    } catch {
+      // localStorage is an optional UI convenience.
+    }
+  }, [adOffErrorStockThreshold]);
 
   const drrColumns = [
     {
@@ -617,7 +640,19 @@ export function DrrAnalyticsPage() {
       headerClassName: "drr-col-status",
       cellClassName: "drr-col-status",
       render: (row: RankedStockRow) => (
-        <span className={cn("drr-status-chip", row.activeCampaigns > 0 ? "is-on" : "is-off")}>
+        <span
+          className={cn(
+            "drr-status-chip",
+            row.activeCampaigns > 0 ? "is-on" : (row.stock ?? 0) > adOffErrorStockThreshold ? "is-error" : "is-off",
+          )}
+          title={
+            row.activeCampaigns > 0
+              ? "Есть активная реклама"
+              : (row.stock ?? 0) > adOffErrorStockThreshold
+                ? `Реклама выключена при остатке больше ${formatNumber(adOffErrorStockThreshold)}`
+                : "Реклама выключена"
+          }
+        >
           {row.activeCampaigns > 0 ? `активна ${row.activeCampaigns}` : "выкл"}
         </span>
       ),
@@ -702,6 +737,16 @@ export function DrrAnalyticsPage() {
               onChange={(event) => setLimitInput(event.target.value)}
             />
           </label>
+          <label className="drr-analytics-input metric-chip">
+            <span>Ошибка: реклама выкл. при остатке больше</span>
+            <input
+              type="number"
+              min={0}
+              max={1000000}
+              value={adOffErrorStockThresholdInput}
+              onChange={(event) => setAdOffErrorStockThresholdInput(event.target.value)}
+            />
+          </label>
           <div className="drr-analytics-hint metric-chip">
             Будет загружено: {formatDateRange(buildStatsRange(days).start, buildStatsRange(days).end)}
           </div>
@@ -744,7 +789,7 @@ export function DrrAnalyticsPage() {
       ) : (
         <SectionCard
           title="Остатки"
-          caption={`Товары с остатком FBO больше ${formatNumber(STOCK_MIN_VALUE)} и нулевым рекламным расходом за выбранный период.`}
+          caption={`Товары с остатком FBO больше ${formatNumber(STOCK_MIN_VALUE)} и нулевым рекламным расходом за выбранный период. Красная реклама: выключена при остатке больше ${formatNumber(adOffErrorStockThreshold)}.`}
         >
           {stockRows.length ? (
             <MetricTable
