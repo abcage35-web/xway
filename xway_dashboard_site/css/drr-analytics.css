@@ -45,6 +45,13 @@
   position: relative;
 }
 
+.drr-analytics-page .data-table thead tr:first-child th,
+.drr-analytics-sticky-header .data-table thead tr:first-child th {
+  height: 58px;
+  padding-top: 10px;
+  padding-bottom: 8px;
+}
+
 .drr-analytics-page .metric-table-summary-head,
 .drr-analytics-sticky-header .metric-table-summary-head {
   padding-top: 0;
@@ -100,9 +107,13 @@
 
 .drr-analytics-page .catalog-sort-header-label,
 .drr-analytics-sticky-header .catalog-sort-header-label {
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.08;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .drr-resizable-header {
@@ -118,8 +129,9 @@
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.08;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .drr-column-resize-handle {
@@ -279,26 +291,8 @@ body.is-resizing-drr-column {
   font-size: 1rem;
 }
 
-.drr-category-driver-table .data-table th {
-  height: 58px;
-  vertical-align: middle;
-}
-
 .drr-category-driver-table .data-table th.metric-table-summary-head {
   height: 34px;
-}
-
-.drr-category-driver-table .drr-resizable-header {
-  min-height: 34px;
-}
-
-.drr-category-driver-table .catalog-sort-header-label {
-  display: -webkit-box;
-  overflow: hidden;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-height: 1.08;
 }
 
 .drr-analytics-controls {
