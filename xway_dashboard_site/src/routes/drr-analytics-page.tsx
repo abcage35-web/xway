@@ -38,9 +38,14 @@ type CategorySortField =
   | "category"
   | "skuCount"
   | "stock"
-  | "drr"
+  | "drrAds"
+  | "drrTotal"
   | "spend"
-  | "revenue"
+  | "spendShare"
+  | "revenueAds"
+  | "revenueAdsShare"
+  | "revenueTotal"
+  | "revenueTotalShare"
   | "ordersAds"
   | "ordersTotal"
   | "campaigns"
@@ -89,13 +94,18 @@ interface CategoryDriverRow {
   skuCount: number;
   stock: number;
   spend: number;
-  revenue: number;
+  spendShare: number | null;
+  revenueAds: number;
+  revenueAdsShare: number | null;
+  revenueTotal: number;
+  revenueTotalShare: number | null;
   ordersAds: number;
   ordersTotal: number;
   views: number;
   clicks: number;
   atbs: number;
-  drr: number | null;
+  drrAds: number | null;
+  drrTotal: number | null;
   campaigns: number;
   activeCampaigns: number;
 }
@@ -125,6 +135,7 @@ const RESIZABLE_COLUMN_CONFIG = {
   article: { default: 116, min: 94, max: 170 },
   category: { default: 320, min: 180, max: 620 },
   skuCount: { default: 104, min: 84, max: 160 },
+  share: { default: 72, min: 58, max: 110 },
   drr: { default: 86, min: 72, max: 130 },
   spend: { default: 128, min: 104, max: 200 },
   revenue: { default: 128, min: 104, max: 200 },
@@ -323,6 +334,14 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
   return payload.shops
     .map((shop) => {
       const categoriesByName = new Map<string, CategoryDriverRow>();
+      const shopTotals = shop.articles.reduce(
+        (totals, article) => ({
+          spend: totals.spend + (toNumber(article.expense_sum) ?? 0),
+          revenueAds: totals.revenueAds + (toNumber(article.sum_price) ?? 0),
+          revenueTotal: totals.revenueTotal + (toNumber(article.ordered_sum_report) ?? 0),
+        }),
+        { spend: 0, revenueAds: 0, revenueTotal: 0 },
+      );
       shop.articles.forEach((article) => {
         const category = String(article.category_keyword || "").trim() || "Без категории";
         const key = category.toLocaleLowerCase("ru");
@@ -336,20 +355,26 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
             skuCount: 0,
             stock: 0,
             spend: 0,
-            revenue: 0,
+            spendShare: null,
+            revenueAds: 0,
+            revenueAdsShare: null,
+            revenueTotal: 0,
+            revenueTotalShare: null,
             ordersAds: 0,
             ordersTotal: 0,
             views: 0,
             clicks: 0,
             atbs: 0,
-            drr: null,
+            drrAds: null,
+            drrTotal: null,
             campaigns: 0,
             activeCampaigns: 0,
           } satisfies CategoryDriverRow);
         current.skuCount += 1;
         current.stock += toNumber(article.stock) ?? 0;
         current.spend += toNumber(article.expense_sum) ?? 0;
-        current.revenue += toNumber(article.sum_price) ?? 0;
+        current.revenueAds += toNumber(article.sum_price) ?? 0;
+        current.revenueTotal += toNumber(article.ordered_sum_report) ?? 0;
         current.ordersAds += toNumber(article.orders) ?? 0;
         current.ordersTotal += toNumber(article.ordered_report) ?? 0;
         current.views += toNumber(article.views) ?? 0;
@@ -361,7 +386,11 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
       });
       const rows = [...categoriesByName.values()].map((row) => ({
         ...row,
-        drr: row.revenue > 0 ? (row.spend / row.revenue) * 100 : null,
+        spendShare: shopTotals.spend > 0 ? (row.spend / shopTotals.spend) * 100 : null,
+        revenueAdsShare: shopTotals.revenueAds > 0 ? (row.revenueAds / shopTotals.revenueAds) * 100 : null,
+        revenueTotalShare: shopTotals.revenueTotal > 0 ? (row.revenueTotal / shopTotals.revenueTotal) * 100 : null,
+        drrAds: row.revenueAds > 0 ? (row.spend / row.revenueAds) * 100 : null,
+        drrTotal: row.revenueTotal > 0 ? (row.spend / row.revenueTotal) * 100 : null,
       }));
       const visibleRows = rows.filter((row) => row.stock >= minStock);
       const sortedRows = sortNamedRows<CategoryDriverRow>(visibleRows, sort, (row, field) => {
@@ -374,12 +403,22 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
             return row.skuCount;
           case "stock":
             return row.stock;
-          case "drr":
-            return row.drr;
+          case "drrAds":
+            return row.drrAds;
+          case "drrTotal":
+            return row.drrTotal;
           case "spend":
             return row.spend;
-          case "revenue":
-            return row.revenue;
+          case "spendShare":
+            return row.spendShare;
+          case "revenueAds":
+            return row.revenueAds;
+          case "revenueAdsShare":
+            return row.revenueAdsShare;
+          case "revenueTotal":
+            return row.revenueTotal;
+          case "revenueTotalShare":
+            return row.revenueTotalShare;
           case "ordersAds":
             return row.ordersAds;
           case "ordersTotal":
@@ -1040,12 +1079,20 @@ export function DrrAnalyticsPage() {
       render: (row: RankedCategoryDriverRow) => formatNumber(row.skuCount),
     },
     {
-      key: "drr",
+      key: "drrTotal",
       ...columnWidthProps("drr"),
-      header: resizableHeader(categoryHeader("drr", "ДРР", { ariaLabel: "ДРР" }), "drr"),
+      header: resizableHeader(categoryHeader("drrTotal", "ДРР общ.", { ariaLabel: "ДРР общий" }), "drr"),
       headerClassName: "drr-col-small",
       cellClassName: "drr-col-small",
-      render: (row: RankedCategoryDriverRow) => formatPercent(row.drr),
+      render: (row: RankedCategoryDriverRow) => formatPercent(row.drrTotal),
+    },
+    {
+      key: "drrAds",
+      ...columnWidthProps("drr"),
+      header: resizableHeader(categoryHeader("drrAds", "ДРР РК", { ariaLabel: "ДРР РК" }), "drr"),
+      headerClassName: "drr-col-small",
+      cellClassName: "drr-col-small",
+      render: (row: RankedCategoryDriverRow) => formatPercent(row.drrAds),
     },
     {
       key: "spend",
@@ -1056,12 +1103,44 @@ export function DrrAnalyticsPage() {
       render: (row: RankedCategoryDriverRow) => formatMoney(row.spend),
     },
     {
-      key: "revenue",
+      key: "spendShare",
+      ...columnWidthProps("share"),
+      header: resizableHeader(categoryHeader("spendShare", "", { ariaLabel: "Доля расхода от кабинета" }), "share"),
+      headerClassName: "drr-col-share",
+      cellClassName: "drr-col-share",
+      render: (row: RankedCategoryDriverRow) => formatPercent(row.spendShare),
+    },
+    {
+      key: "revenueTotal",
       ...columnWidthProps("revenue"),
-      header: resizableHeader(categoryHeader("revenue", "Выручка РК", { ariaLabel: "Выручка РК" }), "revenue"),
+      header: resizableHeader(categoryHeader("revenueTotal", "Выручка всего", { ariaLabel: "Выручка всего" }), "revenue"),
       headerClassName: "drr-col-money",
       cellClassName: "drr-col-money",
-      render: (row: RankedCategoryDriverRow) => formatMoney(row.revenue),
+      render: (row: RankedCategoryDriverRow) => formatMoney(row.revenueTotal),
+    },
+    {
+      key: "revenueTotalShare",
+      ...columnWidthProps("share"),
+      header: resizableHeader(categoryHeader("revenueTotalShare", "", { ariaLabel: "Доля общей выручки от кабинета" }), "share"),
+      headerClassName: "drr-col-share",
+      cellClassName: "drr-col-share",
+      render: (row: RankedCategoryDriverRow) => formatPercent(row.revenueTotalShare),
+    },
+    {
+      key: "revenueAds",
+      ...columnWidthProps("revenue"),
+      header: resizableHeader(categoryHeader("revenueAds", "Выручка РК", { ariaLabel: "Выручка РК" }), "revenue"),
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
+      render: (row: RankedCategoryDriverRow) => formatMoney(row.revenueAds),
+    },
+    {
+      key: "revenueAdsShare",
+      ...columnWidthProps("share"),
+      header: resizableHeader(categoryHeader("revenueAdsShare", "", { ariaLabel: "Доля выручки РК от кабинета" }), "share"),
+      headerClassName: "drr-col-share",
+      cellClassName: "drr-col-share",
+      render: (row: RankedCategoryDriverRow) => formatPercent(row.revenueAdsShare),
     },
     {
       key: "ordersAds",
