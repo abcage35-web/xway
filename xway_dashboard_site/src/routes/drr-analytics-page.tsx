@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "react-router";
 import { fetchCatalog, fetchWbCards } from "../lib/api";
@@ -77,6 +77,66 @@ const MAX_LIMIT = 200;
 const STOCK_MIN_VALUE = 5;
 const DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD = 100;
 const AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY = "xway-drr-analytics-ad-off-error-stock-threshold";
+const DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY = "xway-drr-analytics-column-widths-v1";
+const RESIZABLE_COLUMN_CONFIG = {
+  rank: { default: 52, min: 44, max: 90 },
+  product: { default: 380, min: 240, max: 680 },
+  links: { default: 106, min: 82, max: 170 },
+  article: { default: 116, min: 94, max: 170 },
+  drr: { default: 86, min: 72, max: 130 },
+  spend: { default: 128, min: 104, max: 200 },
+  revenue: { default: 128, min: 104, max: 200 },
+  ordersAds: { default: 112, min: 88, max: 170 },
+  ordersTotal: { default: 112, min: 92, max: 180 },
+  reviews: { default: 126, min: 104, max: 190 },
+  bzo: { default: 124, min: 94, max: 190 },
+  price: { default: 128, min: 104, max: 180 },
+  shop: { default: 190, min: 130, max: 340 },
+  stock: { default: 112, min: 88, max: 170 },
+  turnover: { default: 142, min: 112, max: 220 },
+  activeCampaigns: { default: 126, min: 104, max: 190 },
+  campaigns: { default: 112, min: 86, max: 160 },
+  enabled: { default: 126, min: 104, max: 190 },
+} as const;
+
+type ResizableColumnKey = keyof typeof RESIZABLE_COLUMN_CONFIG;
+type ColumnWidthState = Record<ResizableColumnKey, number>;
+
+function getDefaultColumnWidths(): ColumnWidthState {
+  return Object.fromEntries(
+    Object.entries(RESIZABLE_COLUMN_CONFIG).map(([key, config]) => [key, config.default]),
+  ) as ColumnWidthState;
+}
+
+function clampColumnWidth(columnKey: ResizableColumnKey, value: number) {
+  const config = RESIZABLE_COLUMN_CONFIG[columnKey];
+  if (!Number.isFinite(value)) {
+    return config.default;
+  }
+  return Math.round(Math.max(config.min, Math.min(config.max, value)));
+}
+
+function readStoredColumnWidths(): ColumnWidthState {
+  const defaults = getDefaultColumnWidths();
+  if (typeof window === "undefined") {
+    return defaults;
+  }
+  try {
+    const stored = window.localStorage.getItem(DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY);
+    if (!stored) {
+      return defaults;
+    }
+    const parsed = JSON.parse(stored) as Partial<Record<ResizableColumnKey, number>>;
+    return Object.fromEntries(
+      Object.keys(RESIZABLE_COLUMN_CONFIG).map((key) => {
+        const columnKey = key as ResizableColumnKey;
+        return [columnKey, clampColumnWidth(columnKey, Number(parsed[columnKey] ?? defaults[columnKey]))];
+      }),
+    ) as ColumnWidthState;
+  } catch {
+    return defaults;
+  }
+}
 
 function clampInteger(value: string, fallback: number, min: number, max: number) {
   const parsed = Number.parseInt(value, 10);
@@ -301,8 +361,10 @@ export function DrrAnalyticsPage() {
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string; days: number } | null>(null);
   const [drrSort, setDrrSort] = useState<SortState<DrrSortField>>({ field: "spend", direction: "desc" });
   const [stockSort, setStockSort] = useState<SortState<StockSortField>>({ field: "stock", direction: "desc" });
+  const [columnWidths, setColumnWidths] = useState<ColumnWidthState>(readStoredColumnWidths);
   const abortRef = useRef<AbortController | null>(null);
   const wbAbortRef = useRef<AbortController | null>(null);
+  const resizeDragRef = useRef<{ columnKey: ResizableColumnKey; startX: number; startWidth: number } | null>(null);
 
   const days = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
   const limit = clampInteger(limitInput, DEFAULT_LIMIT, 1, MAX_LIMIT);
@@ -385,6 +447,48 @@ export function DrrAnalyticsPage() {
 
   const drrHeader = useSortableHeader<DrrSortField>(drrSort, setDrrSort);
   const stockHeader = useSortableHeader<StockSortField>(stockSort, setStockSort);
+  const columnWidthProps = (columnKey: ResizableColumnKey) => ({
+    width: columnWidths[columnKey],
+    minWidth: RESIZABLE_COLUMN_CONFIG[columnKey].min,
+    maxWidth: RESIZABLE_COLUMN_CONFIG[columnKey].max,
+  });
+
+  const startColumnResize = (columnKey: ResizableColumnKey, event: ReactPointerEvent<HTMLSpanElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resizeDragRef.current = {
+      columnKey,
+      startX: event.clientX,
+      startWidth: columnWidths[columnKey],
+    };
+    if (typeof document !== "undefined") {
+      document.body.classList.add("is-resizing-drr-column");
+    }
+  };
+
+  const resetColumnWidth = (columnKey: ResizableColumnKey, event: { preventDefault: () => void; stopPropagation: () => void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setColumnWidths((current) => {
+      const nextWidth = RESIZABLE_COLUMN_CONFIG[columnKey].default;
+      return current[columnKey] === nextWidth ? current : { ...current, [columnKey]: nextWidth };
+    });
+  };
+
+  const resizableHeader = (content: ReactNode, columnKey: ResizableColumnKey) => (
+    <div className="drr-resizable-header">
+      <div className="drr-resizable-header-content">{content}</div>
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Изменить ширину колонки"
+        title="Потяните, чтобы изменить ширину. Двойной клик сбрасывает ширину."
+        className="drr-column-resize-handle"
+        onPointerDown={(event) => startColumnResize(columnKey, event)}
+        onDoubleClick={(event) => resetColumnWidth(columnKey, event)}
+      />
+    </div>
+  );
 
   const rangeLabel = loadedRange ? formatDateRange(loadedRange.start, loadedRange.end) : "Период еще не загружен";
   const totalSpend = rows.reduce((sum, row) => sum + (row.spend ?? 0), 0);
@@ -473,24 +577,63 @@ export function DrrAnalyticsPage() {
     }
   }, [adOffErrorStockThreshold]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY, JSON.stringify(columnWidths));
+    } catch {
+      // localStorage is an optional UI convenience.
+    }
+  }, [columnWidths]);
+
+  useEffect(() => {
+    const stopResize = () => {
+      resizeDragRef.current = null;
+      if (typeof document !== "undefined") {
+        document.body.classList.remove("is-resizing-drr-column");
+      }
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragState = resizeDragRef.current;
+      if (!dragState) {
+        return;
+      }
+      const nextWidth = clampColumnWidth(dragState.columnKey, dragState.startWidth + event.clientX - dragState.startX);
+      setColumnWidths((current) => (current[dragState.columnKey] === nextWidth ? current : { ...current, [dragState.columnKey]: nextWidth }));
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      stopResize();
+    };
+  }, []);
+
   const drrColumns = [
     {
       key: "rank",
-      header: drrHeader("rank", "#", { ariaLabel: "Номер строки" }),
+      ...columnWidthProps("rank"),
+      header: resizableHeader(drrHeader("rank", "#", { ariaLabel: "Номер строки" }), "rank"),
       headerClassName: "drr-col-rank",
       cellClassName: "drr-col-rank",
       render: (row: RankedDrrRow) => formatNumber(row.rank),
     },
     {
       key: "name",
-      header: drrHeader("name", "Товар", { ariaLabel: "Товар" }),
+      ...columnWidthProps("product"),
+      header: resizableHeader(drrHeader("name", "Товар", { ariaLabel: "Товар" }), "product"),
       headerClassName: "drr-col-product",
       cellClassName: "drr-col-product",
       render: (row: RankedDrrRow) => <ProductCell row={row} />,
     },
     {
       key: "links",
-      header: "Ссылки",
+      ...columnWidthProps("links"),
+      header: resizableHeader("Ссылки", "links"),
       headerClassName: "drr-col-links",
       cellClassName: "drr-col-links",
       render: (row: RankedDrrRow) => (
@@ -502,70 +645,80 @@ export function DrrAnalyticsPage() {
     },
     {
       key: "article",
-      header: drrHeader("article", "Артикул", { ariaLabel: "Артикул" }),
+      ...columnWidthProps("article"),
+      header: resizableHeader(drrHeader("article", "Артикул", { ariaLabel: "Артикул" }), "article"),
       headerClassName: "drr-col-article",
       cellClassName: "drr-col-article",
       render: (row: RankedDrrRow) => row.article,
     },
     {
       key: "drr",
-      header: drrHeader("drr", "ДРР", { ariaLabel: "ДРР" }),
+      ...columnWidthProps("drr"),
+      header: resizableHeader(drrHeader("drr", "ДРР", { ariaLabel: "ДРР" }), "drr"),
       headerClassName: "drr-col-small",
       cellClassName: "drr-col-small",
       render: (row: RankedDrrRow) => formatPercent(row.drr),
     },
     {
       key: "spend",
-      header: drrHeader("spend", "Расход за период", { ariaLabel: "Расход" }),
+      ...columnWidthProps("spend"),
+      header: resizableHeader(drrHeader("spend", "Расход за период", { ariaLabel: "Расход" }), "spend"),
       headerClassName: "drr-col-money",
       cellClassName: "drr-col-money",
       render: (row: RankedDrrRow) => formatMoney(row.spend),
     },
     {
       key: "revenue",
-      header: drrHeader("revenue", "Выручка РК", { ariaLabel: "Выручка РК" }),
+      ...columnWidthProps("revenue"),
+      header: resizableHeader(drrHeader("revenue", "Выручка РК", { ariaLabel: "Выручка РК" }), "revenue"),
       headerClassName: "drr-col-money",
       cellClassName: "drr-col-money",
       render: (row: RankedDrrRow) => formatMoney(row.revenue),
     },
     {
       key: "ordersAds",
-      header: drrHeader("ordersAds", "Заказы РК", { ariaLabel: "Заказы РК" }),
+      ...columnWidthProps("ordersAds"),
+      header: resizableHeader(drrHeader("ordersAds", "Заказы РК", { ariaLabel: "Заказы РК" }), "ordersAds"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedDrrRow) => formatNumber(row.ordersAds),
     },
     {
       key: "ordersTotal",
-      header: drrHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }),
+      ...columnWidthProps("ordersTotal"),
+      header: resizableHeader(drrHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }), "ordersTotal"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedDrrRow) => formatNumber(row.ordersTotal),
     },
     {
       key: "reviews",
-      header: drrHeader("reviews", "Отзывы WB", { ariaLabel: "Отзывы WB" }),
+      ...columnWidthProps("reviews"),
+      header: resizableHeader(drrHeader("reviews", "Отзывы WB", { ariaLabel: "Отзывы WB" }), "reviews"),
       headerClassName: "drr-col-reviews",
       cellClassName: "drr-col-reviews",
       render: (row: RankedDrrRow) => formatReviewCell(row.wb),
     },
     {
       key: "bzo",
-      header: drrHeader("bzo", "БЗО", { ariaLabel: "БЗО" }),
+      ...columnWidthProps("bzo"),
+      header: resizableHeader(drrHeader("bzo", "БЗО", { ariaLabel: "БЗО" }), "bzo"),
       headerClassName: "drr-col-bzo",
       cellClassName: "drr-col-bzo",
       render: (row: RankedDrrRow) => formatBzoCell(row.wb),
     },
     {
       key: "price",
-      header: drrHeader("price", "Цена с СПП", { ariaLabel: "Цена с СПП" }),
+      ...columnWidthProps("price"),
+      header: resizableHeader(drrHeader("price", "Цена с СПП", { ariaLabel: "Цена с СПП" }), "price"),
       headerClassName: "drr-col-money",
       cellClassName: "drr-col-money",
       render: (row: RankedDrrRow) => formatMoney(row.wb?.price_spp),
     },
     {
       key: "shop",
-      header: drrHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }),
+      ...columnWidthProps("shop"),
+      header: resizableHeader(drrHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }), "shop"),
       headerClassName: "drr-col-shop",
       cellClassName: "drr-col-shop",
       render: (row: RankedDrrRow) => row.shopName,
@@ -575,21 +728,24 @@ export function DrrAnalyticsPage() {
   const stockColumns = [
     {
       key: "rank",
-      header: stockHeader("rank", "#", { ariaLabel: "Номер строки" }),
+      ...columnWidthProps("rank"),
+      header: resizableHeader(stockHeader("rank", "#", { ariaLabel: "Номер строки" }), "rank"),
       headerClassName: "drr-col-rank",
       cellClassName: "drr-col-rank",
       render: (row: RankedStockRow) => formatNumber(row.rank),
     },
     {
       key: "name",
-      header: stockHeader("name", "Товар", { ariaLabel: "Товар" }),
+      ...columnWidthProps("product"),
+      header: resizableHeader(stockHeader("name", "Товар", { ariaLabel: "Товар" }), "product"),
       headerClassName: "drr-col-product",
       cellClassName: "drr-col-product",
       render: (row: RankedStockRow) => <ProductCell row={row} />,
     },
     {
       key: "links",
-      header: "Ссылки",
+      ...columnWidthProps("links"),
+      header: resizableHeader("Ссылки", "links"),
       headerClassName: "drr-col-links",
       cellClassName: "drr-col-links",
       render: (row: RankedStockRow) => (
@@ -601,42 +757,48 @@ export function DrrAnalyticsPage() {
     },
     {
       key: "article",
-      header: stockHeader("article", "Артикул", { ariaLabel: "Артикул" }),
+      ...columnWidthProps("article"),
+      header: resizableHeader(stockHeader("article", "Артикул", { ariaLabel: "Артикул" }), "article"),
       headerClassName: "drr-col-article",
       cellClassName: "drr-col-article",
       render: (row: RankedStockRow) => row.article,
     },
     {
       key: "stock",
-      header: stockHeader("stock", "Остаток FBO", { ariaLabel: "Остаток FBO" }),
+      ...columnWidthProps("stock"),
+      header: resizableHeader(stockHeader("stock", "Остаток FBO", { ariaLabel: "Остаток FBO" }), "stock"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.stock),
     },
     {
       key: "turnover",
-      header: stockHeader("turnover", "Оборач. по периоду", { ariaLabel: "Оборачиваемость" }),
+      ...columnWidthProps("turnover"),
+      header: resizableHeader(stockHeader("turnover", "Оборач. по периоду", { ariaLabel: "Оборачиваемость" }), "turnover"),
       headerClassName: "drr-col-turnover",
       cellClassName: "drr-col-turnover",
       render: (row: RankedStockRow) => formatTurnover(row.turnoverDays),
     },
     {
       key: "spend",
-      header: stockHeader("spend", "Расход", { ariaLabel: "Расход" }),
+      ...columnWidthProps("spend"),
+      header: resizableHeader(stockHeader("spend", "Расход", { ariaLabel: "Расход" }), "spend"),
       headerClassName: "drr-col-money",
       cellClassName: "drr-col-money",
       render: (row: RankedStockRow) => formatMoney(row.spend),
     },
     {
       key: "ordersTotal",
-      header: stockHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }),
+      ...columnWidthProps("ordersTotal"),
+      header: resizableHeader(stockHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }), "ordersTotal"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.ordersTotal),
     },
     {
       key: "activeCampaigns",
-      header: stockHeader("activeCampaigns", "Реклама", { ariaLabel: "Активные РК" }),
+      ...columnWidthProps("activeCampaigns"),
+      header: resizableHeader(stockHeader("activeCampaigns", "Реклама", { ariaLabel: "Активные РК" }), "activeCampaigns"),
       headerClassName: "drr-col-status",
       cellClassName: "drr-col-status",
       render: (row: RankedStockRow) => (
@@ -659,14 +821,16 @@ export function DrrAnalyticsPage() {
     },
     {
       key: "campaigns",
-      header: stockHeader("campaigns", "РК всего", { ariaLabel: "РК всего" }),
+      ...columnWidthProps("campaigns"),
+      header: resizableHeader(stockHeader("campaigns", "РК всего", { ariaLabel: "РК всего" }), "campaigns"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.campaigns),
     },
     {
       key: "enabled",
-      header: stockHeader("enabled", "XWAY статус", { ariaLabel: "XWAY статус" }),
+      ...columnWidthProps("enabled"),
+      header: resizableHeader(stockHeader("enabled", "XWAY статус", { ariaLabel: "XWAY статус" }), "enabled"),
       headerClassName: "drr-col-status",
       cellClassName: "drr-col-status",
       render: (row: RankedStockRow) => (
@@ -675,7 +839,8 @@ export function DrrAnalyticsPage() {
     },
     {
       key: "shop",
-      header: stockHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }),
+      ...columnWidthProps("shop"),
+      header: resizableHeader(stockHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }), "shop"),
       headerClassName: "drr-col-shop",
       cellClassName: "drr-col-shop",
       render: (row: RankedStockRow) => row.shopName,

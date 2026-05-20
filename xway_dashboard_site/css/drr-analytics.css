@@ -35,6 +35,10 @@
   vertical-align: middle;
 }
 
+.drr-analytics-page .data-table th {
+  position: relative;
+}
+
 .drr-analytics-page .catalog-sort-header {
   width: 100%;
   justify-content: flex-start !important;
@@ -49,6 +53,56 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.drr-resizable-header {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  padding-right: 8px;
+}
+
+.drr-resizable-header-content {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.drr-column-resize-handle {
+  position: absolute;
+  top: -14px;
+  right: -10px;
+  bottom: -14px;
+  z-index: 6;
+  width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.drr-column-resize-handle::after {
+  position: absolute;
+  top: 12px;
+  right: 6px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+  content: "";
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.drr-column-resize-handle:hover::after,
+.drr-column-resize-handle:focus-visible::after,
+body.is-resizing-drr-column .drr-column-resize-handle::after {
+  background: var(--color-brand-200);
+  opacity: 1;
+}
+
+body.is-resizing-drr-column {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .drr-col-rank {

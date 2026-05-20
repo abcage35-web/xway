@@ -1,7 +1,7 @@
 import { Group } from "@visx/group";
 import { Text as VisxText } from "@visx/text";
 import { useTooltip } from "@visx/tooltip";
-import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CalendarDays, ChevronRight, LoaderCircle, Search, Sparkles } from "lucide-react";
 import { cn, formatCompactNumber, formatDateRange, formatDelta, formatMoney, formatNumber, formatPercent, relativeDeltaClass, statusTone } from "../lib/format";
@@ -23,8 +23,49 @@ export interface TableColumn<T> {
   dividerBefore?: boolean;
   headerClassName?: string;
   cellClassName?: string;
+  width?: number | string;
+  minWidth?: number | string;
+  maxWidth?: number | string;
   stickyLeft?: number;
   render: (row: T) => ReactNode;
+}
+
+function normalizeTableColumnSize(value?: number | string) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return typeof value === "number" ? `${value}px` : value;
+}
+
+function parseTableColumnPixelWidth(value?: number | string) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.endsWith("px")) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function getTableColumnStyle<T>(column: TableColumn<T>) {
+  const style: CSSProperties = {};
+  const width = normalizeTableColumnSize(column.width);
+  const minWidth = normalizeTableColumnSize(column.minWidth);
+  const maxWidth = normalizeTableColumnSize(column.maxWidth);
+  if (width !== undefined) {
+    style.width = width;
+  }
+  if (minWidth !== undefined) {
+    style.minWidth = minWidth;
+  }
+  if (maxWidth !== undefined) {
+    style.maxWidth = maxWidth;
+  }
+  if (column.stickyLeft !== undefined) {
+    style.left = `${column.stickyLeft}px`;
+  }
+  return Object.keys(style).length ? style : undefined;
 }
 
 export function AppSurface({ children }: { children: ReactNode }) {
@@ -327,6 +368,14 @@ export function MetricTable<T>({
     width: 0,
   });
   const columnKeys = columns.map((column) => column.key).join("|");
+  const explicitColumnWidthKey = columns
+    .map((column) => `${column.key}:${column.width ?? ""}:${column.minWidth ?? ""}:${column.maxWidth ?? ""}`)
+    .join("|");
+  const explicitColumnWidths = columns.map((column) => normalizeTableColumnSize(column.width));
+  const hasExplicitColumnWidths = explicitColumnWidths.length > 0 && explicitColumnWidths.every(Boolean);
+  const explicitTableWidth = hasExplicitColumnWidths
+    ? columns.reduce((sum, column) => sum + (parseTableColumnPixelWidth(column.width) ?? parseTableColumnPixelWidth(column.minWidth) ?? 0), 0)
+    : 0;
 
   useEffect(() => {
     const shellNode = tableShellRef.current;
@@ -379,8 +428,11 @@ export function MetricTable<T>({
       const firstBodyCells = [...tableNode.querySelectorAll<HTMLTableCellElement>("tbody tr:first-child > td")].slice(0, columns.length);
       const headerCells = [...tableNode.querySelectorAll<HTMLTableCellElement>("thead tr:first-child > th")].slice(0, columns.length);
       const measuredCells = firstBodyCells.length === columns.length ? firstBodyCells : headerCells;
-      const nextColumnWidths = measuredCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
-      const nextTableWidth = Math.round(Math.max(tableNode.getBoundingClientRect().width, tableNode.scrollWidth));
+      const measuredColumnWidths = measuredCells.map((cell) => Math.round(cell.getBoundingClientRect().width));
+      const nextColumnWidths = hasExplicitColumnWidths
+        ? columns.map((column, index) => parseTableColumnPixelWidth(column.width) ?? measuredColumnWidths[index] ?? 0)
+        : measuredColumnWidths;
+      const nextTableWidth = explicitTableWidth || Math.round(Math.max(tableNode.getBoundingClientRect().width, tableNode.scrollWidth));
       const nextViewportWidth = Math.round(viewportNode.clientWidth);
       const cloneNode = shellNode.querySelector<HTMLElement>(".metric-table-sticky-header-clone");
       const headerNode = tableNode.querySelector<HTMLElement>("thead");
@@ -434,18 +486,28 @@ export function MetricTable<T>({
       window.removeEventListener("resize", syncHeaderMetrics);
       observer.disconnect();
     };
-  }, [columnKeys, columns.length, headerStickyTop, rows.length, stickyHeader]);
+  }, [columnKeys, columns.length, explicitColumnWidthKey, explicitTableWidth, hasExplicitColumnWidths, headerStickyTop, rows.length, stickyHeader]);
 
   if (!rows.length) {
     return <EmptyState title="Пока пусто" text={emptyText} />;
   }
 
-  const showStickyHeaderClone = stickyHeader && headerCloneState.columnWidths.length === columns.length && headerCloneState.tableWidth > 0;
+  const measuredColumnWidths = headerCloneState.columnWidths.map((width) => `${width}px`);
+  const effectiveColumnWidths = hasExplicitColumnWidths ? explicitColumnWidths : measuredColumnWidths;
+  const effectiveTableWidth = explicitTableWidth || headerCloneState.tableWidth;
+  const showStickyHeaderClone = stickyHeader && effectiveColumnWidths.length === columns.length && effectiveTableWidth > 0;
   const hasHeaderSummary = columns.some((column) => column.headerSummary !== undefined);
-  const colgroup = headerCloneState.columnWidths.length === columns.length ? (
+  const colgroup = effectiveColumnWidths.length === columns.length ? (
     <colgroup>
-      {headerCloneState.columnWidths.map((width, index) => (
-        <col key={`${columns[index]?.key || index}-width`} style={{ width: `${width}px`, minWidth: `${width}px` }} />
+      {effectiveColumnWidths.map((width, index) => (
+        <col
+          key={`${columns[index]?.key || index}-width`}
+          style={{
+            width,
+            minWidth: normalizeTableColumnSize(columns[index]?.minWidth) || width,
+            maxWidth: normalizeTableColumnSize(columns[index]?.maxWidth),
+          }}
+        />
       ))}
     </colgroup>
   ) : null;
@@ -456,7 +518,7 @@ export function MetricTable<T>({
         {columns.map((column) => (
           <th
             key={column.key}
-            style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+            style={getTableColumnStyle(column)}
             className={cn(
               "bg-[var(--color-surface-soft)] px-4 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[var(--color-muted)]",
               column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head",
@@ -476,7 +538,7 @@ export function MetricTable<T>({
           {columns.map((column) => (
             <th
               key={`${column.key}-summary`}
-              style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+              style={getTableColumnStyle(column)}
               className={cn(
                 "metric-table-summary-head bg-[var(--color-surface-soft)] px-4 py-2 text-[0.8rem] font-semibold normal-case tracking-normal text-[var(--color-ink)]",
                 column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-head",
@@ -512,7 +574,7 @@ export function MetricTable<T>({
       <table
         className="data-table text-sm"
         style={{
-          width: `${headerCloneState.tableWidth}px`,
+          width: `${effectiveTableWidth}px`,
           transform: `translateX(-${headerCloneState.scrollLeft}px)`,
         }}
       >
@@ -549,7 +611,7 @@ export function MetricTable<T>({
           <table
             ref={tableElementRef}
             className="data-table min-w-full divide-y divide-[var(--color-line)] text-sm"
-            style={showStickyHeaderClone && headerCloneState.tableWidth ? { width: `${headerCloneState.tableWidth}px` } : undefined}
+            style={showStickyHeaderClone && effectiveTableWidth ? { width: `${effectiveTableWidth}px` } : undefined}
           >
             {colgroup}
             {!showStickyHeaderClone ? renderHeader() : null}
@@ -563,7 +625,7 @@ export function MetricTable<T>({
                       {columns.map((column) => (
                         <td
                           key={column.key}
-                          style={column.stickyLeft !== undefined ? { left: `${column.stickyLeft}px` } : undefined}
+                          style={getTableColumnStyle(column)}
                           className={cn(
                             "px-4 py-3 align-top text-[var(--color-ink)]",
                             column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-cell",
