@@ -670,6 +670,7 @@ export function DrrAnalyticsPage() {
             <MetricTable
               rows={drrRows}
               columns={drrColumns}
+              stickyHeader
               getRowKey={(row) => row.ref}
               emptyText="Нет товаров с расходом и ДРР за выбранный период."
             />
@@ -686,6 +687,7 @@ export function DrrAnalyticsPage() {
             <MetricTable
               rows={stockRows}
               columns={stockColumns}
+              stickyHeader
               getRowKey={(row) => row.ref}
               emptyText="Нет товаров с остатком и нулевым расходом за выбранный период."
             />
