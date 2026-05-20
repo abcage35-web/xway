@@ -248,6 +248,37 @@ body.is-resizing-drr-column {
   max-width: 126px;
 }
 
+.drr-analytics-page .data-table td.drr-col-rank,
+.drr-analytics-page .data-table td.drr-col-article,
+.drr-analytics-page .data-table td.drr-col-sku,
+.drr-analytics-page .data-table td.drr-col-share,
+.drr-analytics-page .data-table td.drr-col-small,
+.drr-analytics-page .data-table td.drr-col-money,
+.drr-analytics-page .data-table td.drr-col-number,
+.drr-analytics-page .data-table td.drr-col-reviews,
+.drr-analytics-page .data-table td.drr-col-bzo,
+.drr-analytics-page .data-table td.drr-col-turnover {
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  font-size: 0.98rem;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 650;
+  letter-spacing: 0.005em;
+  line-height: 1.15;
+}
+
+.drr-analytics-page .data-table td.drr-col-rank {
+  color: var(--color-muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.drr-analytics-page .data-table td.drr-col-share,
+.drr-analytics-page .data-table td.drr-col-small {
+  font-size: 1rem;
+}
+
 .drr-category-driver-table .data-table th {
   height: 58px;
   vertical-align: middle;
