@@ -55,6 +55,23 @@ const PRICE_FIELDS = [
   "planned_minimal_price",
 ];
 
+const STOCK_VALUE_FIELDS = [
+  "stocks_fbo",
+  "stock_fbo",
+  "fbo_stock",
+  "fbo",
+  "total_stock",
+  "total_quantity",
+  "quantity",
+  "qty",
+  "stock",
+  "stocks",
+  "amount",
+  "balance",
+  "count",
+  "remain_stock",
+];
+
 function hasMpvibeAuth(env) {
   return Boolean(String(env.MPVIBE_COOKIE_HEADER || env.MPVIBE_REFRESH_COOKIE_HEADER || env.MPVIBE_AUTHORIZATION || "").trim());
 }
@@ -266,7 +283,7 @@ function asString(value) {
 }
 
 function asNumberOrNull(value) {
-  const numeric = Number(value);
+  const numeric = Number(String(value ?? "").replace(/\s/g, "").replace(",", "."));
   return Number.isFinite(numeric) ? numeric : null;
 }
 
@@ -395,6 +412,58 @@ function findStocksForCard(payload, cardId) {
   };
 }
 
+function extractMpvibeStockValue(value, depth = 0) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const direct = asNumberOrNull(value);
+  if (direct !== null) {
+    return direct;
+  }
+  if (depth > 4) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    const values = value.map((item) => extractMpvibeStockValue(item, depth + 1)).filter((item) => item !== null);
+    return values.length ? values.reduce((sum, item) => sum + item, 0) : null;
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  for (const field of STOCK_VALUE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(value, field)) {
+      const nested = extractMpvibeStockValue(value[field], depth + 1);
+      if (nested !== null) {
+        return nested;
+      }
+    }
+  }
+  return null;
+}
+
+function indexRealtimeCardsByArticle(payload, articles) {
+  const wanted = new Set((articles || []).map((article) => asString(article)).filter(Boolean));
+  const byArticle = new Map();
+  for (const accountRow of Array.isArray(payload) ? payload : []) {
+    const cards = accountRow?.cards && typeof accountRow.cards === "object" ? accountRow.cards : {};
+    for (const card of Object.values(cards)) {
+      for (const field of ["sku", "nm_id", "nmId", "article", "wb_article", "nmid"]) {
+        const article = asString(card?.[field]);
+        if (wanted.has(article) && !byArticle.has(article)) {
+          byArticle.set(article, {
+            card,
+            account_id: accountRow.account_id ?? card?.account_id ?? null,
+            entity_id: accountRow.entity_id ?? card?.entity_id ?? null,
+            manager_id: accountRow.manager_id ?? null,
+            manager_name: accountRow.manager_name ?? null,
+          });
+        }
+      }
+    }
+  }
+  return byArticle;
+}
+
 function normalizePlan(planPayload, cardId) {
   const plan = readByCardId(planPayload, cardId);
   if (!plan || typeof plan !== "object") {
@@ -494,5 +563,85 @@ export async function collectMpvibeArticle(env, { article, start, end } = {}) {
     plan: normalizePlan(payloads.plan, cardId),
     stocks: findStocksForCard(payloads.stocks, cardId),
     errors,
+  };
+}
+
+export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
+  const requestedArticles = [...new Set((articles || []).map((article) => asString(article)).filter(Boolean))];
+  if (!requestedArticles.length) {
+    return {
+      ok: true,
+      available: hasMpvibeAuth(env),
+      generated_at: new Date().toISOString(),
+      range: { start, end },
+      requested_articles: [],
+      rows: [],
+      errors: [],
+    };
+  }
+  if (!hasMpvibeAuth(env)) {
+    return {
+      ok: true,
+      available: false,
+      generated_at: new Date().toISOString(),
+      range: { start, end },
+      requested_articles: requestedArticles,
+      rows: requestedArticles.map((article) => ({
+        article,
+        card_id: null,
+        account_id: null,
+        stock_fbo: null,
+        available: false,
+        error: "MPVibe auth is not configured.",
+      })),
+      errors: [{ articles: requestedArticles, error: "MPVibe auth is not configured." }],
+    };
+  }
+
+  const [mainPayload, stocksPayload] = await Promise.all([
+    mpvibeJson(env, "/api/realtime/mp/wb", { start_date: start, end_date: end }),
+    mpvibeJson(env, "/api/realtime/mp/wb/stocks", { start_date: start, end_date: end }),
+  ]);
+  const indexedCards = indexRealtimeCardsByArticle(mainPayload, requestedArticles);
+
+  const rows = requestedArticles.map((article) => {
+    const mainMatch = indexedCards.get(article) || findRealtimeCard(mainPayload, article);
+    const mainCard = normalizeMainCard(mainMatch?.card, article, mainMatch);
+    const cardId = mainCard?.card_id;
+    if (!cardId) {
+      return {
+        article,
+        card_id: null,
+        account_id: null,
+        stock_fbo: null,
+        available: false,
+        error: `Article ${article} was not found in MPVibe realtime data.`,
+      };
+    }
+    const stocks = findStocksForCard(stocksPayload, cardId);
+    const stockFbo = extractMpvibeStockValue(stocks?.stock) ?? extractMpvibeStockValue(mainCard?.stock_data);
+    return {
+      article,
+      card_id: cardId,
+      account_id: mainCard?.account_id ?? null,
+      stock_fbo: stockFbo,
+      available: stockFbo !== null,
+      error: stockFbo === null ? "MPVibe stock was not found for article." : null,
+    };
+  });
+
+  return {
+    ok: true,
+    available: true,
+    generated_at: new Date().toISOString(),
+    range: { start, end },
+    requested_articles: requestedArticles,
+    rows,
+    errors: rows
+      .filter((row) => row.error)
+      .map((row) => ({
+        articles: [row.article],
+        error: row.error,
+      })),
   };
 }

@@ -114,6 +114,11 @@
   color: #a78bfa;
 }
 
+.drr-source-label.is-mpvibe {
+  background: rgba(14, 165, 233, 0.16);
+  color: #38bdf8;
+}
+
 .drr-source-label.is-mixed {
   background: rgba(20, 184, 166, 0.16);
   color: #2dd4bf;

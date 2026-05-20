@@ -503,6 +503,28 @@ export interface WbCardsResponse {
   errors: Array<{ articles: string[]; error: string }>;
 }
 
+export interface MpvibeStockInfo {
+  article: string;
+  card_id: number | string | null;
+  account_id: number | string | null;
+  stock_fbo: number | null;
+  available: boolean;
+  error?: string | null;
+}
+
+export interface MpvibeStocksResponse {
+  ok: boolean;
+  available: boolean;
+  generated_at: string;
+  range: {
+    start?: string | null;
+    end?: string | null;
+  };
+  requested_articles: string[];
+  rows: MpvibeStockInfo[];
+  errors: Array<{ articles: string[]; error: string | null | undefined }>;
+}
+
 export interface CatalogArticleCampaignTypeMetrics {
   views?: number | string | null;
   clicks?: number | string | null;

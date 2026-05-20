@@ -1,4 +1,4 @@
-import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse, WbCardsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, MpvibeStocksResponse, ProductsResponse, WbCardsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
@@ -634,6 +634,32 @@ export async function fetchWbCards(options: {
     { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
     {
       namespace: "wb-cards",
+      bypassRead: options.forceRefresh,
+      shouldWrite: (response) => response.rows.length > 0,
+    },
+  );
+}
+
+export async function fetchMpvibeStocks(options: {
+  request?: Request;
+  articles: string[];
+  start?: string | null;
+  end?: string | null;
+  forceRefresh?: boolean;
+  signal?: AbortSignal;
+}) {
+  const url = new URL("/api/mpvibe-stocks", buildBaseUrl(options.request));
+  url.searchParams.set("articles", options.articles.join(","));
+  appendRange(url.searchParams, options.start, options.end);
+  if (options.forceRefresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return requestCachedJson<MpvibeStocksResponse>(
+    url,
+    options.signal ?? options.request?.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "mpvibe-stocks",
       bypassRead: options.forceRefresh,
       shouldWrite: (response) => response.rows.length > 0,
     },

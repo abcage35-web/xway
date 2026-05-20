@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "react-router";
-import { fetchCatalog, fetchWbCards } from "../lib/api";
+import { fetchCatalog, fetchMpvibeStocks, fetchWbCards } from "../lib/api";
 import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
-import type { CatalogArticle, CatalogResponse, CatalogShop, WbCardInfo } from "../lib/types";
+import type { CatalogArticle, CatalogResponse, CatalogShop, MpvibeStockInfo, WbCardInfo } from "../lib/types";
 import { EmptyState, MetricCard, MetricTable, PageHero, SectionCard, Tabs } from "../components/ui";
 import type { TableColumn } from "../components/ui";
 
 type AnalyticsSection = "drr" | "stocks" | "categories";
 type SortDirection = "asc" | "desc";
-type DataSource = "XWAY" | "WB" | "XWAY/WB" | "Расчет";
+type DataSource = "XWAY" | "WB" | "MPVibe" | "XWAY/WB" | "Расчет";
 type DrrSortField =
   | "rank"
   | "article"
   | "drr"
+  | "stock"
+  | "stockMpvibe"
   | "spend"
   | "revenue"
   | "ordersAds"
@@ -27,6 +29,7 @@ type StockSortField =
   | "rank"
   | "article"
   | "stock"
+  | "stockMpvibe"
   | "turnover"
   | "spend"
   | "ordersTotal"
@@ -40,6 +43,7 @@ type CategorySortField =
   | "category"
   | "skuCount"
   | "stock"
+  | "stockMpvibe"
   | "drrAds"
   | "drrTotal"
   | "spend"
@@ -64,12 +68,15 @@ interface AnalyticsRowBase {
   productId: number;
   name: string;
   shopName: string;
+  shopId: number;
   productUrl: string;
   imageUrl: string;
   categoryKeyword: string;
   stock: number | null;
+  stockMpvibe: number | null;
   spend: number | null;
   revenue: number | null;
+  revenueTotal: number | null;
   ordersAds: number | null;
   ordersTotal: number | null;
   views: number | null;
@@ -95,6 +102,7 @@ interface CategoryDriverRow {
   category: string;
   skuCount: number;
   stock: number;
+  stockMpvibe: number | null;
   spend: number;
   spendShare: number | null;
   revenueAds: number;
@@ -153,6 +161,7 @@ const RESIZABLE_COLUMN_CONFIG = {
   price: { default: 128, min: 104, max: 180 },
   shop: { default: 190, min: 130, max: 340 },
   stock: { default: 112, min: 88, max: 170 },
+  stockMpvibe: { default: 124, min: 98, max: 180 },
   turnover: { default: 142, min: 112, max: 220 },
   activeCampaigns: { default: 126, min: 104, max: 190 },
   campaigns: { default: 112, min: 86, max: 160 },
@@ -272,12 +281,15 @@ function flattenCatalogRows(payload: CatalogResponse | null, days: number): Anal
         productId: article.product_id,
         name: article.name,
         shopName: shop.name,
+        shopId: shop.id,
         productUrl: article.product_url,
         imageUrl: article.image_url,
         categoryKeyword: article.category_keyword,
         stock,
+        stockMpvibe: null,
         spend: toNumber(article.expense_sum),
         revenue: toNumber(article.sum_price),
+        revenueTotal: toNumber(article.ordered_sum_report),
         ordersAds: toNumber(article.orders),
         ordersTotal,
         views: toNumber(article.views),
@@ -334,33 +346,40 @@ function sortNamedRows<T extends { ref: string }>(rows: T[], sort: SortState<str
   });
 }
 
-function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortState<CategorySortField>, minStock: number): CategoryDriverShopGroup[] {
-  if (!payload) {
+function buildCategoryDriverGroups(rows: AnalyticsRowBase[], sort: SortState<CategorySortField>, minStock: number): CategoryDriverShopGroup[] {
+  if (!rows.length) {
     return [];
   }
-  return payload.shops
+  const rowsByShop = new Map<number, { shopId: number; shopName: string; rows: AnalyticsRowBase[] }>();
+  rows.forEach((row) => {
+    const current = rowsByShop.get(row.shopId) || { shopId: row.shopId, shopName: row.shopName, rows: [] };
+    current.rows.push(row);
+    rowsByShop.set(row.shopId, current);
+  });
+  return [...rowsByShop.values()]
     .map((shop) => {
       const categoriesByName = new Map<string, CategoryDriverRow>();
-      const shopTotals = shop.articles.reduce(
-        (totals, article) => ({
-          spend: totals.spend + (toNumber(article.expense_sum) ?? 0),
-          revenueAds: totals.revenueAds + (toNumber(article.sum_price) ?? 0),
-          revenueTotal: totals.revenueTotal + (toNumber(article.ordered_sum_report) ?? 0),
+      const shopTotals = shop.rows.reduce(
+        (totals, row) => ({
+          spend: totals.spend + (row.spend ?? 0),
+          revenueAds: totals.revenueAds + (row.revenue ?? 0),
+          revenueTotal: totals.revenueTotal + (row.revenueTotal ?? 0),
         }),
         { spend: 0, revenueAds: 0, revenueTotal: 0 },
       );
-      shop.articles.forEach((article) => {
-        const category = String(article.category_keyword || "").trim() || "Без категории";
+      shop.rows.forEach((row) => {
+        const category = String(row.categoryKeyword || "").trim() || "Без категории";
         const key = category.toLocaleLowerCase("ru");
         const current =
           categoriesByName.get(key) ||
           ({
-            ref: `${shop.id}:${key}`,
-            shopId: shop.id,
-            shopName: shop.name,
+            ref: `${shop.shopId}:${key}`,
+            shopId: shop.shopId,
+            shopName: shop.shopName,
             category,
             skuCount: 0,
             stock: 0,
+            stockMpvibe: null,
             spend: 0,
             spendShare: null,
             revenueAds: 0,
@@ -378,17 +397,18 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
             activeCampaigns: 0,
           } satisfies CategoryDriverRow);
         current.skuCount += 1;
-        current.stock += toNumber(article.stock) ?? 0;
-        current.spend += toNumber(article.expense_sum) ?? 0;
-        current.revenueAds += toNumber(article.sum_price) ?? 0;
-        current.revenueTotal += toNumber(article.ordered_sum_report) ?? 0;
-        current.ordersAds += toNumber(article.orders) ?? 0;
-        current.ordersTotal += toNumber(article.ordered_report) ?? 0;
-        current.views += toNumber(article.views) ?? 0;
-        current.clicks += toNumber(article.clicks) ?? 0;
-        current.atbs += toNumber(article.atbs) ?? 0;
-        current.campaigns += article.campaign_states.length;
-        current.activeCampaigns += article.campaign_states.filter((campaign) => campaign.active).length;
+        current.stock += row.stock ?? 0;
+        current.stockMpvibe = row.stockMpvibe === null ? current.stockMpvibe : (current.stockMpvibe ?? 0) + row.stockMpvibe;
+        current.spend += row.spend ?? 0;
+        current.revenueAds += row.revenue ?? 0;
+        current.revenueTotal += row.revenueTotal ?? 0;
+        current.ordersAds += row.ordersAds ?? 0;
+        current.ordersTotal += row.ordersTotal ?? 0;
+        current.views += row.views ?? 0;
+        current.clicks += row.clicks ?? 0;
+        current.atbs += row.atbs ?? 0;
+        current.campaigns += row.campaigns;
+        current.activeCampaigns += row.activeCampaigns;
         categoriesByName.set(key, current);
       });
       const rows = [...categoriesByName.values()].map((row) => ({
@@ -410,6 +430,8 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
             return row.skuCount;
           case "stock":
             return row.stock;
+          case "stockMpvibe":
+            return row.stockMpvibe;
           case "drrAds":
             return row.drrAds;
           case "drrTotal":
@@ -438,8 +460,8 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
         }
       });
       return {
-        shopId: shop.id,
-        shopName: shop.name,
+        shopId: shop.shopId,
+        shopName: shop.shopName,
         rows: sortedRows.map((row, index) => ({ ...row, rank: index + 1 })),
       };
     })
@@ -469,7 +491,7 @@ function formatTurnover(value: number | null) {
 
 function sourceSummary(source: DataSource) {
   return (
-    <span className={cn("drr-source-label", source === "WB" && "is-wb", source === "XWAY/WB" && "is-mixed", source === "Расчет" && "is-derived")}>
+    <span className={cn("drr-source-label", source === "WB" && "is-wb", source === "MPVibe" && "is-mpvibe", source === "XWAY/WB" && "is-mixed", source === "Расчет" && "is-derived")}>
       {source}
     </span>
   );
@@ -565,8 +587,10 @@ export function DrrAnalyticsPage() {
   const [categoryMinStockInput, setCategoryMinStockInput] = useState(readStoredCategoryMinStock);
   const [payload, setPayload] = useState<CatalogResponse | null>(null);
   const [wbByArticle, setWbByArticle] = useState<Record<string, WbCardInfo>>({});
+  const [mpvibeStockByArticle, setMpvibeStockByArticle] = useState<Record<string, MpvibeStockInfo>>({});
   const [loading, setLoading] = useState(false);
   const [wbLoading, setWbLoading] = useState(false);
+  const [mpvibeLoading, setMpvibeLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string; days: number } | null>(null);
   const [drrSort, setDrrSort] = useState<SortState<DrrSortField>>({ field: "spend", direction: "desc" });
@@ -575,13 +599,23 @@ export function DrrAnalyticsPage() {
   const [columnWidths, setColumnWidths] = useState<ColumnWidthState>(readStoredColumnWidths);
   const abortRef = useRef<AbortController | null>(null);
   const wbAbortRef = useRef<AbortController | null>(null);
+  const mpvibeAbortRef = useRef<AbortController | null>(null);
+  const mpvibeForceRefreshRef = useRef(false);
   const resizeDragRef = useRef<{ columnKey: ResizableColumnKey; startX: number; startWidth: number } | null>(null);
 
   const days = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
   const limit = clampInteger(limitInput, DEFAULT_LIMIT, 1, MAX_LIMIT);
   const adOffErrorStockThreshold = clampInteger(adOffErrorStockThresholdInput, DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD, 0, 1000000);
   const categoryMinStock = clampInteger(categoryMinStockInput, DEFAULT_CATEGORY_MIN_STOCK, 0, 1000000);
-  const rows = useMemo(() => flattenCatalogRows(payload, loadedRange?.days ?? days), [days, loadedRange?.days, payload]);
+  const baseRows = useMemo(() => flattenCatalogRows(payload, loadedRange?.days ?? days), [days, loadedRange?.days, payload]);
+  const rows = useMemo(
+    () =>
+      baseRows.map((row) => ({
+        ...row,
+        stockMpvibe: toNumber(mpvibeStockByArticle[row.article]?.stock_fbo),
+      })),
+    [baseRows, mpvibeStockByArticle],
+  );
 
   const topDrrRows = useMemo<DrrAnalyticsRow[]>(() => {
     return [...rows]
@@ -600,6 +634,10 @@ export function DrrAnalyticsPage() {
           return articleNumber(row.article);
         case "drr":
           return row.drr;
+        case "stock":
+          return row.stock;
+        case "stockMpvibe":
+          return row.stockMpvibe;
         case "spend":
           return row.spend;
         case "revenue":
@@ -635,6 +673,8 @@ export function DrrAnalyticsPage() {
           return articleNumber(row.article);
         case "stock":
           return row.stock;
+        case "stockMpvibe":
+          return row.stockMpvibe;
         case "turnover":
           return row.turnoverDays;
         case "spend":
@@ -656,7 +696,7 @@ export function DrrAnalyticsPage() {
     });
     return sorted.slice(0, limit).map((row, index) => ({ ...row, rank: index + 1 }));
   }, [limit, rows, stockSort]);
-  const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(payload, categorySort, categoryMinStock), [categoryMinStock, categorySort, payload]);
+  const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(rows, categorySort, categoryMinStock), [categoryMinStock, categorySort, rows]);
   const categoryRowsCount = categoryShopGroups.reduce((sum, group) => sum + group.rows.length, 0);
 
   const drrHeader = useSortableHeader<DrrSortField>(drrSort, setDrrSort);
@@ -715,6 +755,7 @@ export function DrrAnalyticsPage() {
     abortRef.current?.abort();
     const abortController = new AbortController();
     abortRef.current = abortController;
+    mpvibeForceRefreshRef.current = forceRefresh;
     setLoading(true);
     setError(null);
     try {
@@ -726,6 +767,7 @@ export function DrrAnalyticsPage() {
         signal: abortController.signal,
       });
       setPayload(catalogPayload);
+      setMpvibeStockByArticle({});
       setLoadedRange({ ...nextRange, days: nextDays });
     } catch (loadError) {
       if ((loadError as Error).name !== "AbortError") {
@@ -744,6 +786,7 @@ export function DrrAnalyticsPage() {
     return () => {
       abortRef.current?.abort();
       wbAbortRef.current?.abort();
+      mpvibeAbortRef.current?.abort();
     };
     // Initial load should use default form values only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -783,6 +826,51 @@ export function DrrAnalyticsPage() {
         setWbLoading(false);
       });
   }, [topDrrRows, wbByArticle]);
+
+  useEffect(() => {
+    if (!loadedRange || !baseRows.length) {
+      return;
+    }
+    const missingArticles = [...new Set(baseRows.map((row) => row.article).filter((article) => !mpvibeStockByArticle[article]))];
+    if (!missingArticles.length) {
+      return;
+    }
+    mpvibeAbortRef.current?.abort();
+    const abortController = new AbortController();
+    mpvibeAbortRef.current = abortController;
+    setMpvibeLoading(true);
+    fetchMpvibeStocks({
+      articles: missingArticles,
+      start: loadedRange.start,
+      end: loadedRange.end,
+      forceRefresh: mpvibeForceRefreshRef.current,
+      signal: abortController.signal,
+    })
+      .then((response) => {
+        if (response.errors.length && !response.rows.some((row) => row.stock_fbo !== null)) {
+          setError("MPVibe не вернул остатки FBO: остаток XWAY останется доступен, MPVibe-колонки можно догрузить повторным обновлением.");
+        }
+        setMpvibeStockByArticle((current) => {
+          const next = { ...current };
+          response.rows.forEach((row) => {
+            next[row.article] = row;
+          });
+          return next;
+        });
+      })
+      .catch((mpvibeError) => {
+        if ((mpvibeError as Error).name !== "AbortError") {
+          setError(mpvibeError instanceof Error ? mpvibeError.message : "Не удалось загрузить остатки MPVibe.");
+        }
+      })
+      .finally(() => {
+        if (mpvibeAbortRef.current === abortController) {
+          mpvibeAbortRef.current = null;
+        }
+        mpvibeForceRefreshRef.current = false;
+        setMpvibeLoading(false);
+      });
+  }, [baseRows, loadedRange, mpvibeStockByArticle]);
 
   useEffect(() => {
     try {
@@ -875,6 +963,22 @@ export function DrrAnalyticsPage() {
       render: (row: RankedDrrRow) => row.article,
     },
     {
+      key: "stock",
+      ...columnWidthProps("stock"),
+      header: resizableHeader(drrHeader("stock", "Остаток XWAY", { ariaLabel: "Остаток XWAY" }), "stock"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedDrrRow) => formatNumber(row.stock),
+    },
+    {
+      key: "stockMpvibe",
+      ...columnWidthProps("stockMpvibe"),
+      header: resizableHeader(drrHeader("stockMpvibe", "Остаток MPVibe", { ariaLabel: "Остаток MPVibe" }), "stockMpvibe"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedDrrRow) => formatNumber(row.stockMpvibe),
+    },
+    {
       key: "drr",
       ...columnWidthProps("drr"),
       header: resizableHeader(drrHeader("drr", "ДРР", { ariaLabel: "ДРР" }), "drr"),
@@ -951,6 +1055,8 @@ export function DrrAnalyticsPage() {
     name: "XWAY",
     links: "XWAY/WB",
     article: "XWAY",
+    stock: "XWAY",
+    stockMpvibe: "MPVibe",
     drr: "Расчет",
     spend: "XWAY",
     revenue: "XWAY",
@@ -1003,10 +1109,18 @@ export function DrrAnalyticsPage() {
     {
       key: "stock",
       ...columnWidthProps("stock"),
-      header: resizableHeader(stockHeader("stock", "Остаток FBO", { ariaLabel: "Остаток FBO" }), "stock"),
+      header: resizableHeader(stockHeader("stock", "Остаток XWAY", { ariaLabel: "Остаток XWAY" }), "stock"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.stock),
+    },
+    {
+      key: "stockMpvibe",
+      ...columnWidthProps("stockMpvibe"),
+      header: resizableHeader(stockHeader("stockMpvibe", "Остаток MPVibe", { ariaLabel: "Остаток MPVibe" }), "stockMpvibe"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedStockRow) => formatNumber(row.stockMpvibe),
     },
     {
       key: "turnover",
@@ -1088,6 +1202,7 @@ export function DrrAnalyticsPage() {
     links: "XWAY/WB",
     article: "XWAY",
     stock: "XWAY",
+    stockMpvibe: "MPVibe",
     turnover: "Расчет",
     spend: "XWAY",
     ordersTotal: "XWAY",
@@ -1210,10 +1325,18 @@ export function DrrAnalyticsPage() {
     {
       key: "stock",
       ...columnWidthProps("stock"),
-      header: resizableHeader(categoryHeader("stock", "Остаток", { ariaLabel: "Остаток" }), "stock"),
+      header: resizableHeader(categoryHeader("stock", "Остаток XWAY", { ariaLabel: "Остаток XWAY" }), "stock"),
       headerClassName: "drr-col-number",
       cellClassName: "drr-col-number",
       render: (row: RankedCategoryDriverRow) => formatNumber(row.stock),
+    },
+    {
+      key: "stockMpvibe",
+      ...columnWidthProps("stockMpvibe"),
+      header: resizableHeader(categoryHeader("stockMpvibe", "Остаток MPVibe", { ariaLabel: "Остаток MPVibe" }), "stockMpvibe"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.stockMpvibe),
     },
     {
       key: "activeCampaigns",
@@ -1246,6 +1369,7 @@ export function DrrAnalyticsPage() {
     ordersAds: "XWAY",
     ordersTotal: "XWAY",
     stock: "XWAY",
+    stockMpvibe: "MPVibe",
     activeCampaigns: "XWAY",
     campaigns: "XWAY",
   });
@@ -1260,6 +1384,7 @@ export function DrrAnalyticsPage() {
             <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{rangeLabel}</span>
             <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{formatNumber(rows.length)} товаров</span>
             {wbLoading ? <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)]">WB загружается</span> : null}
+            {mpvibeLoading ? <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)]">MPVibe загружается</span> : null}
           </>
         }
         actions={
