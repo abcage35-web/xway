@@ -5,9 +5,11 @@ import { fetchCatalog, fetchWbCards } from "../lib/api";
 import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogResponse, CatalogShop, WbCardInfo } from "../lib/types";
 import { EmptyState, MetricCard, MetricTable, PageHero, SectionCard, Tabs } from "../components/ui";
+import type { TableColumn } from "../components/ui";
 
 type AnalyticsSection = "drr" | "stocks" | "categories";
 type SortDirection = "asc" | "desc";
+type DataSource = "XWAY" | "WB" | "XWAY/WB" | "Расчет";
 type DrrSortField =
   | "rank"
   | "article"
@@ -465,6 +467,21 @@ function formatTurnover(value: number | null) {
   return value === null ? "—" : `${formatNumber(value, 1)} дн`;
 }
 
+function sourceSummary(source: DataSource) {
+  return (
+    <span className={cn("drr-source-label", source === "WB" && "is-wb", source === "XWAY/WB" && "is-mixed", source === "Расчет" && "is-derived")}>
+      {source}
+    </span>
+  );
+}
+
+function withSourceSummaries<T>(columns: Array<TableColumn<T>>, sources: Record<string, DataSource>) {
+  return columns.map((column) => ({
+    ...column,
+    headerSummary: sourceSummary(sources[column.key] ?? "XWAY"),
+  }));
+}
+
 function useSortableHeader<TField extends string>(
   sort: SortState<TField>,
   setSort: (sort: SortState<TField>) => void,
@@ -819,7 +836,7 @@ export function DrrAnalyticsPage() {
     };
   }, []);
 
-  const drrColumns = [
+  const drrColumns = withSourceSummaries<RankedDrrRow>([
     {
       key: "rank",
       ...columnWidthProps("rank"),
@@ -929,9 +946,23 @@ export function DrrAnalyticsPage() {
       cellClassName: "drr-col-shop",
       render: (row: RankedDrrRow) => row.shopName,
     },
-  ];
+  ], {
+    rank: "Расчет",
+    name: "XWAY",
+    links: "XWAY/WB",
+    article: "XWAY",
+    drr: "Расчет",
+    spend: "XWAY",
+    revenue: "XWAY",
+    ordersAds: "XWAY",
+    ordersTotal: "XWAY",
+    reviews: "WB",
+    bzo: "WB",
+    price: "WB",
+    shop: "XWAY",
+  });
 
-  const stockColumns = [
+  const stockColumns = withSourceSummaries<RankedStockRow>([
     {
       key: "rank",
       ...columnWidthProps("rank"),
@@ -1051,9 +1082,22 @@ export function DrrAnalyticsPage() {
       cellClassName: "drr-col-shop",
       render: (row: RankedStockRow) => row.shopName,
     },
-  ];
+  ], {
+    rank: "Расчет",
+    name: "XWAY",
+    links: "XWAY/WB",
+    article: "XWAY",
+    stock: "XWAY",
+    turnover: "Расчет",
+    spend: "XWAY",
+    ordersTotal: "XWAY",
+    activeCampaigns: "XWAY",
+    campaigns: "XWAY",
+    enabled: "XWAY",
+    shop: "XWAY",
+  });
 
-  const categoryColumns = [
+  const categoryColumns = withSourceSummaries<RankedCategoryDriverRow>([
     {
       key: "rank",
       ...columnWidthProps("rank"),
@@ -1187,7 +1231,24 @@ export function DrrAnalyticsPage() {
       cellClassName: "drr-col-number",
       render: (row: RankedCategoryDriverRow) => formatNumber(row.campaigns),
     },
-  ];
+  ], {
+    rank: "Расчет",
+    category: "XWAY",
+    skuCount: "Расчет",
+    drrTotal: "Расчет",
+    drrAds: "Расчет",
+    spend: "XWAY",
+    spendShare: "Расчет",
+    revenueTotal: "XWAY",
+    revenueTotalShare: "Расчет",
+    revenueAds: "XWAY",
+    revenueAdsShare: "Расчет",
+    ordersAds: "XWAY",
+    ordersTotal: "XWAY",
+    stock: "XWAY",
+    activeCampaigns: "XWAY",
+    campaigns: "XWAY",
+  });
 
   return (
     <div className="drr-analytics-page space-y-6">
