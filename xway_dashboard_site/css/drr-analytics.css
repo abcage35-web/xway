@@ -17,17 +17,22 @@
 }
 
 .drr-analytics-page .metric-table-sticky-header-clone,
-.drr-analytics-page .metric-table-sticky-header-clone.is-fixed {
+.drr-analytics-page .metric-table-sticky-header-clone.is-fixed,
+.drr-analytics-sticky-header,
+.drr-analytics-sticky-header.is-fixed {
   border-radius: 22px 22px 0 0;
   box-shadow: 0 14px 32px rgba(7, 10, 18, 0.22);
 }
 
-.drr-analytics-page .data-table {
+.drr-analytics-page .data-table,
+.drr-analytics-sticky-header .data-table {
   table-layout: fixed;
 }
 
 .drr-analytics-page .data-table th,
-.drr-analytics-page .data-table td {
+.drr-analytics-page .data-table td,
+.drr-analytics-sticky-header .data-table th,
+.drr-analytics-sticky-header .data-table td {
   overflow: hidden;
   padding-left: 12px;
   padding-right: 12px;
@@ -35,21 +40,26 @@
   vertical-align: middle;
 }
 
-.drr-analytics-page .data-table th {
+.drr-analytics-page .data-table th,
+.drr-analytics-sticky-header .data-table th {
   position: relative;
 }
 
-.drr-analytics-page .catalog-sort-header {
+.drr-analytics-page .catalog-sort-header,
+.drr-analytics-sticky-header .catalog-sort-header {
   width: 100%;
+  min-width: 0;
   justify-content: flex-start !important;
   text-align: left;
 }
 
-.drr-analytics-page .catalog-sort-header.is-right {
+.drr-analytics-page .catalog-sort-header.is-right,
+.drr-analytics-sticky-header .catalog-sort-header.is-right {
   justify-content: flex-start !important;
 }
 
-.drr-analytics-page .catalog-sort-header-label {
+.drr-analytics-page .catalog-sort-header-label,
+.drr-analytics-sticky-header .catalog-sort-header-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -67,6 +77,9 @@
 .drr-resizable-header-content {
   min-width: 0;
   flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .drr-column-resize-handle {

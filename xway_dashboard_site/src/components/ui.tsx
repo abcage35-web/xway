@@ -328,6 +328,7 @@ export function MetricTable<T>({
   variant = "default",
   className,
   stickyHeader = false,
+  stickyHeaderClassName,
   headerStickyTop = 0,
   getRowKey,
   renderExpandedRow,
@@ -338,6 +339,7 @@ export function MetricTable<T>({
   variant?: "default" | "flat";
   className?: string;
   stickyHeader?: boolean;
+  stickyHeaderClassName?: string;
   headerStickyTop?: number | string;
   getRowKey?: (row: T, rowIndex: number) => string | number;
   renderExpandedRow?: (row: T, rowIndex: number) => ReactNode;
@@ -562,6 +564,7 @@ export function MetricTable<T>({
       className={cn(
         "metric-table-sticky-header-clone z-[80] overflow-hidden border-b border-[var(--color-line)] bg-[var(--color-surface-soft)]",
         fixed && "is-fixed",
+        stickyHeaderClassName,
       )}
       style={{
         position: fixed ? "fixed" : "sticky",

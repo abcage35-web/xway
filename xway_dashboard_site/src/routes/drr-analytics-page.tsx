@@ -946,6 +946,7 @@ export function DrrAnalyticsPage() {
               rows={drrRows}
               columns={drrColumns}
               stickyHeader
+              stickyHeaderClassName="drr-analytics-sticky-header"
               getRowKey={(row) => row.ref}
               emptyText="Нет товаров с расходом и ДРР за выбранный период."
             />
@@ -963,6 +964,7 @@ export function DrrAnalyticsPage() {
               rows={stockRows}
               columns={stockColumns}
               stickyHeader
+              stickyHeaderClassName="drr-analytics-sticky-header"
               getRowKey={(row) => row.ref}
               emptyText="Нет товаров с остатком и нулевым расходом за выбранный период."
             />
