@@ -1074,7 +1074,7 @@ export function DrrAnalyticsPage() {
     {
       key: "rank",
       ...columnWidthProps("rank"),
-      header: resizableHeader(drrHeader("rank", "#", { ariaLabel: "Номер строки" }), "rank"),
+      header: resizableHeader("#", "rank"),
       headerClassName: "drr-col-rank",
       cellClassName: "drr-col-rank",
       render: (row: RankedDrrRow) => formatNumber(row.rank),
@@ -1218,7 +1218,7 @@ export function DrrAnalyticsPage() {
     {
       key: "rank",
       ...columnWidthProps("rank"),
-      header: resizableHeader(stockHeader("rank", "#", { ariaLabel: "Номер строки" }), "rank"),
+      header: resizableHeader("#", "rank"),
       headerClassName: "drr-col-rank",
       cellClassName: "drr-col-rank",
       render: (row: RankedStockRow) => formatNumber(row.rank),
@@ -1362,7 +1362,7 @@ export function DrrAnalyticsPage() {
     {
       key: "rank",
       ...columnWidthProps("rank"),
-      header: resizableHeader(categoryHeader("rank", "#", { ariaLabel: "Номер строки" }), "rank"),
+      header: resizableHeader("#", "rank"),
       headerClassName: "drr-col-rank",
       cellClassName: "drr-col-rank",
       render: (row: RankedCategoryDriverRow) => formatNumber(row.rank),
@@ -1415,7 +1415,7 @@ export function DrrAnalyticsPage() {
     {
       key: "spendShare",
       ...columnWidthProps("categoryShare"),
-      header: resizableHeader(categoryHeader("spendShare", "", { ariaLabel: "Доля расхода от кабинета" }), "categoryShare"),
+      header: resizableHeader("%", "categoryShare"),
       headerClassName: "drr-col-share",
       cellClassName: "drr-col-share",
       render: (row: RankedCategoryDriverRow) => formatPercent(row.spendShare),
@@ -1431,7 +1431,7 @@ export function DrrAnalyticsPage() {
     {
       key: "revenueTotalShare",
       ...columnWidthProps("categoryShare"),
-      header: resizableHeader(categoryHeader("revenueTotalShare", "", { ariaLabel: "Доля общей выручки от кабинета" }), "categoryShare"),
+      header: resizableHeader("%", "categoryShare"),
       headerClassName: "drr-col-share",
       cellClassName: "drr-col-share",
       render: (row: RankedCategoryDriverRow) => formatPercent(row.revenueTotalShare),
@@ -1447,7 +1447,7 @@ export function DrrAnalyticsPage() {
     {
       key: "revenueAdsShare",
       ...columnWidthProps("categoryShare"),
-      header: resizableHeader(categoryHeader("revenueAdsShare", "", { ariaLabel: "Доля выручки РК от кабинета" }), "categoryShare"),
+      header: resizableHeader("%", "categoryShare"),
       headerClassName: "drr-col-share",
       cellClassName: "drr-col-share",
       render: (row: RankedCategoryDriverRow) => formatPercent(row.revenueAdsShare),
