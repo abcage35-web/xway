@@ -866,6 +866,15 @@ export function DrrAnalyticsPage() {
         }
       />
 
+      <Tabs<AnalyticsSection>
+        value={section}
+        onChange={setSection}
+        items={[
+          { value: "drr", label: "Аналитика ДРР", count: drrRows.length },
+          { value: "stocks", label: "Остатки", count: stockRows.length },
+        ]}
+      />
+
       <SectionCard
         title="Параметры"
         caption="Диапазон считается от вчерашнего дня назад: при 3 днях это последние 3 полных дня."
@@ -902,16 +911,18 @@ export function DrrAnalyticsPage() {
               onChange={(event) => setLimitInput(event.target.value)}
             />
           </label>
-          <label className="drr-analytics-input metric-chip">
-            <span>Ошибка: реклама выкл. при остатке больше</span>
-            <input
-              type="number"
-              min={0}
-              max={1000000}
-              value={adOffErrorStockThresholdInput}
-              onChange={(event) => setAdOffErrorStockThresholdInput(event.target.value)}
-            />
-          </label>
+          {section === "stocks" ? (
+            <label className="drr-analytics-input metric-chip">
+              <span>Ошибка: реклама выкл. при остатке больше</span>
+              <input
+                type="number"
+                min={0}
+                max={1000000}
+                value={adOffErrorStockThresholdInput}
+                onChange={(event) => setAdOffErrorStockThresholdInput(event.target.value)}
+              />
+            </label>
+          ) : null}
           <div className="drr-analytics-hint metric-chip">
             Будет загружено: {formatDateRange(buildStatsRange(days).start, buildStatsRange(days).end)}
           </div>
@@ -924,15 +935,6 @@ export function DrrAnalyticsPage() {
         <MetricCard label="Топ ДРР" value={formatNumber(topDrrRows.length)} hint={`из лимита ${formatNumber(limit)}`} density="compact" />
         <MetricCard label="Остатки без расхода" value={formatNumber(zeroSpendStockCount)} hint={`остаток > ${formatNumber(STOCK_MIN_VALUE)}`} density="compact" />
       </div>
-
-      <Tabs<AnalyticsSection>
-        value={section}
-        onChange={setSection}
-        items={[
-          { value: "drr", label: "Аналитика ДРР", count: drrRows.length },
-          { value: "stocks", label: "Остатки", count: stockRows.length },
-        ]}
-      />
 
       {section === "drr" ? (
         <SectionCard
