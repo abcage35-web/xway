@@ -115,6 +115,8 @@ const MAX_LIMIT = 200;
 const STOCK_MIN_VALUE = 5;
 const DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD = 100;
 const AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY = "xway-drr-analytics-ad-off-error-stock-threshold";
+const DEFAULT_CATEGORY_MIN_STOCK = 100;
+const CATEGORY_MIN_STOCK_STORAGE_KEY = "xway-drr-analytics-category-min-stock";
 const DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY = "xway-drr-analytics-column-widths-v1";
 const RESIZABLE_COLUMN_CONFIG = {
   rank: { default: 52, min: 44, max: 90 },
@@ -194,6 +196,17 @@ function readStoredAdOffThreshold() {
     return window.localStorage.getItem(AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY) || String(DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD);
   } catch {
     return String(DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD);
+  }
+}
+
+function readStoredCategoryMinStock() {
+  if (typeof window === "undefined") {
+    return String(DEFAULT_CATEGORY_MIN_STOCK);
+  }
+  try {
+    return window.localStorage.getItem(CATEGORY_MIN_STOCK_STORAGE_KEY) || String(DEFAULT_CATEGORY_MIN_STOCK);
+  } catch {
+    return String(DEFAULT_CATEGORY_MIN_STOCK);
   }
 }
 
@@ -303,7 +316,7 @@ function sortNamedRows<T extends { ref: string }>(rows: T[], sort: SortState<str
   });
 }
 
-function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortState<CategorySortField>): CategoryDriverShopGroup[] {
+function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortState<CategorySortField>, minStock: number): CategoryDriverShopGroup[] {
   if (!payload) {
     return [];
   }
@@ -350,10 +363,11 @@ function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortSt
         ...row,
         drr: row.revenue > 0 ? (row.spend / row.revenue) * 100 : null,
       }));
-      const sortedRows = sortNamedRows<CategoryDriverRow>(rows, sort, (row, field) => {
+      const visibleRows = rows.filter((row) => row.stock >= minStock);
+      const sortedRows = sortNamedRows<CategoryDriverRow>(visibleRows, sort, (row, field) => {
         switch (field as CategorySortField) {
           case "rank":
-            return rows.indexOf(row) + 1;
+            return visibleRows.indexOf(row) + 1;
           case "category":
             return row.category;
           case "skuCount":
@@ -487,6 +501,7 @@ export function DrrAnalyticsPage() {
   const [daysInput, setDaysInput] = useState(String(DEFAULT_DAYS));
   const [limitInput, setLimitInput] = useState(String(DEFAULT_LIMIT));
   const [adOffErrorStockThresholdInput, setAdOffErrorStockThresholdInput] = useState(readStoredAdOffThreshold);
+  const [categoryMinStockInput, setCategoryMinStockInput] = useState(readStoredCategoryMinStock);
   const [payload, setPayload] = useState<CatalogResponse | null>(null);
   const [wbByArticle, setWbByArticle] = useState<Record<string, WbCardInfo>>({});
   const [loading, setLoading] = useState(false);
@@ -504,6 +519,7 @@ export function DrrAnalyticsPage() {
   const days = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
   const limit = clampInteger(limitInput, DEFAULT_LIMIT, 1, MAX_LIMIT);
   const adOffErrorStockThreshold = clampInteger(adOffErrorStockThresholdInput, DEFAULT_AD_OFF_ERROR_STOCK_THRESHOLD, 0, 1000000);
+  const categoryMinStock = clampInteger(categoryMinStockInput, DEFAULT_CATEGORY_MIN_STOCK, 0, 1000000);
   const rows = useMemo(() => flattenCatalogRows(payload, loadedRange?.days ?? days), [days, loadedRange?.days, payload]);
 
   const topDrrRows = useMemo<DrrAnalyticsRow[]>(() => {
@@ -579,7 +595,7 @@ export function DrrAnalyticsPage() {
     });
     return sorted.slice(0, limit).map((row, index) => ({ ...row, rank: index + 1 }));
   }, [limit, rows, stockSort]);
-  const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(payload, categorySort), [categorySort, payload]);
+  const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(payload, categorySort, categoryMinStock), [categoryMinStock, categorySort, payload]);
   const categoryRowsCount = categoryShopGroups.reduce((sum, group) => sum + group.rows.length, 0);
 
   const drrHeader = useSortableHeader<DrrSortField>(drrSort, setDrrSort);
@@ -714,6 +730,14 @@ export function DrrAnalyticsPage() {
       // localStorage is an optional UI convenience.
     }
   }, [adOffErrorStockThreshold]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CATEGORY_MIN_STOCK_STORAGE_KEY, String(categoryMinStock));
+    } catch {
+      // localStorage is an optional UI convenience.
+    }
+  }, [categoryMinStock]);
 
   useEffect(() => {
     try {
@@ -1160,6 +1184,18 @@ export function DrrAnalyticsPage() {
               />
             </label>
           ) : null}
+          {section === "categories" ? (
+            <label className="drr-analytics-input metric-chip">
+              <span>Показывать категории с остатком от</span>
+              <input
+                type="number"
+                min={0}
+                max={1000000}
+                value={categoryMinStockInput}
+                onChange={(event) => setCategoryMinStockInput(event.target.value)}
+              />
+            </label>
+          ) : null}
           <div className="drr-analytics-hint metric-chip">
             Будет загружено: {formatDateRange(buildStatsRange(days).start, buildStatsRange(days).end)}
           </div>
@@ -1171,7 +1207,7 @@ export function DrrAnalyticsPage() {
         <MetricCard label="Расход за период" value={formatMoney(totalSpend)} density="compact" />
         {section === "categories" ? (
           <>
-            <MetricCard label="Категорий" value={formatNumber(categoryRowsCount)} hint={`${formatNumber(categoryShopGroups.length)} кабинетов`} density="compact" />
+            <MetricCard label="Категорий" value={formatNumber(categoryRowsCount)} hint={`остаток от ${formatNumber(categoryMinStock)}`} density="compact" />
             <MetricCard label="Товаров в срезе" value={formatNumber(rows.length)} density="compact" />
           </>
         ) : (
@@ -1225,7 +1261,7 @@ export function DrrAnalyticsPage() {
               <SectionCard
                 key={group.shopId}
                 title={group.shopName}
-                caption={`Все категории кабинета за период: ${formatNumber(group.rows.length)} категорий, ${formatNumber(group.rows.reduce((sum, row) => sum + row.skuCount, 0))} SKU.`}
+                caption={`Категории кабинета с суммарным остатком от ${formatNumber(categoryMinStock)}: ${formatNumber(group.rows.length)} категорий, ${formatNumber(group.rows.reduce((sum, row) => sum + row.skuCount, 0))} SKU.`}
               >
                 <MetricTable
                   rows={group.rows}
