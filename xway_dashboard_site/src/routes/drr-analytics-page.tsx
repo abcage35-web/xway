@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "react-router";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { fetchCatalog, fetchMpvibeStocks, fetchWbCards } from "../lib/api";
 import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogResponse, CatalogShop, MpvibeStockInfo, WbCardInfo } from "../lib/types";
@@ -121,6 +122,14 @@ interface CategoryDriverRow {
 }
 
 type RankedCategoryDriverRow = CategoryDriverRow & { rank: number };
+type CategoryDriverPieMetric = "spend" | "revenueTotal";
+type CategoryDriverPieSlice = {
+  key: string;
+  name: string;
+  value: number;
+  color: string;
+  row: RankedCategoryDriverRow;
+};
 type CategoryDriverShopGroup = {
   shopId: number;
   shopName: string;
@@ -138,6 +147,20 @@ const AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY = "xway-drr-analytics-ad-off-erro
 const DEFAULT_CATEGORY_MIN_STOCK = 100;
 const CATEGORY_MIN_STOCK_STORAGE_KEY = "xway-drr-analytics-category-min-stock";
 const DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY = "xway-drr-analytics-column-widths-v1";
+const CATEGORY_DRIVER_CHART_COLORS = [
+  "#ff8a2d",
+  "#8b64f6",
+  "#2dd4bf",
+  "#5d88ff",
+  "#f05286",
+  "#57cf8e",
+  "#facc15",
+  "#38bdf8",
+  "#fb7185",
+  "#a78bfa",
+  "#34d399",
+  "#f59e0b",
+];
 const RESIZABLE_COLUMN_CONFIG = {
   rank: { default: 52, min: 44, max: 90 },
   product: { default: 380, min: 240, max: 680 },
@@ -489,6 +512,19 @@ function formatTurnover(value: number | null) {
   return value === null ? "—" : `${formatNumber(value, 1)} дн`;
 }
 
+function buildCategoryDriverPieSlices(rows: RankedCategoryDriverRow[], metric: CategoryDriverPieMetric): CategoryDriverPieSlice[] {
+  return rows
+    .filter((row) => row[metric] > 0)
+    .sort((left, right) => right[metric] - left[metric])
+    .map((row, index) => ({
+      key: `${row.ref}:${metric}`,
+      name: row.category,
+      value: row[metric],
+      color: CATEGORY_DRIVER_CHART_COLORS[index % CATEGORY_DRIVER_CHART_COLORS.length] ?? "#ff8a2d",
+      row,
+    }));
+}
+
 function sourceSummary(source: DataSource) {
   return (
     <span className={cn("drr-source-label", source === "WB" && "is-wb", source === "MPVibe" && "is-mpvibe", source === "XWAY/WB" && "is-mixed", source === "Расчет" && "is-derived")}>
@@ -576,6 +612,116 @@ function WbLink({ article }: { article: string }) {
       WB
       <ExternalLink className="size-3.5" />
     </a>
+  );
+}
+
+function CategoryDriverPieTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: CategoryDriverPieSlice }>;
+}) {
+  const slice = payload?.[0]?.payload;
+  if (!active || !slice) {
+    return null;
+  }
+  const row = slice.row;
+  return (
+    <div className="drr-category-pie-tooltip">
+      <strong>{row.category}</strong>
+      <div>
+        <span>ДРР общ.</span>
+        <b>{formatPercent(row.drrTotal)}</b>
+      </div>
+      <div>
+        <span>Заказы всего</span>
+        <b>{formatNumber(row.ordersTotal)}</b>
+      </div>
+      <div>
+        <span>Выручка общая</span>
+        <b>{formatMoney(row.revenueTotal)}</b>
+      </div>
+      <div>
+        <span>Траты</span>
+        <b>{formatMoney(row.spend)}</b>
+      </div>
+      <div>
+        <span>SKU</span>
+        <b>{formatNumber(row.skuCount)}</b>
+      </div>
+      <div>
+        <span>Остаток XWAY</span>
+        <b>{formatNumber(row.stock)}</b>
+      </div>
+      {row.stockMpvibe !== null ? (
+        <div>
+          <span>Остаток MPVibe</span>
+          <b>{formatNumber(row.stockMpvibe)}</b>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CategoryDriverPie({
+  rows,
+  metric,
+  title,
+  totalLabel,
+}: {
+  rows: RankedCategoryDriverRow[];
+  metric: CategoryDriverPieMetric;
+  title: string;
+  totalLabel: string;
+}) {
+  const slices = buildCategoryDriverPieSlices(rows, metric);
+  const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+  return (
+    <div className="drr-category-pie">
+      <div className="drr-category-pie-head">
+        <span>{title}</span>
+        <strong>{formatMoney(total)}</strong>
+      </div>
+      {slices.length ? (
+        <div className="drr-category-pie-body">
+          <ResponsiveContainer width="100%" height={230}>
+            <PieChart margin={{ top: 10, right: 8, bottom: 10, left: 8 }}>
+              <Pie
+                data={slices}
+                dataKey="value"
+                nameKey="name"
+                innerRadius="54%"
+                outerRadius="82%"
+                paddingAngle={slices.length > 1 ? 1 : 0}
+                stroke="rgba(9, 13, 24, 0.92)"
+                strokeWidth={2}
+              >
+                {slices.map((slice) => (
+                  <Cell key={slice.key} fill={slice.color} />
+                ))}
+              </Pie>
+              <Tooltip content={<CategoryDriverPieTooltip />} wrapperClassName="drr-category-pie-tooltip-wrap" />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="drr-category-pie-total" aria-hidden="true">
+            <span>{totalLabel}</span>
+            <strong>{formatMoney(total)}</strong>
+          </div>
+        </div>
+      ) : (
+        <div className="drr-category-pie-empty">Нет данных</div>
+      )}
+    </div>
+  );
+}
+
+function CategoryDriverCharts({ rows }: { rows: RankedCategoryDriverRow[] }) {
+  return (
+    <div className="drr-category-chart-block">
+      <CategoryDriverPie rows={rows} metric="spend" title="Расход за период" totalLabel="Расход" />
+      <CategoryDriverPie rows={rows} metric="revenueTotal" title="Выручка общая за период" totalLabel="Выручка" />
+    </div>
   );
 }
 
@@ -1538,6 +1684,7 @@ export function DrrAnalyticsPage() {
                 title={group.shopName}
                 caption={`Категории кабинета с суммарным остатком от ${formatNumber(categoryMinStock)}: ${formatNumber(group.rows.length)} категорий, ${formatNumber(group.rows.reduce((sum, row) => sum + row.skuCount, 0))} SKU.`}
               >
+                <CategoryDriverCharts rows={group.rows} />
                 <MetricTable
                   rows={group.rows}
                   columns={categoryColumns}
