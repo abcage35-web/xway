@@ -46,6 +46,7 @@ interface AnalyticsRowBase {
   name: string;
   shopName: string;
   productUrl: string;
+  imageUrl: string;
   stock: number | null;
   spend: number | null;
   revenue: number | null;
@@ -128,6 +129,7 @@ function flattenCatalogRows(payload: CatalogResponse | null, days: number): Anal
         name: article.name,
         shopName: shop.name,
         productUrl: article.product_url,
+        imageUrl: article.image_url,
         stock,
         spend: toNumber(article.expense_sum),
         revenue: toNumber(article.sum_price),
@@ -236,10 +238,15 @@ function useSortableHeader<TField extends string>(
 function ProductCell({ row }: { row: AnalyticsRowBase }) {
   return (
     <div className="drr-analytics-product-cell">
-      <strong title={row.name}>{row.name}</strong>
-      <span>
-        {row.article} · {row.shopName}
-      </span>
+      <div className="drr-analytics-product-thumb">
+        {row.imageUrl ? <img src={row.imageUrl} alt={row.name} loading="lazy" /> : <span>{row.article.slice(0, 2)}</span>}
+      </div>
+      <div className="drr-analytics-product-copy">
+        <strong title={row.name}>{row.name}</strong>
+        <span>
+          {row.article} · {row.shopName}
+        </span>
+      </div>
     </div>
   );
 }
@@ -248,6 +255,21 @@ function XwayLink({ href }: { href: string }) {
   return (
     <a href={href} target="_blank" rel="noreferrer" className="drr-analytics-link" title="Открыть в XWAY">
       XWAY
+      <ExternalLink className="size-3.5" />
+    </a>
+  );
+}
+
+function WbLink({ article }: { article: string }) {
+  return (
+    <a
+      href={`https://www.wildberries.ru/catalog/${encodeURIComponent(article)}/detail.aspx`}
+      target="_blank"
+      rel="noreferrer"
+      className="drr-analytics-link is-wb"
+      title="Открыть на Wildberries"
+    >
+      WB
       <ExternalLink className="size-3.5" />
     </a>
   );
@@ -433,76 +455,106 @@ export function DrrAnalyticsPage() {
       key: "rank",
       header: drrHeader("rank", "#", { align: "right", ariaLabel: "Номер строки" }),
       align: "right" as const,
+      headerClassName: "drr-col-rank",
+      cellClassName: "drr-col-rank",
       render: (row: RankedDrrRow) => formatNumber(row.rank),
+    },
+    {
+      key: "name",
+      header: drrHeader("name", "Товар", { ariaLabel: "Товар" }),
+      headerClassName: "drr-col-product",
+      cellClassName: "drr-col-product",
+      render: (row: RankedDrrRow) => <ProductCell row={row} />,
+    },
+    {
+      key: "links",
+      header: "Ссылки",
+      headerClassName: "drr-col-links",
+      cellClassName: "drr-col-links",
+      render: (row: RankedDrrRow) => (
+        <div className="drr-analytics-link-stack">
+          <XwayLink href={row.productUrl} />
+          <WbLink article={row.article} />
+        </div>
+      ),
     },
     {
       key: "article",
       header: drrHeader("article", "Артикул", { ariaLabel: "Артикул" }),
+      headerClassName: "drr-col-article",
+      cellClassName: "drr-col-article",
       render: (row: RankedDrrRow) => row.article,
     },
     {
       key: "drr",
       header: drrHeader("drr", "ДРР", { align: "right", ariaLabel: "ДРР" }),
       align: "right" as const,
+      headerClassName: "drr-col-small",
+      cellClassName: "drr-col-small",
       render: (row: RankedDrrRow) => formatPercent(row.drr),
     },
     {
       key: "spend",
       header: drrHeader("spend", "Расход за период", { align: "right", ariaLabel: "Расход" }),
       align: "right" as const,
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
       render: (row: RankedDrrRow) => formatMoney(row.spend),
     },
     {
       key: "revenue",
       header: drrHeader("revenue", "Выручка РК", { align: "right", ariaLabel: "Выручка РК" }),
       align: "right" as const,
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
       render: (row: RankedDrrRow) => formatMoney(row.revenue),
     },
     {
       key: "ordersAds",
       header: drrHeader("ordersAds", "Заказы РК", { align: "right", ariaLabel: "Заказы РК" }),
       align: "right" as const,
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
       render: (row: RankedDrrRow) => formatNumber(row.ordersAds),
     },
     {
       key: "ordersTotal",
       header: drrHeader("ordersTotal", "Заказы всего", { align: "right", ariaLabel: "Заказы всего" }),
       align: "right" as const,
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
       render: (row: RankedDrrRow) => formatNumber(row.ordersTotal),
     },
     {
       key: "reviews",
       header: drrHeader("reviews", "Отзывы WB", { align: "right", ariaLabel: "Отзывы WB" }),
       align: "right" as const,
+      headerClassName: "drr-col-reviews",
+      cellClassName: "drr-col-reviews",
       render: (row: RankedDrrRow) => formatReviewCell(row.wb),
     },
     {
       key: "bzo",
       header: drrHeader("bzo", "БЗО", { align: "right", ariaLabel: "БЗО" }),
       align: "right" as const,
+      headerClassName: "drr-col-bzo",
+      cellClassName: "drr-col-bzo",
       render: (row: RankedDrrRow) => formatBzoCell(row.wb),
     },
     {
       key: "price",
       header: drrHeader("price", "Цена с СПП", { align: "right", ariaLabel: "Цена с СПП" }),
       align: "right" as const,
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
       render: (row: RankedDrrRow) => formatMoney(row.wb?.price_spp),
     },
     {
       key: "shop",
       header: drrHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }),
+      headerClassName: "drr-col-shop",
+      cellClassName: "drr-col-shop",
       render: (row: RankedDrrRow) => row.shopName,
-    },
-    {
-      key: "name",
-      header: drrHeader("name", "Товар", { ariaLabel: "Товар" }),
-      cellClassName: "min-w-[260px]",
-      render: (row: RankedDrrRow) => <ProductCell row={row} />,
-    },
-    {
-      key: "xway",
-      header: "XWAY",
-      render: (row: RankedDrrRow) => <XwayLink href={row.productUrl} />,
     },
   ];
 
@@ -511,41 +563,74 @@ export function DrrAnalyticsPage() {
       key: "rank",
       header: stockHeader("rank", "#", { align: "right", ariaLabel: "Номер строки" }),
       align: "right" as const,
+      headerClassName: "drr-col-rank",
+      cellClassName: "drr-col-rank",
       render: (row: RankedStockRow) => formatNumber(row.rank),
+    },
+    {
+      key: "name",
+      header: stockHeader("name", "Товар", { ariaLabel: "Товар" }),
+      headerClassName: "drr-col-product",
+      cellClassName: "drr-col-product",
+      render: (row: RankedStockRow) => <ProductCell row={row} />,
+    },
+    {
+      key: "links",
+      header: "Ссылки",
+      headerClassName: "drr-col-links",
+      cellClassName: "drr-col-links",
+      render: (row: RankedStockRow) => (
+        <div className="drr-analytics-link-stack">
+          <XwayLink href={row.productUrl} />
+          <WbLink article={row.article} />
+        </div>
+      ),
     },
     {
       key: "article",
       header: stockHeader("article", "Артикул", { ariaLabel: "Артикул" }),
+      headerClassName: "drr-col-article",
+      cellClassName: "drr-col-article",
       render: (row: RankedStockRow) => row.article,
     },
     {
       key: "stock",
       header: stockHeader("stock", "Остаток FBO", { align: "right", ariaLabel: "Остаток FBO" }),
       align: "right" as const,
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.stock),
     },
     {
       key: "turnover",
       header: stockHeader("turnover", "Оборач. по периоду", { align: "right", ariaLabel: "Оборачиваемость" }),
       align: "right" as const,
+      headerClassName: "drr-col-turnover",
+      cellClassName: "drr-col-turnover",
       render: (row: RankedStockRow) => formatTurnover(row.turnoverDays),
     },
     {
       key: "spend",
       header: stockHeader("spend", "Расход", { align: "right", ariaLabel: "Расход" }),
       align: "right" as const,
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
       render: (row: RankedStockRow) => formatMoney(row.spend),
     },
     {
       key: "ordersTotal",
       header: stockHeader("ordersTotal", "Заказы всего", { align: "right", ariaLabel: "Заказы всего" }),
       align: "right" as const,
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.ordersTotal),
     },
     {
       key: "activeCampaigns",
       header: stockHeader("activeCampaigns", "Реклама", { align: "right", ariaLabel: "Активные РК" }),
       align: "right" as const,
+      headerClassName: "drr-col-status",
+      cellClassName: "drr-col-status",
       render: (row: RankedStockRow) => (
         <span className={cn("drr-status-chip", row.activeCampaigns > 0 ? "is-on" : "is-off")}>
           {row.activeCampaigns > 0 ? `активна ${row.activeCampaigns}` : "выкл"}
@@ -556,12 +641,16 @@ export function DrrAnalyticsPage() {
       key: "campaigns",
       header: stockHeader("campaigns", "РК всего", { align: "right", ariaLabel: "РК всего" }),
       align: "right" as const,
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
       render: (row: RankedStockRow) => formatNumber(row.campaigns),
     },
     {
       key: "enabled",
       header: stockHeader("enabled", "XWAY статус", { align: "right", ariaLabel: "XWAY статус" }),
       align: "right" as const,
+      headerClassName: "drr-col-status",
+      cellClassName: "drr-col-status",
       render: (row: RankedStockRow) => (
         <span className={cn("drr-status-chip", row.enabled ? "is-on" : "is-off")}>{row.enabled ? "включен" : "отключен"}</span>
       ),
@@ -569,18 +658,9 @@ export function DrrAnalyticsPage() {
     {
       key: "shop",
       header: stockHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }),
+      headerClassName: "drr-col-shop",
+      cellClassName: "drr-col-shop",
       render: (row: RankedStockRow) => row.shopName,
-    },
-    {
-      key: "name",
-      header: stockHeader("name", "Товар", { ariaLabel: "Товар" }),
-      cellClassName: "min-w-[260px]",
-      render: (row: RankedStockRow) => <ProductCell row={row} />,
-    },
-    {
-      key: "xway",
-      header: "XWAY",
-      render: (row: RankedStockRow) => <XwayLink href={row.productUrl} />,
     },
   ];
 
