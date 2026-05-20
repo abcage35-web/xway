@@ -329,6 +329,7 @@ export function MetricTable<T>({
   className,
   stickyHeader = false,
   stickyHeaderClassName,
+  headerSummaryPlacement = "row",
   headerStickyTop = 0,
   getRowKey,
   renderExpandedRow,
@@ -340,6 +341,7 @@ export function MetricTable<T>({
   className?: string;
   stickyHeader?: boolean;
   stickyHeaderClassName?: string;
+  headerSummaryPlacement?: "row" | "inline";
   headerStickyTop?: number | string;
   getRowKey?: (row: T, rowIndex: number) => string | number;
   renderExpandedRow?: (row: T, rowIndex: number) => ReactNode;
@@ -499,6 +501,7 @@ export function MetricTable<T>({
   const effectiveTableWidth = explicitTableWidth || headerCloneState.tableWidth;
   const showStickyHeaderClone = stickyHeader && effectiveColumnWidths.length === columns.length && effectiveTableWidth > 0;
   const hasHeaderSummary = columns.some((column) => column.headerSummary !== undefined);
+  const hasHeaderSummaryRow = hasHeaderSummary && headerSummaryPlacement === "row";
   const colgroup = effectiveColumnWidths.length === columns.length ? (
     <colgroup>
       {effectiveColumnWidths.map((width, index) => (
@@ -531,11 +534,18 @@ export function MetricTable<T>({
               column.headerClassName,
             )}
           >
-            {column.header}
+            {headerSummaryPlacement === "inline" && column.headerSummary !== undefined ? (
+              <div className="metric-table-header-stack">
+                <div className="metric-table-header-title">{column.header}</div>
+                <div className="metric-table-header-inline-summary">{column.headerSummary}</div>
+              </div>
+            ) : (
+              column.header
+            )}
           </th>
         ))}
       </tr>
-      {hasHeaderSummary ? (
+      {hasHeaderSummaryRow ? (
         <tr className="metric-table-summary-row">
           {columns.map((column) => (
             <th

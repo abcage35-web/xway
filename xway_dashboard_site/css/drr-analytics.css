@@ -47,8 +47,8 @@
 
 .drr-analytics-page .data-table thead tr:first-child th,
 .drr-analytics-sticky-header .data-table thead tr:first-child th {
-  height: 58px;
-  padding-top: 10px;
+  height: 72px;
+  padding-top: 8px;
   padding-bottom: 8px;
 }
 
@@ -58,6 +58,38 @@
   padding-bottom: 10px;
   font-size: 0.66rem;
   letter-spacing: 0;
+  line-height: 1;
+}
+
+.drr-analytics-page .metric-table-header-stack,
+.drr-analytics-sticky-header .metric-table-header-stack {
+  display: flex;
+  min-width: 0;
+  min-height: 54px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 7px;
+}
+
+.drr-analytics-page .metric-table-header-title,
+.drr-analytics-sticky-header .metric-table-header-title,
+.drr-analytics-page .metric-table-header-inline-summary,
+.drr-analytics-sticky-header .metric-table-header-inline-summary {
+  width: 100%;
+  min-width: 0;
+}
+
+.drr-analytics-page .metric-table-header-title,
+.drr-analytics-sticky-header .metric-table-header-title {
+  display: flex;
+  align-items: center;
+}
+
+.drr-analytics-page .metric-table-header-inline-summary,
+.drr-analytics-sticky-header .metric-table-header-inline-summary {
+  display: flex;
+  align-items: center;
   line-height: 1;
 }
 

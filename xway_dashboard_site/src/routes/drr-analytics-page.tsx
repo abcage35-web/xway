@@ -1376,6 +1376,7 @@ export function DrrAnalyticsPage() {
               rows={drrRows}
               columns={drrColumns}
               stickyHeader
+              headerSummaryPlacement="inline"
               stickyHeaderClassName="drr-analytics-sticky-header"
               getRowKey={(row) => row.ref}
               emptyText="Нет товаров с расходом и ДРР за выбранный период."
@@ -1394,6 +1395,7 @@ export function DrrAnalyticsPage() {
               rows={stockRows}
               columns={stockColumns}
               stickyHeader
+              headerSummaryPlacement="inline"
               stickyHeaderClassName="drr-analytics-sticky-header"
               getRowKey={(row) => row.ref}
               emptyText="Нет товаров с остатком и нулевым расходом за выбранный период."
@@ -1416,6 +1418,7 @@ export function DrrAnalyticsPage() {
                   columns={categoryColumns}
                   className="drr-category-driver-table"
                   stickyHeader
+                  headerSummaryPlacement="inline"
                   stickyHeaderClassName="drr-analytics-sticky-header drr-category-driver-table"
                   getRowKey={(row) => row.ref}
                   emptyText="По кабинету нет категорий за выбранный период."
