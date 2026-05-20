@@ -7,6 +7,7 @@ import { isAiRoute } from "../_lib/ai/auth.js";
 import { collectProducts } from "../_lib/products.js";
 import { hasSharedD1Cache, readSharedCache, writeSharedCache } from "../_lib/shared-cache.js";
 import { errorResponse, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
+import { collectWbCards } from "../_lib/wb-cards.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -174,7 +175,7 @@ async function handleNativeRequest(context, pathname) {
     return jsonResponse({
       ok: true,
       backend: hasNativeStorageState(context.env) ? "cloudflare-native" : "proxy-only",
-      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/ai/*"],
+      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/ai/*"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       shared_cache: {
@@ -316,6 +317,14 @@ async function handleNativeRequest(context, pathname) {
     );
   }
 
+  if (pathname === "/api/wb-cards") {
+    const articles = String(requestUrl.searchParams.get("articles") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return jsonResponse(await collectWbCards({ articles }));
+  }
+
   return errorResponse(404, `Native handler for ${pathname} is not implemented.`);
 }
 
@@ -323,7 +332,7 @@ export async function onRequest(context) {
   const requestUrl = new URL(context.request.url);
   const pathname = requestUrl.pathname;
   const apiOrigin = sanitizeOrigin(context.env.API_ORIGIN);
-  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail"]);
+  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards"]);
 
   if (isAiRoute(pathname)) {
     try {
@@ -340,7 +349,7 @@ export async function onRequest(context) {
       return withSourceHeader(withHeader(jsonResponse(hydratedPayload), "x-xway-shared-cache", "hit"), "native");
     }
 
-    if (pathname === "/api/health" || pathname === "/api/catalog-article-snapshots" || hasNativeStorageState(context.env)) {
+    if (pathname === "/api/health" || pathname === "/api/catalog-article-snapshots" || pathname === "/api/wb-cards" || hasNativeStorageState(context.env)) {
       try {
         const nativeResponse = await handleNativeRequest(context, pathname);
         writeSharedApiResponse(context, pathname, requestUrl, nativeResponse);

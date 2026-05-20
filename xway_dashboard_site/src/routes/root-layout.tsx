@@ -76,7 +76,7 @@ export function RootLayout() {
       body.classList.add("page-view-articles");
     } else if (location.pathname.startsWith("/product")) {
       body.classList.add("page-view-product");
-    } else if (location.pathname.startsWith("/ai")) {
+    } else if (location.pathname.startsWith("/ai") || location.pathname.startsWith("/drr-analytics")) {
       body.classList.add("page-view-articles");
     }
     return () => {

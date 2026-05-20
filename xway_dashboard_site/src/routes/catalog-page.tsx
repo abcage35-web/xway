@@ -7335,6 +7335,14 @@ export function CatalogPage() {
             <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{formatDateRange(start, end)}</span>
           </>
         }
+        actions={
+          <Link
+            to="/drr-analytics"
+            className="metric-chip inline-flex items-center justify-center rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]"
+          >
+            Аналитика ДРР
+          </Link>
+        }
       />
 
       <CatalogStickyFilterShell

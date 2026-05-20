@@ -1,4 +1,4 @@
-import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, ProductsResponse, WbCardsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
@@ -615,6 +615,29 @@ export async function fetchProducts(options: {
     url.searchParams.set("heavy_campaign_ids", options.heavyCampaignIds.map((id) => String(id)).join(","));
   }
   return requestJson<ProductsResponse>(url.toString(), options.signal ?? options.request?.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
+}
+
+export async function fetchWbCards(options: {
+  request?: Request;
+  articles: string[];
+  forceRefresh?: boolean;
+  signal?: AbortSignal;
+}) {
+  const url = new URL("/api/wb-cards", buildBaseUrl(options.request));
+  url.searchParams.set("articles", options.articles.join(","));
+  if (options.forceRefresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return requestCachedJson<WbCardsResponse>(
+    url,
+    options.signal ?? options.request?.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "wb-cards",
+      bypassRead: options.forceRefresh,
+      shouldWrite: (response) => response.rows.length > 0,
+    },
+  );
 }
 
 export async function fetchCatalog(options: {

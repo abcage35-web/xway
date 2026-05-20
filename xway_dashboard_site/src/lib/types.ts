@@ -484,6 +484,25 @@ export interface ProductsResponse {
   requested_articles: string[];
 }
 
+export interface WbCardInfo {
+  article: string;
+  root: number | null;
+  feedbacks: number | null;
+  nm_feedbacks: number | null;
+  rating: number | null;
+  feedback_points: number | null;
+  price_spp: number | null;
+  total_quantity: number | null;
+}
+
+export interface WbCardsResponse {
+  ok: boolean;
+  generated_at: string;
+  requested_articles: string[];
+  rows: WbCardInfo[];
+  errors: Array<{ articles: string[]; error: string }>;
+}
+
 export interface CatalogArticleCampaignTypeMetrics {
   views?: number | string | null;
   clicks?: number | string | null;

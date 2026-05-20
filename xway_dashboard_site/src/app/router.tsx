@@ -5,6 +5,7 @@ import { getTodayIso, shiftIsoDate } from "../lib/format";
 import { RouteErrorBoundary } from "../routes/error-boundary";
 import { AiPage } from "../routes/ai-page";
 import { catalogLoader, CatalogPage } from "../routes/catalog-page";
+import { DrrAnalyticsPage } from "../routes/drr-analytics-page";
 import { productLoader, ProductPage } from "../routes/product-page";
 import { RootLayout } from "../routes/root-layout";
 
@@ -52,6 +53,12 @@ export const router = createBrowserRouter([
       {
         path: "ai",
         element: <AiPage />,
+        hydrateFallbackElement: <RouteLoadingScreen />,
+        errorElement: <RouteErrorBoundary />,
+      },
+      {
+        path: "drr-analytics",
+        element: <DrrAnalyticsPage />,
         hydrateFallbackElement: <RouteLoadingScreen />,
         errorElement: <RouteErrorBoundary />,
       },
