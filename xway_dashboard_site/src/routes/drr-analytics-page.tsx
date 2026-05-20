@@ -738,6 +738,7 @@ export function DrrAnalyticsPage() {
   const [wbLoading, setWbLoading] = useState(false);
   const [mpvibeLoading, setMpvibeLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mpvibeWarning, setMpvibeWarning] = useState<string | null>(null);
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string; days: number } | null>(null);
   const [drrSort, setDrrSort] = useState<SortState<DrrSortField>>({ field: "spend", direction: "desc" });
   const [stockSort, setStockSort] = useState<SortState<StockSortField>>({ field: "stock", direction: "desc" });
@@ -904,6 +905,7 @@ export function DrrAnalyticsPage() {
     mpvibeForceRefreshRef.current = forceRefresh;
     setLoading(true);
     setError(null);
+    setMpvibeWarning(null);
     try {
       const catalogPayload = await fetchCatalog({
         start: nextRange.start,
@@ -994,7 +996,9 @@ export function DrrAnalyticsPage() {
     })
       .then((response) => {
         if (response.errors.length && !response.rows.some((row) => row.stock_fbo !== null)) {
-          setError("MPVibe не вернул остатки FBO: остаток XWAY останется доступен, MPVibe-колонки можно догрузить повторным обновлением.");
+          setMpvibeWarning("MPVibe не вернул остатки FBO: остаток XWAY останется доступен, MPVibe-колонки можно догрузить повторным обновлением.");
+        } else {
+          setMpvibeWarning(null);
         }
         setMpvibeStockByArticle((current) => {
           const next = { ...current };
@@ -1006,7 +1010,7 @@ export function DrrAnalyticsPage() {
       })
       .catch((mpvibeError) => {
         if ((mpvibeError as Error).name !== "AbortError") {
-          setError(mpvibeError instanceof Error ? mpvibeError.message : "Не удалось загрузить остатки MPVibe.");
+          setMpvibeWarning(mpvibeError instanceof Error ? mpvibeError.message : "Не удалось загрузить остатки MPVibe.");
         }
       })
       .finally(() => {
@@ -1531,6 +1535,7 @@ export function DrrAnalyticsPage() {
             <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-ink)]">{formatNumber(rows.length)} товаров</span>
             {wbLoading ? <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)]">WB загружается</span> : null}
             {mpvibeLoading ? <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)]">MPVibe загружается</span> : null}
+            {mpvibeWarning && !mpvibeLoading ? <span className="metric-chip rounded-2xl px-3.5 py-2 text-sm font-medium text-amber-200">MPVibe: частично</span> : null}
           </>
         }
         actions={
@@ -1620,6 +1625,7 @@ export function DrrAnalyticsPage() {
           ) : null}
         </div>
         {error ? <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
+        {mpvibeWarning ? <div className="mt-4 rounded-2xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{mpvibeWarning}</div> : null}
       </SectionCard>
 
       <div className="grid gap-2.5 md:grid-cols-3">

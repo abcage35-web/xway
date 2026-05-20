@@ -509,6 +509,11 @@ function normalizeMainCard(card, article, parent = {}) {
   };
 }
 
+function mpvibeRequestError(source, error) {
+  const message = error instanceof Error ? error.message : asString(error) || "unknown error";
+  return `${source}: ${message}`;
+}
+
 export async function collectMpvibeArticle(env, { article, start, end } = {}) {
   const normalizedArticle = asString(article);
   if (!hasMpvibeAuth(env)) {
@@ -598,10 +603,41 @@ export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
     };
   }
 
-  const [mainPayload, stocksPayload] = await Promise.all([
+  const [mainResult, stocksResult] = await Promise.allSettled([
     mpvibeJson(env, "/api/realtime/mp/wb", { start_date: start, end_date: end }),
     mpvibeJson(env, "/api/realtime/mp/wb/stocks", { start_date: start, end_date: end }),
   ]);
+  const requestErrors = [];
+  if (mainResult.status === "rejected") {
+    requestErrors.push(mpvibeRequestError("realtime", mainResult.reason));
+  }
+  if (stocksResult.status === "rejected") {
+    requestErrors.push(mpvibeRequestError("stocks", stocksResult.reason));
+  }
+
+  const mainPayload = mainResult.status === "fulfilled" ? mainResult.value : null;
+  const stocksPayload = stocksResult.status === "fulfilled" ? stocksResult.value : null;
+
+  if (!mainPayload) {
+    const error = requestErrors.join(" | ") || "MPVibe realtime data is unavailable.";
+    return {
+      ok: true,
+      available: false,
+      generated_at: new Date().toISOString(),
+      range: { start, end },
+      requested_articles: requestedArticles,
+      rows: requestedArticles.map((article) => ({
+        article,
+        card_id: null,
+        account_id: null,
+        stock_fbo: null,
+        available: false,
+        error,
+      })),
+      errors: [{ articles: requestedArticles, error }],
+    };
+  }
+
   const indexedCards = indexRealtimeCardsByArticle(mainPayload, requestedArticles);
 
   const rows = requestedArticles.map((article) => {
@@ -618,7 +654,7 @@ export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
         error: `Article ${article} was not found in MPVibe realtime data.`,
       };
     }
-    const stocks = findStocksForCard(stocksPayload, cardId);
+    const stocks = stocksPayload ? findStocksForCard(stocksPayload, cardId) : null;
     const stockFbo = extractMpvibeStockValue(stocks?.stock) ?? extractMpvibeStockValue(mainCard?.stock_data);
     return {
       article,
@@ -632,16 +668,19 @@ export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
 
   return {
     ok: true,
-    available: true,
+    available: rows.some((row) => row.available),
     generated_at: new Date().toISOString(),
     range: { start, end },
     requested_articles: requestedArticles,
     rows,
-    errors: rows
-      .filter((row) => row.error)
-      .map((row) => ({
-        articles: [row.article],
-        error: row.error,
-      })),
+    errors: [
+      ...requestErrors.map((error) => ({ articles: requestedArticles, error })),
+      ...rows
+        .filter((row) => row.error)
+        .map((row) => ({
+          articles: [row.article],
+          error: row.error,
+        })),
+    ],
   };
 }

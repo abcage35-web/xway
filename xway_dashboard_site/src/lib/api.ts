@@ -659,9 +659,9 @@ export async function fetchMpvibeStocks(options: {
     options.signal ?? options.request?.signal,
     { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
     {
-      namespace: "mpvibe-stocks",
+      namespace: "mpvibe-stocks-v2",
       bypassRead: options.forceRefresh,
-      shouldWrite: (response) => response.rows.length > 0,
+      shouldWrite: (response) => response.available && response.rows.some((row) => row.stock_fbo !== null),
     },
   );
 }
