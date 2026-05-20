@@ -208,6 +208,24 @@ body.is-resizing-drr-column {
   max-width: 126px;
 }
 
+.drr-category-driver-table .data-table th {
+  height: 58px;
+  vertical-align: middle;
+}
+
+.drr-category-driver-table .drr-resizable-header {
+  min-height: 34px;
+}
+
+.drr-category-driver-table .catalog-sort-header-label {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.08;
+}
+
 .drr-analytics-controls {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
