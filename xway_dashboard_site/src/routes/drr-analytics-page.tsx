@@ -6,7 +6,7 @@ import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getToday
 import type { CatalogArticle, CatalogResponse, CatalogShop, WbCardInfo } from "../lib/types";
 import { EmptyState, MetricCard, MetricTable, PageHero, SectionCard, Tabs } from "../components/ui";
 
-type AnalyticsSection = "drr" | "stocks";
+type AnalyticsSection = "drr" | "stocks" | "categories";
 type SortDirection = "asc" | "desc";
 type DrrSortField =
   | "rank"
@@ -33,6 +33,18 @@ type StockSortField =
   | "enabled"
   | "shop"
   | "name";
+type CategorySortField =
+  | "rank"
+  | "category"
+  | "skuCount"
+  | "stock"
+  | "drr"
+  | "spend"
+  | "revenue"
+  | "ordersAds"
+  | "ordersTotal"
+  | "campaigns"
+  | "activeCampaigns";
 
 interface SortState<TField extends string> {
   field: TField | null;
@@ -47,6 +59,7 @@ interface AnalyticsRowBase {
   shopName: string;
   productUrl: string;
   imageUrl: string;
+  categoryKeyword: string;
   stock: number | null;
   spend: number | null;
   revenue: number | null;
@@ -68,6 +81,31 @@ interface DrrAnalyticsRow extends AnalyticsRowBase {
 
 type RankedDrrRow = DrrAnalyticsRow & { rank: number };
 type RankedStockRow = AnalyticsRowBase & { rank: number };
+interface CategoryDriverRow {
+  ref: string;
+  shopId: number;
+  shopName: string;
+  category: string;
+  skuCount: number;
+  stock: number;
+  spend: number;
+  revenue: number;
+  ordersAds: number;
+  ordersTotal: number;
+  views: number;
+  clicks: number;
+  atbs: number;
+  drr: number | null;
+  campaigns: number;
+  activeCampaigns: number;
+}
+
+type RankedCategoryDriverRow = CategoryDriverRow & { rank: number };
+type CategoryDriverShopGroup = {
+  shopId: number;
+  shopName: string;
+  rows: RankedCategoryDriverRow[];
+};
 type SortValue = string | number | boolean | null | undefined;
 
 const DEFAULT_DAYS = 3;
@@ -83,6 +121,8 @@ const RESIZABLE_COLUMN_CONFIG = {
   product: { default: 380, min: 240, max: 680 },
   links: { default: 106, min: 82, max: 170 },
   article: { default: 116, min: 94, max: 170 },
+  category: { default: 320, min: 180, max: 620 },
+  skuCount: { default: 104, min: 84, max: 160 },
   drr: { default: 86, min: 72, max: 130 },
   spend: { default: 128, min: 104, max: 200 },
   revenue: { default: 128, min: 104, max: 200 },
@@ -203,6 +243,7 @@ function flattenCatalogRows(payload: CatalogResponse | null, days: number): Anal
         shopName: shop.name,
         productUrl: article.product_url,
         imageUrl: article.image_url,
+        categoryKeyword: article.category_keyword,
         stock,
         spend: toNumber(article.expense_sum),
         revenue: toNumber(article.sum_price),
@@ -250,6 +291,99 @@ function sortRows<T extends { article: string }>(rows: T[], sort: SortState<stri
     const result = compareSortValues(resolveValue(left, sort.field!), resolveValue(right, sort.field!)) || String(left.article).localeCompare(String(right.article), "ru");
     return sort.direction === "asc" ? result : -result;
   });
+}
+
+function sortNamedRows<T extends { ref: string }>(rows: T[], sort: SortState<string>, resolveValue: (row: T, field: string) => SortValue) {
+  if (!sort.field) {
+    return rows;
+  }
+  return [...rows].sort((left, right) => {
+    const result = compareSortValues(resolveValue(left, sort.field!), resolveValue(right, sort.field!)) || String(left.ref).localeCompare(String(right.ref), "ru");
+    return sort.direction === "asc" ? result : -result;
+  });
+}
+
+function buildCategoryDriverGroups(payload: CatalogResponse | null, sort: SortState<CategorySortField>): CategoryDriverShopGroup[] {
+  if (!payload) {
+    return [];
+  }
+  return payload.shops
+    .map((shop) => {
+      const categoriesByName = new Map<string, CategoryDriverRow>();
+      shop.articles.forEach((article) => {
+        const category = String(article.category_keyword || "").trim() || "Без категории";
+        const key = category.toLocaleLowerCase("ru");
+        const current =
+          categoriesByName.get(key) ||
+          ({
+            ref: `${shop.id}:${key}`,
+            shopId: shop.id,
+            shopName: shop.name,
+            category,
+            skuCount: 0,
+            stock: 0,
+            spend: 0,
+            revenue: 0,
+            ordersAds: 0,
+            ordersTotal: 0,
+            views: 0,
+            clicks: 0,
+            atbs: 0,
+            drr: null,
+            campaigns: 0,
+            activeCampaigns: 0,
+          } satisfies CategoryDriverRow);
+        current.skuCount += 1;
+        current.stock += toNumber(article.stock) ?? 0;
+        current.spend += toNumber(article.expense_sum) ?? 0;
+        current.revenue += toNumber(article.sum_price) ?? 0;
+        current.ordersAds += toNumber(article.orders) ?? 0;
+        current.ordersTotal += toNumber(article.ordered_report) ?? 0;
+        current.views += toNumber(article.views) ?? 0;
+        current.clicks += toNumber(article.clicks) ?? 0;
+        current.atbs += toNumber(article.atbs) ?? 0;
+        current.campaigns += article.campaign_states.length;
+        current.activeCampaigns += article.campaign_states.filter((campaign) => campaign.active).length;
+        categoriesByName.set(key, current);
+      });
+      const rows = [...categoriesByName.values()].map((row) => ({
+        ...row,
+        drr: row.revenue > 0 ? (row.spend / row.revenue) * 100 : null,
+      }));
+      const sortedRows = sortNamedRows<CategoryDriverRow>(rows, sort, (row, field) => {
+        switch (field as CategorySortField) {
+          case "rank":
+            return rows.indexOf(row) + 1;
+          case "category":
+            return row.category;
+          case "skuCount":
+            return row.skuCount;
+          case "stock":
+            return row.stock;
+          case "drr":
+            return row.drr;
+          case "spend":
+            return row.spend;
+          case "revenue":
+            return row.revenue;
+          case "ordersAds":
+            return row.ordersAds;
+          case "ordersTotal":
+            return row.ordersTotal;
+          case "campaigns":
+            return row.campaigns;
+          case "activeCampaigns":
+          default:
+            return row.activeCampaigns;
+        }
+      });
+      return {
+        shopId: shop.id,
+        shopName: shop.name,
+        rows: sortedRows.map((row, index) => ({ ...row, rank: index + 1 })),
+      };
+    })
+    .filter((group) => group.rows.length > 0);
 }
 
 function formatReviewCell(wb?: WbCardInfo | null) {
@@ -361,6 +495,7 @@ export function DrrAnalyticsPage() {
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string; days: number } | null>(null);
   const [drrSort, setDrrSort] = useState<SortState<DrrSortField>>({ field: "spend", direction: "desc" });
   const [stockSort, setStockSort] = useState<SortState<StockSortField>>({ field: "stock", direction: "desc" });
+  const [categorySort, setCategorySort] = useState<SortState<CategorySortField>>({ field: "spend", direction: "desc" });
   const [columnWidths, setColumnWidths] = useState<ColumnWidthState>(readStoredColumnWidths);
   const abortRef = useRef<AbortController | null>(null);
   const wbAbortRef = useRef<AbortController | null>(null);
@@ -444,9 +579,12 @@ export function DrrAnalyticsPage() {
     });
     return sorted.slice(0, limit).map((row, index) => ({ ...row, rank: index + 1 }));
   }, [limit, rows, stockSort]);
+  const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(payload, categorySort), [categorySort, payload]);
+  const categoryRowsCount = categoryShopGroups.reduce((sum, group) => sum + group.rows.length, 0);
 
   const drrHeader = useSortableHeader<DrrSortField>(drrSort, setDrrSort);
   const stockHeader = useSortableHeader<StockSortField>(stockSort, setStockSort);
+  const categoryHeader = useSortableHeader<CategorySortField>(categorySort, setCategorySort);
   const columnWidthProps = (columnKey: ResizableColumnKey) => ({
     width: columnWidths[columnKey],
     minWidth: RESIZABLE_COLUMN_CONFIG[columnKey].min,
@@ -847,6 +985,102 @@ export function DrrAnalyticsPage() {
     },
   ];
 
+  const categoryColumns = [
+    {
+      key: "rank",
+      ...columnWidthProps("rank"),
+      header: resizableHeader(categoryHeader("rank", "#", { ariaLabel: "Номер строки" }), "rank"),
+      headerClassName: "drr-col-rank",
+      cellClassName: "drr-col-rank",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.rank),
+    },
+    {
+      key: "category",
+      ...columnWidthProps("category"),
+      header: resizableHeader(categoryHeader("category", "Категория", { ariaLabel: "Категория" }), "category"),
+      headerClassName: "drr-col-category",
+      cellClassName: "drr-col-category",
+      render: (row: RankedCategoryDriverRow) => (
+        <div className="drr-category-cell">
+          <strong title={row.category}>{row.category}</strong>
+          <span>{row.shopName}</span>
+        </div>
+      ),
+    },
+    {
+      key: "skuCount",
+      ...columnWidthProps("skuCount"),
+      header: resizableHeader(categoryHeader("skuCount", "SKU", { ariaLabel: "SKU" }), "skuCount"),
+      headerClassName: "drr-col-sku",
+      cellClassName: "drr-col-sku",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.skuCount),
+    },
+    {
+      key: "drr",
+      ...columnWidthProps("drr"),
+      header: resizableHeader(categoryHeader("drr", "ДРР", { ariaLabel: "ДРР" }), "drr"),
+      headerClassName: "drr-col-small",
+      cellClassName: "drr-col-small",
+      render: (row: RankedCategoryDriverRow) => formatPercent(row.drr),
+    },
+    {
+      key: "spend",
+      ...columnWidthProps("spend"),
+      header: resizableHeader(categoryHeader("spend", "Расход за период", { ariaLabel: "Расход" }), "spend"),
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
+      render: (row: RankedCategoryDriverRow) => formatMoney(row.spend),
+    },
+    {
+      key: "revenue",
+      ...columnWidthProps("revenue"),
+      header: resizableHeader(categoryHeader("revenue", "Выручка РК", { ariaLabel: "Выручка РК" }), "revenue"),
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
+      render: (row: RankedCategoryDriverRow) => formatMoney(row.revenue),
+    },
+    {
+      key: "ordersAds",
+      ...columnWidthProps("ordersAds"),
+      header: resizableHeader(categoryHeader("ordersAds", "Заказы РК", { ariaLabel: "Заказы РК" }), "ordersAds"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.ordersAds),
+    },
+    {
+      key: "ordersTotal",
+      ...columnWidthProps("ordersTotal"),
+      header: resizableHeader(categoryHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }), "ordersTotal"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.ordersTotal),
+    },
+    {
+      key: "stock",
+      ...columnWidthProps("stock"),
+      header: resizableHeader(categoryHeader("stock", "Остаток", { ariaLabel: "Остаток" }), "stock"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.stock),
+    },
+    {
+      key: "activeCampaigns",
+      ...columnWidthProps("activeCampaigns"),
+      header: resizableHeader(categoryHeader("activeCampaigns", "Активные РК", { ariaLabel: "Активные РК" }), "activeCampaigns"),
+      headerClassName: "drr-col-status",
+      cellClassName: "drr-col-status",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.activeCampaigns),
+    },
+    {
+      key: "campaigns",
+      ...columnWidthProps("campaigns"),
+      header: resizableHeader(categoryHeader("campaigns", "РК всего", { ariaLabel: "РК всего" }), "campaigns"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedCategoryDriverRow) => formatNumber(row.campaigns),
+    },
+  ];
+
   return (
     <div className="drr-analytics-page space-y-6">
       <PageHero
@@ -872,6 +1106,7 @@ export function DrrAnalyticsPage() {
         items={[
           { value: "drr", label: "Аналитика ДРР", count: drrRows.length },
           { value: "stocks", label: "Остатки", count: stockRows.length },
+          { value: "categories", label: "Категорийные драйверы", count: categoryRowsCount },
         ]}
       />
 
@@ -901,16 +1136,18 @@ export function DrrAnalyticsPage() {
               onChange={(event) => setDaysInput(event.target.value)}
             />
           </label>
-          <label className="drr-analytics-input metric-chip">
-            <span>Артикулов к выводу</span>
-            <input
-              type="number"
-              min={1}
-              max={MAX_LIMIT}
-              value={limitInput}
-              onChange={(event) => setLimitInput(event.target.value)}
-            />
-          </label>
+          {section !== "categories" ? (
+            <label className="drr-analytics-input metric-chip">
+              <span>Артикулов к выводу</span>
+              <input
+                type="number"
+                min={1}
+                max={MAX_LIMIT}
+                value={limitInput}
+                onChange={(event) => setLimitInput(event.target.value)}
+              />
+            </label>
+          ) : null}
           {section === "stocks" ? (
             <label className="drr-analytics-input metric-chip">
               <span>Ошибка: реклама выкл. при остатке больше</span>
@@ -932,8 +1169,17 @@ export function DrrAnalyticsPage() {
 
       <div className="grid gap-2.5 md:grid-cols-3">
         <MetricCard label="Расход за период" value={formatMoney(totalSpend)} density="compact" />
-        <MetricCard label="Топ ДРР" value={formatNumber(topDrrRows.length)} hint={`из лимита ${formatNumber(limit)}`} density="compact" />
-        <MetricCard label="Остатки без расхода" value={formatNumber(zeroSpendStockCount)} hint={`остаток > ${formatNumber(STOCK_MIN_VALUE)}`} density="compact" />
+        {section === "categories" ? (
+          <>
+            <MetricCard label="Категорий" value={formatNumber(categoryRowsCount)} hint={`${formatNumber(categoryShopGroups.length)} кабинетов`} density="compact" />
+            <MetricCard label="Товаров в срезе" value={formatNumber(rows.length)} density="compact" />
+          </>
+        ) : (
+          <>
+            <MetricCard label="Топ ДРР" value={formatNumber(topDrrRows.length)} hint={`из лимита ${formatNumber(limit)}`} density="compact" />
+            <MetricCard label="Остатки без расхода" value={formatNumber(zeroSpendStockCount)} hint={`остаток > ${formatNumber(STOCK_MIN_VALUE)}`} density="compact" />
+          </>
+        )}
       </div>
 
       {section === "drr" ? (
@@ -954,7 +1200,7 @@ export function DrrAnalyticsPage() {
             <EmptyState title="Нет данных" text="Нажмите обновить или измените период." />
           )}
         </SectionCard>
-      ) : (
+      ) : section === "stocks" ? (
         <SectionCard
           title="Остатки"
           caption={`Товары с остатком FBO больше ${formatNumber(STOCK_MIN_VALUE)} и нулевым рекламным расходом за выбранный период. Красная реклама: выключена при остатке больше ${formatNumber(adOffErrorStockThreshold)}.`}
@@ -972,6 +1218,31 @@ export function DrrAnalyticsPage() {
             <EmptyState title="Нет данных" text="Нажмите обновить или измените период." />
           )}
         </SectionCard>
+      ) : (
+        <div className="space-y-4">
+          {categoryShopGroups.length ? (
+            categoryShopGroups.map((group) => (
+              <SectionCard
+                key={group.shopId}
+                title={group.shopName}
+                caption={`Все категории кабинета за период: ${formatNumber(group.rows.length)} категорий, ${formatNumber(group.rows.reduce((sum, row) => sum + row.skuCount, 0))} SKU.`}
+              >
+                <MetricTable
+                  rows={group.rows}
+                  columns={categoryColumns}
+                  stickyHeader
+                  stickyHeaderClassName="drr-analytics-sticky-header"
+                  getRowKey={(row) => row.ref}
+                  emptyText="По кабинету нет категорий за выбранный период."
+                />
+              </SectionCard>
+            ))
+          ) : (
+            <SectionCard title="Категорийные драйверы" caption="Категории появятся после загрузки каталога.">
+              <EmptyState title="Нет данных" text="Нажмите обновить или измените период." />
+            </SectionCard>
+          )}
+        </div>
       )}
     </div>
   );

@@ -142,6 +142,18 @@ body.is-resizing-drr-column {
   max-width: 116px;
 }
 
+.drr-col-category {
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+}
+
+.drr-col-sku {
+  width: 104px;
+  min-width: 104px;
+  max-width: 104px;
+}
+
 .drr-col-small {
   width: 86px;
   min-width: 86px;
@@ -285,6 +297,34 @@ body.is-resizing-drr-column {
 }
 
 .drr-analytics-product-copy span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drr-category-cell {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.drr-category-cell strong {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 0.9rem;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drr-category-cell span {
   display: block;
   max-width: 100%;
   overflow: hidden;
