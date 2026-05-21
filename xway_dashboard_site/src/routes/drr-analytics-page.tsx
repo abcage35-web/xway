@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "react-router";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { fetchCatalog, fetchMpvibeStocks, fetchWbCards } from "../lib/api";
 import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
 import type { CatalogArticle, CatalogResponse, CatalogShop, MpvibeStockInfo, MpvibeStocksResponse, WbCardInfo } from "../lib/types";
@@ -149,6 +149,9 @@ const AD_OFF_ERROR_STOCK_THRESHOLD_STORAGE_KEY = "xway-drr-analytics-ad-off-erro
 const DEFAULT_CATEGORY_MIN_STOCK = 100;
 const CATEGORY_MIN_STOCK_STORAGE_KEY = "xway-drr-analytics-category-min-stock";
 const DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY = "xway-drr-analytics-column-widths-v1";
+const CATEGORY_DRIVER_PIE_TOOLTIP_WIDTH = 280;
+const CATEGORY_DRIVER_PIE_TOOLTIP_GAP = 12;
+const CATEGORY_DRIVER_PIE_TOOLTIP_EDGE = 8;
 const CATEGORY_DRIVER_CHART_COLORS = [
   "#ff8a2d",
   "#8b64f6",
@@ -676,16 +679,10 @@ function WbLink({ article }: { article: string }) {
 }
 
 function CategoryDriverPieTooltip({
-  active,
-  payload,
+  slice,
 }: {
-  active?: boolean;
-  payload?: Array<{ payload?: CategoryDriverPieSlice }>;
+  slice: CategoryDriverPieSlice;
 }) {
-  const slice = payload?.[0]?.payload;
-  if (!active || !slice) {
-    return null;
-  }
   const row = slice.row;
   return (
     <div className="drr-category-pie-tooltip">
@@ -724,6 +721,32 @@ function CategoryDriverPieTooltip({
   );
 }
 
+function CategoryDriverPieLegend({
+  slices,
+  total,
+}: {
+  slices: CategoryDriverPieSlice[];
+  total: number;
+}) {
+  return (
+    <div className="drr-category-pie-legend" aria-label="Легенда категорий">
+      {slices.map((slice) => {
+        const share = total > 0 ? (slice.value / total) * 100 : null;
+        return (
+          <div key={`${slice.key}-legend`} className="drr-category-pie-legend-item" title={slice.name}>
+            <span className="drr-category-pie-legend-dot" style={{ ["--slice-color" as string]: slice.color }} />
+            <span className="drr-category-pie-legend-name">{slice.name}</span>
+            <span className="drr-category-pie-legend-value">
+              {formatMoney(slice.value)}
+              {share !== null ? <small>{formatPercent(share)}</small> : null}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CategoryDriverPie({
   rows,
   metric,
@@ -737,6 +760,27 @@ function CategoryDriverPie({
 }) {
   const slices = buildCategoryDriverPieSlices(rows, metric);
   const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [activeSlice, setActiveSlice] = useState<CategoryDriverPieSlice | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const updateTooltipPosition = (event: { clientX: number; clientY: number }) => {
+    const rect = bodyRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    let x = pointerX + CATEGORY_DRIVER_PIE_TOOLTIP_GAP;
+    if (x + CATEGORY_DRIVER_PIE_TOOLTIP_WIDTH > rect.width - CATEGORY_DRIVER_PIE_TOOLTIP_EDGE) {
+      x = pointerX - CATEGORY_DRIVER_PIE_TOOLTIP_WIDTH - CATEGORY_DRIVER_PIE_TOOLTIP_GAP;
+    }
+    setTooltipPosition({
+      x: Math.round(Math.max(CATEGORY_DRIVER_PIE_TOOLTIP_EDGE, Math.min(x, rect.width - CATEGORY_DRIVER_PIE_TOOLTIP_WIDTH - CATEGORY_DRIVER_PIE_TOOLTIP_EDGE))),
+      y: Math.round(Math.max(CATEGORY_DRIVER_PIE_TOOLTIP_EDGE, pointerY)),
+    });
+  };
+
   return (
     <div className="drr-category-pie">
       <div className="drr-category-pie-head">
@@ -744,30 +788,61 @@ function CategoryDriverPie({
         <strong>{formatMoney(total)}</strong>
       </div>
       {slices.length ? (
-        <div className="drr-category-pie-body">
-          <ResponsiveContainer width="100%" height={230}>
-            <PieChart margin={{ top: 10, right: 8, bottom: 10, left: 8 }}>
-              <Pie
-                data={slices}
-                dataKey="value"
-                nameKey="name"
-                innerRadius="54%"
-                outerRadius="82%"
-                paddingAngle={slices.length > 1 ? 1 : 0}
-                stroke="rgba(9, 13, 24, 0.92)"
-                strokeWidth={2}
-              >
-                {slices.map((slice) => (
-                  <Cell key={slice.key} fill={slice.color} />
-                ))}
-              </Pie>
-              <Tooltip content={<CategoryDriverPieTooltip />} wrapperClassName="drr-category-pie-tooltip-wrap" />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="drr-category-pie-total" aria-hidden="true">
-            <span>{totalLabel}</span>
-            <strong>{formatMoney(total)}</strong>
+        <div
+          ref={bodyRef}
+          className="drr-category-pie-body"
+          onPointerMove={(event) => {
+            if (activeSlice) {
+              updateTooltipPosition(event);
+            }
+          }}
+          onPointerLeave={() => {
+            setActiveSlice(null);
+            setTooltipPosition(null);
+          }}
+        >
+          <div className="drr-category-pie-plot">
+            <ResponsiveContainer width="100%" height={230}>
+              <PieChart margin={{ top: 10, right: 8, bottom: 10, left: 8 }}>
+                <Pie
+                  data={slices}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius="54%"
+                  outerRadius="82%"
+                  paddingAngle={slices.length > 1 ? 1 : 0}
+                  stroke="rgba(9, 13, 24, 0.92)"
+                  strokeWidth={2}
+                  onMouseEnter={(_slice, index, event) => {
+                    setActiveSlice(slices[index] ?? null);
+                    if (event && "clientX" in event && "clientY" in event) {
+                      updateTooltipPosition(event);
+                    }
+                  }}
+                >
+                  {slices.map((slice) => (
+                    <Cell key={slice.key} fill={slice.color} />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="drr-category-pie-total" aria-hidden="true">
+              <span>{totalLabel}</span>
+              <strong>{formatMoney(total)}</strong>
+            </div>
           </div>
+          <CategoryDriverPieLegend slices={slices} total={total} />
+          {activeSlice && tooltipPosition ? (
+            <div
+              className="drr-category-pie-hover-tooltip"
+              style={{
+                ["--tooltip-x" as string]: `${tooltipPosition.x}px`,
+                ["--tooltip-y" as string]: `${tooltipPosition.y}px`,
+              }}
+            >
+              <CategoryDriverPieTooltip slice={activeSlice} />
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="drr-category-pie-empty">Нет данных</div>
