@@ -172,9 +172,21 @@ function mpvibeRefreshCookieHeader(env) {
   return String(env.MPVIBE_REFRESH_COOKIE_HEADER || env.MPVIBE_COOKIE_HEADER || "").trim();
 }
 
+function mpvibeDirectCookieHeader(env) {
+  return String(env.MPVIBE_COOKIE_HEADER || "").trim();
+}
+
 function mpvibeTimezoneOffset(env) {
   const value = Number.parseInt(String(env.MPVIBE_TIMEZONE_OFFSET || "-240"), 10);
   return Number.isFinite(value) ? value : -240;
+}
+
+function mpvibeRefreshErrorMessage(status, text, statusText) {
+  const detail = text.slice(0, 240) || statusText;
+  if (/Before updating the AccessToken you must receive RefreshToken/i.test(detail)) {
+    return `MPVibe token refresh failed (${status}): refresh cookie is expired or does not include RefreshToken. Update MPVIBE_REFRESH_COOKIE_HEADER from auth.mpvibe.ru, or set a fresh MPVIBE_AUTHORIZATION.`;
+  }
+  return `MPVibe token refresh failed (${status}): ${detail}`;
 }
 
 async function refreshMpvibeAuthorization(env) {
@@ -204,7 +216,7 @@ async function refreshMpvibeAuthorization(env) {
         payload = null;
       }
       if (!response.ok) {
-        throw new Error(`MPVibe token refresh failed (${response.status}): ${text.slice(0, 240) || response.statusText}`);
+        throw new Error(mpvibeRefreshErrorMessage(response.status, text, response.statusText));
       }
       const authorization = normalizeBearer(payload?.token);
       if (!authorization) {
@@ -221,23 +233,21 @@ async function refreshMpvibeAuthorization(env) {
 }
 
 async function resolveMpvibeAuthorization(env, { forceRefresh = false } = {}) {
-  if (!forceRefresh) {
-    const cached = await readCachedMpvibeAuthorization(env);
-    if (cached) {
-      return cached;
-    }
-
-    const configured = normalizeBearer(env.MPVIBE_AUTHORIZATION);
-    if (isUsableAuthorization(configured)) {
-      return configured;
-    }
-  }
-
-  if (mpvibeRefreshCookieHeader(env)) {
+  if (forceRefresh && mpvibeRefreshCookieHeader(env)) {
     return refreshMpvibeAuthorization(env);
   }
 
-  return normalizeBearer(env.MPVIBE_AUTHORIZATION);
+  const cached = await readCachedMpvibeAuthorization(env);
+  if (cached) {
+    return cached;
+  }
+
+  const configured = normalizeBearer(env.MPVIBE_AUTHORIZATION);
+  if (!forceRefresh && isUsableAuthorization(configured)) {
+    return configured;
+  }
+
+  return configured;
 }
 
 async function mpvibeHeaders(env, { authorization } = {}) {
@@ -246,7 +256,7 @@ async function mpvibeHeaders(env, { authorization } = {}) {
     origin: "https://m.mpvibe.ru",
     referer: "https://m.mpvibe.ru/",
   });
-  const cookieHeader = String(env.MPVIBE_COOKIE_HEADER || "").trim();
+  const cookieHeader = mpvibeDirectCookieHeader(env);
   if (cookieHeader) {
     headers.set("cookie", cookieHeader);
   }

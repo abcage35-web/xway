@@ -4,7 +4,7 @@ import { Link } from "react-router";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { fetchCatalog, fetchMpvibeStocks, fetchWbCards } from "../lib/api";
 import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
-import type { CatalogArticle, CatalogResponse, CatalogShop, MpvibeStockInfo, WbCardInfo } from "../lib/types";
+import type { CatalogArticle, CatalogResponse, CatalogShop, MpvibeStockInfo, MpvibeStocksResponse, WbCardInfo } from "../lib/types";
 import { EmptyState, MetricCard, MetricTable, PageHero, SectionCard, Tabs } from "../components/ui";
 import type { TableColumn } from "../components/ui";
 
@@ -540,6 +540,19 @@ function withSourceSummaries<T>(columns: Array<TableColumn<T>>, sources: Record<
   }));
 }
 
+function resolveMpvibeStockWarning(response: MpvibeStocksResponse) {
+  if (response.rows.some((row) => row.stock_fbo !== null)) {
+    return null;
+  }
+  const firstError = response.errors.map((item) => String(item.error || "").replace(/\s+/g, " ").trim()).find(Boolean);
+  if (/RefreshToken|refresh cookie|token refresh|MPVIBE_REFRESH_COOKIE_HEADER|MPVIBE_AUTHORIZATION/i.test(firstError || "")) {
+    return "MPVibe не авторизован: обновите MPVIBE_REFRESH_COOKIE_HEADER из auth.mpvibe.ru или задайте свежий MPVIBE_AUTHORIZATION в Cloudflare Pages.";
+  }
+  return firstError
+    ? `MPVibe не вернул остатки FBO: ${firstError}`
+    : "MPVibe не вернул остатки FBO: остаток XWAY останется доступен, MPVibe-колонки можно догрузить повторным обновлением.";
+}
+
 function useSortableHeader<TField extends string>(
   sort: SortState<TField>,
   setSort: (sort: SortState<TField>) => void,
@@ -995,11 +1008,7 @@ export function DrrAnalyticsPage() {
       signal: abortController.signal,
     })
       .then((response) => {
-        if (response.errors.length && !response.rows.some((row) => row.stock_fbo !== null)) {
-          setMpvibeWarning("MPVibe не вернул остатки FBO: остаток XWAY останется доступен, MPVibe-колонки можно догрузить повторным обновлением.");
-        } else {
-          setMpvibeWarning(null);
-        }
+        setMpvibeWarning(response.errors.length ? resolveMpvibeStockWarning(response) : null);
         setMpvibeStockByArticle((current) => {
           const next = { ...current };
           response.rows.forEach((row) => {
