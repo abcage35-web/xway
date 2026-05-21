@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, ExternalLink, Key, MessageSquare, RefreshCw, Send } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, FileText, Key, RefreshCw, Send } from "lucide-react";
 import { Link } from "react-router";
 import { fetchPachkaReport, sendPachkaReport } from "../lib/api";
 import { cn, formatDateRange, formatDateTime, formatMoney, formatNumber, formatPercent } from "../lib/format";
@@ -17,6 +17,17 @@ function readApiError(error: unknown) {
 
 function statusLabel(value: boolean) {
   return value ? "настроено" : "не настроено";
+}
+
+function formatFileSize(value: number | null | undefined) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) {
+    return "—";
+  }
+  if (size < 1024) {
+    return `${formatNumber(size)} Б`;
+  }
+  return `${formatNumber(size / 1024, 1)} КБ`;
 }
 
 function StatusPill({
@@ -121,7 +132,7 @@ export function PachkaReportPage() {
   const sendDisabled = !configReady || !secret.trim() || sendState === "sending";
   const rangeLabel = report ? formatDateRange(report.range.start, report.range.end) : "Диапазон";
   const generatedLabel = report?.generated_at ? formatDateTime(report.generated_at) : "—";
-  const messageLines = useMemo(() => (report?.message || "").split("\n").length, [report?.message]);
+  const markdownLines = useMemo(() => (report?.markdown || "").split("\n").length, [report?.markdown]);
   const stockMinValue = report?.config.stock_min_value ?? 100;
 
   const handleSend = async (event: FormEvent) => {
@@ -173,8 +184,8 @@ export function PachkaReportPage() {
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <SectionCard
-          title="Сообщение"
-          caption={report ? `${messageLines} строк · ${report.config.cron} UTC` : "Предпросмотр"}
+          title="Markdown файл"
+          caption={report ? `${report.file.name} · ${markdownLines} строк · ${formatFileSize(report.file.size)} · ${report.config.cron} UTC` : "Предпросмотр"}
           actions={
             <button
               type="button"
@@ -187,7 +198,7 @@ export function PachkaReportPage() {
             </button>
           }
         >
-          <pre className="pachka-message-preview">{report?.message || "Нет данных для предпросмотра."}</pre>
+          <pre className="pachka-message-preview">{report?.markdown || "Нет данных для предпросмотра файла."}</pre>
         </SectionCard>
 
         <SectionCard title="Pachka" caption="Статус интеграции">
@@ -207,6 +218,10 @@ export function PachkaReportPage() {
             <div>
               <span>MPVibe</span>
               <StatusPill active={Boolean(report?.sources.mpvibe.available)} label={report?.sources.mpvibe.available ? "доступен" : "недоступен"} />
+            </div>
+            <div>
+              <span>Файл</span>
+              <StatusPill active={Boolean(report?.file.name)} label={report?.file.name || "не сформирован"} />
             </div>
           </div>
 
@@ -229,11 +244,11 @@ export function PachkaReportPage() {
             </label>
             <button type="submit" disabled={sendDisabled}>
               {sendState === "sending" ? <RefreshCw className="size-4 animate-spin" /> : <Send className="size-4" />}
-              Отправить
+              Отправить файл
             </button>
           </form>
 
-          {sendState === "sent" ? <div className="pachka-alert is-success">Сообщение отправлено.</div> : null}
+          {sendState === "sent" ? <div className="pachka-alert is-success">Markdown файл отправлен.</div> : null}
           {sendError ? <div className="pachka-alert is-error">{sendError}</div> : null}
           {!configReady && report ? <div className="pachka-alert is-warning">Не хватает серверной настройки для отправки.</div> : null}
         </SectionCard>
@@ -252,8 +267,8 @@ export function PachkaReportPage() {
       </section>
 
       <div className="pachka-footer-note">
-        <MessageSquare className="size-4" />
-        Ежедневная отправка идёт отдельным Cloudflare cron worker раз в 24 часа.
+        <FileText className="size-4" />
+        Ежедневная отправка прикладывает этот .md файл отдельным Cloudflare cron worker раз в 24 часа.
       </div>
     </div>
   );

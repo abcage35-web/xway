@@ -570,6 +570,12 @@ export interface PachkaReportResponse {
   stock_no_spend: PachkaReportRow[];
   mpvibe_only_stock: PachkaReportRow[];
   message: string;
+  markdown: string;
+  file: {
+    name: string;
+    type: string;
+    size: number;
+  };
   config: {
     enabled: boolean;
     token_configured: boolean;
@@ -589,6 +595,12 @@ export interface PachkaReportSendResponse {
   reason?: string;
   sent_at: string | null;
   report: PachkaReportResponse | null;
+  file?: {
+    key: string;
+    name: string;
+    file_type: string;
+    size: number;
+  } | null;
   pachka: unknown;
 }
 

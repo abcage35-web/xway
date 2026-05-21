@@ -154,40 +154,101 @@ function shortName(value, max = 54) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function rowLine(row, index, metric) {
-  const stockText = `FBO XWAY/MPVibe ${formatNumber(row.stock_xway)}/${formatNumber(row.stock_mpvibe)}`;
-  if (metric === "drr") {
-    return `${index + 1}. ${row.article} ${shortName(row.name)} — ДРР ${formatPercent(row.drr)}, расход ${formatMoney(row.spend)}, ${stockText}`;
-  }
-  return `${index + 1}. ${row.article} ${shortName(row.name)} — ${stockText}, расход ${formatMoney(row.spend)}`;
+function markdownCell(value) {
+  return asString(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ") || "-";
 }
 
-function buildMessage(report, env) {
+function markdownTable(headers, rows) {
+  if (!rows.length) {
+    return "Нет строк.\n";
+  }
+  const headerLine = `| ${headers.map(markdownCell).join(" | ")} |`;
+  const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
+  return `${[headerLine, separatorLine, ...rows.map((row) => `| ${row.map(markdownCell).join(" | ")} |`)].join("\n")}\n`;
+}
+
+function buildReportFileName(report) {
+  return `xway-report-${report.range.end}.md`;
+}
+
+function buildPachkaMarkdown(report, env) {
   const prefix = asString(env.PACHKA_REPORT_MESSAGE_PREFIX) || "Ежедневный отчет XWAY";
   const stockThreshold = report.config?.stock_min_value ?? DEFAULT_STOCK_MIN_VALUE;
   const lines = [
-    `${prefix}`,
+    `# ${prefix}`,
+    "",
     `Период: ${report.range.start} - ${report.range.end}`,
-    `Расход: ${formatMoney(report.totals.spend)} · SKU XWAY: ${formatNumber(report.totals.xway_rows)} · MPVibe-only FBO: ${formatNumber(report.totals.mpvibe_only_rows)}`,
-    `Остатки > ${formatNumber(stockThreshold)} без расхода: ${formatNumber(report.totals.zero_spend_stock_rows)} · MPVibe: ${report.sources.mpvibe.available ? "доступен" : "недоступен"}`,
+    `Сформировано: ${report.generated_at}`,
+    "",
+    "## Сводка",
+    "",
+    markdownTable(
+      ["Метрика", "Значение"],
+      [
+        ["Расход", formatMoney(report.totals.spend)],
+        ["SKU XWAY", formatNumber(report.totals.xway_rows)],
+        ["MPVibe-only FBO", formatNumber(report.totals.mpvibe_only_rows)],
+        [`Остатки > ${formatNumber(stockThreshold)} без расхода`, formatNumber(report.totals.zero_spend_stock_rows)],
+        ["MPVibe", report.sources.mpvibe.available ? "доступен" : "недоступен"],
+      ],
+    ),
   ];
   if (report.warnings.length) {
-    lines.push(`Предупреждения: ${report.warnings.join("; ")}`);
-  }
-  lines.push("");
-  lines.push("Топ ДРР:");
-  lines.push(...(report.top_drr.length ? report.top_drr.map((row, index) => rowLine(row, index, "drr")) : ["Нет строк с расходом и ДРР."]));
-  lines.push("");
-  lines.push(`FBO > ${formatNumber(stockThreshold)} без расхода:`);
-  lines.push(...(report.stock_no_spend.length ? report.stock_no_spend.map((row, index) => rowLine(row, index, "stock")) : [`Нет строк с FBO остатком > ${formatNumber(stockThreshold)} и нулевым расходом.`]));
-  if (report.mpvibe_only_stock.length) {
     lines.push("");
-    lines.push(`Только MPVibe FBO > ${formatNumber(stockThreshold)}:`);
-    lines.push(...report.mpvibe_only_stock.map((row, index) => `${index + 1}. ${row.article} ${shortName(row.name)} — FBO ${formatNumber(row.stock_mpvibe)}`));
+    lines.push("## Предупреждения");
+    lines.push("");
+    report.warnings.forEach((warning) => lines.push(`- ${warning}`));
   }
   lines.push("");
-  lines.push(`${asString(env.PACHKA_REPORT_DASHBOARD_URL) || "https://xway-bt4.pages.dev/drr-analytics"}`);
+  lines.push("## Топ ДРР");
+  lines.push("");
+  lines.push(markdownTable(
+    ["#", "Артикул", "Товар", "ДРР", "Расход", "FBO XWAY", "FBO MPVibe"],
+    report.top_drr.map((row, index) => [
+      String(index + 1),
+      row.article,
+      shortName(row.name, 90),
+      formatPercent(row.drr),
+      formatMoney(row.spend),
+      formatNumber(row.stock_xway),
+      formatNumber(row.stock_mpvibe),
+    ]),
+  ));
+  lines.push("");
+  lines.push(`## FBO > ${formatNumber(stockThreshold)} без расхода`);
+  lines.push("");
+  lines.push(markdownTable(
+    ["#", "Артикул", "Товар", "Кабинет", "FBO XWAY", "FBO MPVibe", "Расход"],
+    report.stock_no_spend.map((row, index) => [
+      String(index + 1),
+      row.article,
+      shortName(row.name, 90),
+      row.shop_name,
+      formatNumber(row.stock_xway),
+      formatNumber(row.stock_mpvibe),
+      formatMoney(row.spend),
+    ]),
+  ));
+  lines.push("");
+  lines.push(`## Только MPVibe FBO > ${formatNumber(stockThreshold)}`);
+  lines.push("");
+  lines.push(markdownTable(
+    ["#", "Артикул", "Товар", "FBO MPVibe"],
+    report.mpvibe_only_stock.map((row, index) => [
+      String(index + 1),
+      row.article,
+      shortName(row.name, 90),
+      formatNumber(row.stock_mpvibe),
+    ]),
+  ));
+  lines.push("");
+  lines.push("---");
+  lines.push(`Источник: ${asString(env.PACHKA_REPORT_DASHBOARD_URL) || "https://xway-bt4.pages.dev/drr-analytics"}`);
   return lines.join("\n");
+}
+
+function buildPachkaMessage(report) {
+  return `Файл отчета XWAY за ${report.range.start} - ${report.range.end} приложен.`;
 }
 
 export function pachkaReportConfig(env) {
@@ -267,34 +328,29 @@ export async function buildPachkaReport(env, options = {}) {
     mpvibe_only_stock: mpvibeOnlyStock,
     config: { ...config, days: range.days, limit, stock_min_value: stockMinValue },
   };
+  const markdown = buildPachkaMarkdown(report, env);
+  const fileName = buildReportFileName(report);
+  const fileSize = new TextEncoder().encode(markdown).length;
   return {
     ...report,
-    message: buildMessage(report, env),
+    message: buildPachkaMessage(report),
+    markdown,
+    file: {
+      name: fileName,
+      type: "text/markdown; charset=utf-8",
+      size: fileSize,
+    },
   };
 }
 
-export async function sendPachkaMessage(env, content) {
-  const token = asString(env.PACHKA_ACCESS_TOKEN);
-  const entityId = asString(env.PACHKA_ENTITY_ID || env.PACHKA_CHAT_ID);
-  const entityType = asString(env.PACHKA_ENTITY_TYPE) || "discussion";
-  if (!token || !entityId) {
-    throw new Error("Pachka is not configured. Set PACHKA_ACCESS_TOKEN and PACHKA_ENTITY_ID.");
-  }
-  const response = await fetch(`${PACHKA_API_ORIGIN}/messages`, {
-    method: "POST",
+async function pachkaJsonFetch(token, pathname, init = {}) {
+  const response = await fetch(`${PACHKA_API_ORIGIN}${pathname}`, {
+    ...init,
     headers: {
       authorization: `Bearer ${token}`,
-      "content-type": "application/json; charset=utf-8",
       accept: "application/json",
+      ...(init.headers || {}),
     },
-    body: JSON.stringify({
-      message: {
-        entity_type: entityType,
-        entity_id: Number(entityId),
-        content,
-        link_preview: false,
-      },
-    }),
   });
   const text = await response.text();
   let payload = null;
@@ -309,6 +365,79 @@ export async function sendPachkaMessage(env, content) {
   return payload;
 }
 
+function uploadParam(payload, key) {
+  return payload?.[key] ?? payload?.[key.replace(/-/g, "_")];
+}
+
+async function uploadPachkaMarkdownFile(token, report) {
+  const paramsPayload = await pachkaJsonFetch(token, "/uploads", { method: "POST" });
+  const params = paramsPayload?.data || paramsPayload;
+  const fileName = report.file.name;
+  const keyTemplate = uploadParam(params, "key");
+  const directUrl = uploadParam(params, "direct_url");
+  if (!keyTemplate || !directUrl) {
+    throw new Error("Pachka upload parameters are incomplete.");
+  }
+  const markdownBytes = new TextEncoder().encode(report.markdown);
+  const form = new FormData();
+  [
+    "Content-Disposition",
+    "acl",
+    "policy",
+    "x-amz-credential",
+    "x-amz-algorithm",
+    "x-amz-date",
+    "x-amz-signature",
+    "key",
+  ].forEach((field) => {
+    const value = uploadParam(params, field);
+    if (value !== null && value !== undefined) {
+      form.append(field, String(value));
+    }
+  });
+  form.append("file", new Blob([markdownBytes], { type: report.file.type }), fileName);
+
+  const uploadResponse = await fetch(directUrl, {
+    method: "POST",
+    body: form,
+  });
+  const uploadText = await uploadResponse.text();
+  if (!uploadResponse.ok) {
+    throw new Error(`Pachka file upload failed (${uploadResponse.status}): ${uploadText.slice(0, 240) || uploadResponse.statusText}`);
+  }
+
+  return {
+    key: String(keyTemplate).replace("${filename}", fileName),
+    name: fileName,
+    file_type: "file",
+    size: markdownBytes.length,
+  };
+}
+
+export async function sendPachkaMessage(env, content, files = []) {
+  const token = asString(env.PACHKA_ACCESS_TOKEN);
+  const entityId = asString(env.PACHKA_ENTITY_ID || env.PACHKA_CHAT_ID);
+  const entityType = asString(env.PACHKA_ENTITY_TYPE) || "discussion";
+  if (!token || !entityId) {
+    throw new Error("Pachka is not configured. Set PACHKA_ACCESS_TOKEN and PACHKA_ENTITY_ID.");
+  }
+  return pachkaJsonFetch(token, "/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      message: {
+        entity_type: entityType,
+        entity_id: Number(entityId),
+        content,
+        ...(files.length ? { files } : {}),
+        link_preview: false,
+      },
+    }),
+  });
+}
+
 export async function sendPachkaReport(env) {
   if (String(env.PACHKA_REPORT_ENABLED || "1") === "0") {
     return {
@@ -321,11 +450,17 @@ export async function sendPachkaReport(env) {
     };
   }
   const report = await buildPachkaReport(env);
-  const pachka = await sendPachkaMessage(env, report.message);
+  const token = asString(env.PACHKA_ACCESS_TOKEN);
+  if (!token) {
+    throw new Error("Pachka is not configured. Set PACHKA_ACCESS_TOKEN and PACHKA_ENTITY_ID.");
+  }
+  const file = await uploadPachkaMarkdownFile(token, report);
+  const pachka = await sendPachkaMessage(env, report.message, [file]);
   return {
     ok: true,
     sent_at: new Date().toISOString(),
     report,
+    file,
     pachka,
   };
 }
