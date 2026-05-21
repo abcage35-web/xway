@@ -8,8 +8,11 @@ const DEFAULT_REPORT_DAYS = 3;
 const DEFAULT_REPORT_LIMIT = 12;
 const DEFAULT_STOCK_MIN_VALUE = 100;
 const DEFAULT_AI_DEEP_LIMIT = 2;
-const DEFAULT_AI_TIMEOUT_MS = 10_000;
-const DEFAULT_AI_DEEP_TIMEOUT_MS = 12_000;
+const DEFAULT_AI_MODEL = "gpt-5.5";
+const DEFAULT_AI_REASONING_EFFORT = "medium";
+const DEFAULT_AI_TEXT_VERBOSITY = "low";
+const DEFAULT_AI_TIMEOUT_MS = 20_000;
+const DEFAULT_AI_DEEP_TIMEOUT_MS = 16_000;
 
 function asString(value) {
   return value === null || value === undefined ? "" : String(value).trim();
@@ -649,6 +652,46 @@ function parseJsonFromText(text) {
   throw new Error("OpenAI returned non-JSON recommendations.");
 }
 
+function normalizeChoice(value, fallback, allowed) {
+  const text = asString(value).toLowerCase();
+  return allowed.includes(text) ? text : fallback;
+}
+
+function supportsGpt5Controls(model) {
+  return /^gpt-5(?:[.-]|$)/i.test(asString(model));
+}
+
+function openAiGenerationOptions(env, model) {
+  if (!supportsGpt5Controls(model)) {
+    return {};
+  }
+  return {
+    reasoning: {
+      effort: normalizeChoice(env.PACHKA_REPORT_AI_REASONING_EFFORT, DEFAULT_AI_REASONING_EFFORT, ["none", "low", "medium", "high", "xhigh"]),
+    },
+    text: {
+      verbosity: normalizeChoice(env.PACHKA_REPORT_AI_TEXT_VERBOSITY, DEFAULT_AI_TEXT_VERBOSITY, ["low", "medium", "high"]),
+    },
+  };
+}
+
+function analystProfileInstructions() {
+  return [
+    "Профиль аналитика для XWAY:",
+    "- Пиши как операционный performance-аналитик, а не как генератор общих советов.",
+    "- Цель рекомендации: дать владельцу рекламы следующее конкретное действие на сегодня.",
+    "- Логика диагностики: сначала оцени расход/ДРР/заказы; затем CTR, CPC, CR, CPO; затем сравни с категорией и кабинетом; затем статусы РК, лимиты, расписание; только после этого решай, нужны ли кластеры.",
+    "- Углубляйся в кластеры только если компактные метрики не объясняют проблему или явно указывают на ставки/запросы/размещения.",
+    "- В рекомендации должны быть: причина из данных, действие, и при необходимости ограничение по риску.",
+    "- Если данных недостаточно, пиши какую проверку сделать, а не придумывай вывод.",
+    "- Не используй пустые формулировки: 'проанализировать', 'оптимизировать', 'улучшить' без объекта проверки и критерия.",
+    "- Не советуй масштабировать рекламу при низком FBO или неподтвержденной марже.",
+    "- Не говори 'срочно', если расход небольшой и нет явного риска быстрого слива бюджета.",
+    "- MPVibe используй только для остатков и маппинга. Доступность MPVibe бери строго из sources.mpvibe.available.",
+    "- Если MPVibe недоступен, отчет должен оставаться полезным по XWAY-данным и только отметить необходимость последующей сверки остатков.",
+  ].join("\n");
+}
+
 async function callOpenAiJson(env, { model, instructions, input, timeoutMs }) {
   const apiKey = asString(env.OPENAI_API_KEY);
   if (!apiKey) {
@@ -673,6 +716,7 @@ async function callOpenAiJson(env, { model, instructions, input, timeoutMs }) {
           JSON.stringify(input),
         ].join("\n"),
         max_output_tokens: 2200,
+        ...openAiGenerationOptions(env, model),
       }),
     });
     const text = await response.text();
@@ -956,20 +1000,20 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
     };
   }
 
-  const model = asString(env.PACHKA_REPORT_AI_MODEL) || asString(env.OPENAI_MODEL) || "gpt-4.1-mini";
+  const model = asString(env.PACHKA_REPORT_AI_MODEL) || DEFAULT_AI_MODEL;
   const timeoutMs = clampInteger(env.PACHKA_REPORT_AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS, 5_000, 60_000);
   const deepTimeoutMs = clampInteger(env.PACHKA_REPORT_AI_DEEP_TIMEOUT_MS, DEFAULT_AI_DEEP_TIMEOUT_MS, 5_000, 60_000);
   const deepLimit = clampInteger(env.PACHKA_REPORT_AI_DEEP_LIMIT, DEFAULT_AI_DEEP_LIMIT, 0, 5);
   const reportContext = buildAiReportContext(report, env, recommendationContext);
   const decisionInstructions = [
+    analystProfileInstructions(),
+    "",
     "Ты аналитик XWAY. Нужно подготовить осмысленные рекомендации для ежедневного markdown-отчета.",
-    "Сначала реши, достаточно ли компактного отчета или нужно углубиться в данные XWAY по кампаниям и кластерам.",
-    "Углубляйся только когда это реально нужно: высокий ДРР при заметном расходе, расход без заказов, активные РК без расхода, подозрение на ставки/поисковые фразы/лимиты/расписание.",
-    "Доступность MPVibe бери только из sources.mpvibe.available. Если true, не пиши, что MPVibe недоступен.",
-    "Если MPVibe недоступен, не делай выводов по его остаткам, кроме необходимости сверить позже.",
-    "Не используй шаблонные формулировки. В каждой рекомендации должны быть причина из данных и следующее действие.",
+    "Этап 1: сделай черновой диагноз и реши, достаточно ли компактного отчета или нужно углубиться в данные XWAY по кампаниям и кластерам.",
+    "Углубляйся только когда это реально нужно: высокий ДРР при заметном расходе, расход без заказов, активные РК без расхода, подозрение на ставки/поисковые фразы/лимиты/расписание или когда compact context не объясняет причину.",
+    "Для каждого article дай черновую рекомендацию: 1 короткое предложение, максимум 260 символов.",
     "Поле recommendations обязательно: заполни его для каждого article из sections.top_drr, sections.fbo_stock_no_spend и sections.mpvibe_only_stock, даже если просишь углубление.",
-    "Формат JSON: {\"need_deep_dive\":boolean,\"deep_dive_articles\":[{\"article\":\"...\",\"reason\":\"...\",\"focus\":[\"clusters\",\"bids\",\"campaigns\",\"daily\"]}],\"insights\":[\"...\"],\"recommendations\":{\"article\":\"короткая рекомендация\"}}.",
+    "Формат JSON: {\"need_deep_dive\":boolean,\"deep_dive_articles\":[{\"article\":\"...\",\"reason\":\"...\",\"focus\":[\"clusters\",\"bids\",\"campaigns\",\"daily\"]}],\"insights\":[\"...\"],\"recommendations\":{\"article\":\"короткая рекомендация\"},\"diagnostic_gaps\":[\"...\"]}.",
   ].join("\n");
 
   try {
@@ -987,38 +1031,39 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       deepDiveArticles: requestedDeepDive,
     });
 
-    if (!requestedDeepDive.length) {
-      return firstPass;
-    }
-
     let deepDive = null;
     let deepDiveError = null;
-    try {
-      const deepDivePayload = await withTimeout(
-        collectProducts(env, {
-          articles: requestedDeepDive.map((item) => item.article),
-          start: report.range.start,
-          end: report.range.end,
-          campaignMode: "full",
-          forceRefresh: Boolean(options.forceRefresh),
-        }),
-        deepTimeoutMs,
-        "XWAY deep dive timed out.",
-      );
-      deepDive = compactDeepDivePayload(deepDivePayload);
-    } catch (error) {
-      deepDiveError = error instanceof Error ? error.message : String(error);
+    if (requestedDeepDive.length) {
+      try {
+        const deepDivePayload = await withTimeout(
+          collectProducts(env, {
+            articles: requestedDeepDive.map((item) => item.article),
+            start: report.range.start,
+            end: report.range.end,
+            campaignMode: "full",
+            forceRefresh: Boolean(options.forceRefresh),
+          }),
+          deepTimeoutMs,
+          "XWAY deep dive timed out.",
+        );
+        deepDive = compactDeepDivePayload(deepDivePayload);
+      } catch (error) {
+        deepDiveError = error instanceof Error ? error.message : String(error);
+      }
     }
 
     const finalInstructions = [
-      "Ты аналитик XWAY. Сформируй финальные рекомендации для ежедневного markdown-отчета.",
-      "Используй компактный отчет и, если есть, углубленные данные по кампаниям/кластерам.",
-      "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe.",
+      analystProfileInstructions(),
+      "",
+      "Ты редактор-аналитик XWAY. Этап 2: пересобери финальные рекомендации для markdown-отчета.",
+      "Используй компактный отчет, черновик первого этапа и, если есть, углубленные данные по кампаниям/кластерам.",
+      "Сделай самопроверку: убери шаблонные советы, противоречия источникам, неподтвержденные выводы и рекомендации без действия.",
+      "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe. Не упоминай кластеры, если deep_dive не вернул кластерные данные.",
       "Доступность MPVibe бери только из report.sources.mpvibe.available. Отсутствие MPVibe в deep_dive не означает, что MPVibe недоступен.",
-      "Не пиши шаблонно. Каждая рекомендация должна объяснять, почему именно это действие нужно сейчас.",
       "Не выдумывай данные. Если углубление не удалось, опирайся на компактные метрики и явно не ссылайся на кластеры.",
+      "Каждая рекомендация: максимум 1-2 предложения, без воды. Формула: 'потому что [метрика/сравнение], сделать [конкретное действие]; не делать [ограничение], если оно важно'.",
       "Поле recommendations обязательно: заполни его для каждого article из отчета, не группируй без article-ключа.",
-      "Формат JSON: {\"analysis_note\":\"...\",\"insights\":[\"...\"],\"recommendations\":{\"article\":\"короткая рекомендация с причиной и действием\"}}.",
+      "Формат JSON: {\"analysis_note\":\"...\",\"insights\":[\"...\"],\"recommendations\":{\"article\":\"финальная рекомендация\"},\"self_review\":[\"какие черновые выводы были исправлены\"]}.",
     ].join("\n");
     try {
       const finalPayload = await callOpenAiJson(env, {
@@ -1205,6 +1250,8 @@ export function pachkaReportConfig(env) {
     stock_min_value: clampInteger(env.PACHKA_REPORT_STOCK_MIN_VALUE, DEFAULT_STOCK_MIN_VALUE, 0, 1_000_000),
     cron: asString(env.PACHKA_REPORT_CRON) || "0 6 * * *",
     ai_recommendations: String(env.PACHKA_REPORT_AI_RECOMMENDATIONS || "1") !== "0",
+    ai_model: asString(env.PACHKA_REPORT_AI_MODEL) || DEFAULT_AI_MODEL,
+    ai_reasoning_effort: normalizeChoice(env.PACHKA_REPORT_AI_REASONING_EFFORT, DEFAULT_AI_REASONING_EFFORT, ["none", "low", "medium", "high", "xhigh"]),
     ai_deep_limit: clampInteger(env.PACHKA_REPORT_AI_DEEP_LIMIT, DEFAULT_AI_DEEP_LIMIT, 0, 5),
   };
 }
