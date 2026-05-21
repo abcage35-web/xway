@@ -122,6 +122,7 @@ export function PachkaReportPage() {
   const rangeLabel = report ? formatDateRange(report.range.start, report.range.end) : "Диапазон";
   const generatedLabel = report?.generated_at ? formatDateTime(report.generated_at) : "—";
   const messageLines = useMemo(() => (report?.message || "").split("\n").length, [report?.message]);
+  const stockMinValue = report?.config.stock_min_value ?? 100;
 
   const handleSend = async (event: FormEvent) => {
     event.preventDefault();
@@ -166,8 +167,8 @@ export function PachkaReportPage() {
       <div className="grid gap-2.5 md:grid-cols-4">
         <MetricCard label="Расход" value={formatMoney(report?.totals.spend ?? null)} density="compact" />
         <MetricCard label="SKU XWAY" value={formatNumber(report?.totals.xway_rows ?? null)} density="compact" />
-        <MetricCard label="MPVibe-only FBO" value={formatNumber(report?.totals.mpvibe_only_rows ?? null)} density="compact" />
-        <MetricCard label="Остатки без расхода" value={formatNumber(report?.totals.zero_spend_stock_rows ?? null)} density="compact" />
+        <MetricCard label="MPVibe-only FBO" value={formatNumber(report?.totals.mpvibe_only_rows ?? null)} hint={`остаток > ${formatNumber(stockMinValue)}`} density="compact" />
+        <MetricCard label="Остатки без расхода" value={formatNumber(report?.totals.zero_spend_stock_rows ?? null)} hint={`остаток > ${formatNumber(stockMinValue)}`} density="compact" />
       </div>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -242,10 +243,10 @@ export function PachkaReportPage() {
         <SectionCard title="Топ ДРР" caption="По расходу и максимальному ДРР">
           <ReportRowList rows={report?.top_drr ?? []} mode="drr" />
         </SectionCard>
-        <SectionCard title="FBO без расхода" caption="Остаток есть, расход нулевой">
+        <SectionCard title="FBO без расхода" caption={`Остаток > ${formatNumber(stockMinValue)}, расход нулевой`}>
           <ReportRowList rows={report?.stock_no_spend ?? []} mode="stock" />
         </SectionCard>
-        <SectionCard title="Только MPVibe" caption="Есть FBO, нет в XWAY">
+        <SectionCard title="Только MPVibe" caption={`FBO > ${formatNumber(stockMinValue)}, нет в XWAY`}>
           <ReportRowList rows={report?.mpvibe_only_stock ?? []} mode="mpvibe" />
         </SectionCard>
       </section>

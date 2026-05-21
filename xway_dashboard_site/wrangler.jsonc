@@ -31,7 +31,7 @@
   // - PACHKA_ENTITY_ID or PACHKA_CHAT_ID: Pachka chat/user/thread id for the daily report
   // - PACHKA_ENTITY_TYPE: optional Pachka entity type, defaults to discussion
   // - PACHKA_REPORT_SECRET: shared secret for /api/pachka-report/send and the cron worker
-  // - PACHKA_REPORT_DAYS, PACHKA_REPORT_LIMIT, PACHKA_REPORT_TIMEZONE_OFFSET_MINUTES: optional report controls
+  // - PACHKA_REPORT_DAYS, PACHKA_REPORT_LIMIT, PACHKA_REPORT_STOCK_MIN_VALUE, PACHKA_REPORT_TIMEZONE_OFFSET_MINUTES: optional report controls
   // - PACHKA_REPORT_MESSAGE_PREFIX, PACHKA_REPORT_DASHBOARD_URL, PACHKA_REPORT_ENABLED: optional Pachka report controls
   // - WB_FEEDBACK_ROOTS_JSON: optional article -> WB feedback root id mapping
   // - XWAY_AI_CACHE: optional KV namespace binding for shared AI response cache, MPVibe token cache, and XWAY source cache

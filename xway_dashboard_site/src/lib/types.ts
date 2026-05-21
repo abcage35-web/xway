@@ -564,6 +564,7 @@ export interface PachkaReportResponse {
     mpvibe_only_rows: number;
     spend: number;
     zero_spend_stock_rows: number;
+    stock_min_value: number;
   };
   top_drr: PachkaReportRow[];
   stock_no_spend: PachkaReportRow[];
@@ -577,6 +578,7 @@ export interface PachkaReportResponse {
     entity_type: string;
     days: number;
     limit: number;
+    stock_min_value: number;
     cron: string;
   };
 }

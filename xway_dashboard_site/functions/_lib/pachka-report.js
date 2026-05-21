@@ -5,7 +5,7 @@ import { collectMpvibeStocks } from "./ai/mpvibe-client.js";
 const PACHKA_API_ORIGIN = "https://api.pachca.com/api/shared/v1";
 const DEFAULT_REPORT_DAYS = 3;
 const DEFAULT_REPORT_LIMIT = 12;
-const STOCK_MIN_VALUE = 5;
+const DEFAULT_STOCK_MIN_VALUE = 100;
 
 function asString(value) {
   return value === null || value === undefined ? "" : String(value).trim();
@@ -164,11 +164,12 @@ function rowLine(row, index, metric) {
 
 function buildMessage(report, env) {
   const prefix = asString(env.PACHKA_REPORT_MESSAGE_PREFIX) || "Ежедневный отчет XWAY";
+  const stockThreshold = report.config?.stock_min_value ?? DEFAULT_STOCK_MIN_VALUE;
   const lines = [
     `${prefix}`,
     `Период: ${report.range.start} - ${report.range.end}`,
     `Расход: ${formatMoney(report.totals.spend)} · SKU XWAY: ${formatNumber(report.totals.xway_rows)} · MPVibe-only FBO: ${formatNumber(report.totals.mpvibe_only_rows)}`,
-    `Остатки без расхода: ${formatNumber(report.totals.zero_spend_stock_rows)} · MPVibe: ${report.sources.mpvibe.available ? "доступен" : "недоступен"}`,
+    `Остатки > ${formatNumber(stockThreshold)} без расхода: ${formatNumber(report.totals.zero_spend_stock_rows)} · MPVibe: ${report.sources.mpvibe.available ? "доступен" : "недоступен"}`,
   ];
   if (report.warnings.length) {
     lines.push(`Предупреждения: ${report.warnings.join("; ")}`);
@@ -177,11 +178,11 @@ function buildMessage(report, env) {
   lines.push("Топ ДРР:");
   lines.push(...(report.top_drr.length ? report.top_drr.map((row, index) => rowLine(row, index, "drr")) : ["Нет строк с расходом и ДРР."]));
   lines.push("");
-  lines.push("FBO без расхода:");
-  lines.push(...(report.stock_no_spend.length ? report.stock_no_spend.map((row, index) => rowLine(row, index, "stock")) : ["Нет строк с FBO остатком и нулевым расходом."]));
+  lines.push(`FBO > ${formatNumber(stockThreshold)} без расхода:`);
+  lines.push(...(report.stock_no_spend.length ? report.stock_no_spend.map((row, index) => rowLine(row, index, "stock")) : [`Нет строк с FBO остатком > ${formatNumber(stockThreshold)} и нулевым расходом.`]));
   if (report.mpvibe_only_stock.length) {
     lines.push("");
-    lines.push("Только MPVibe FBO:");
+    lines.push(`Только MPVibe FBO > ${formatNumber(stockThreshold)}:`);
     lines.push(...report.mpvibe_only_stock.map((row, index) => `${index + 1}. ${row.article} ${shortName(row.name)} — FBO ${formatNumber(row.stock_mpvibe)}`));
   }
   lines.push("");
@@ -198,6 +199,7 @@ export function pachkaReportConfig(env) {
     entity_type: asString(env.PACHKA_ENTITY_TYPE) || "discussion",
     days: clampInteger(env.PACHKA_REPORT_DAYS, DEFAULT_REPORT_DAYS, 1, 30),
     limit: clampInteger(env.PACHKA_REPORT_LIMIT, DEFAULT_REPORT_LIMIT, 1, 50),
+    stock_min_value: clampInteger(env.PACHKA_REPORT_STOCK_MIN_VALUE, DEFAULT_STOCK_MIN_VALUE, 0, 1_000_000),
     cron: asString(env.PACHKA_REPORT_CRON) || "0 6 * * *",
   };
 }
@@ -206,6 +208,7 @@ export async function buildPachkaReport(env, options = {}) {
   const range = buildReportRange(env, options);
   const config = pachkaReportConfig(env);
   const limit = clampInteger(options.limit ?? config.limit, config.limit, 1, 50);
+  const stockMinValue = clampInteger(options.stockMinValue ?? config.stock_min_value, config.stock_min_value, 0, 1_000_000);
   const catalog = await applyCatalogArticleSnapshots(
     env,
     await collectCatalog(env, {
@@ -239,8 +242,9 @@ export async function buildPachkaReport(env, options = {}) {
 
   const rows = mergeMpvibeRows(xwayRows, mpvibeRows);
   const topDrr = topRows(rows, limit, (row) => (row.spend ?? 0) > 0 && row.drr !== null, (row) => row.drr);
-  const stockNoSpend = topRows(rows, limit, (row) => stockSignal(row) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0, stockSignal);
-  const mpvibeOnlyStock = topRows(rows, limit, (row) => row.source === "mpvibe" && (row.stock_mpvibe ?? 0) > 0, (row) => row.stock_mpvibe);
+  const hasReportableStock = (row) => stockSignal(row) > stockMinValue;
+  const stockNoSpend = topRows(rows, limit, (row) => hasReportableStock(row) && (row.spend ?? 0) === 0, stockSignal);
+  const mpvibeOnlyStock = topRows(rows, limit, (row) => row.source === "mpvibe" && hasReportableStock(row), stockSignal);
   const report = {
     ok: true,
     generated_at: new Date().toISOString(),
@@ -253,18 +257,19 @@ export async function buildPachkaReport(env, options = {}) {
     totals: {
       xway_rows: xwayRows.length,
       all_rows: rows.length,
-      mpvibe_only_rows: rows.filter((row) => row.source === "mpvibe").length,
+      mpvibe_only_rows: rows.filter((row) => row.source === "mpvibe" && hasReportableStock(row)).length,
       spend: rows.reduce((sum, row) => sum + (row.spend ?? 0), 0),
-      zero_spend_stock_rows: rows.filter((row) => stockSignal(row) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0).length,
+      zero_spend_stock_rows: rows.filter((row) => hasReportableStock(row) && (row.spend ?? 0) === 0).length,
+      stock_min_value: stockMinValue,
     },
     top_drr: topDrr,
     stock_no_spend: stockNoSpend,
     mpvibe_only_stock: mpvibeOnlyStock,
+    config: { ...config, days: range.days, limit, stock_min_value: stockMinValue },
   };
   return {
     ...report,
     message: buildMessage(report, env),
-    config: { ...config, days: range.days, limit },
   };
 }
 
