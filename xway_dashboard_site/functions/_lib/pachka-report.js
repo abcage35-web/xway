@@ -154,9 +154,12 @@ function shortName(value, max = 54) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function stockMismatchRecommendation(row) {
+function stockMismatchRecommendation(row, mpvibeAvailable) {
   const xwayStock = asNumber(row.stock_xway);
   const mpvibeStock = asNumber(row.stock_mpvibe);
+  if (!mpvibeAvailable) {
+    return xwayStock !== null ? "MPVibe недоступен, сверить остаток позже" : "";
+  }
   if (xwayStock === null && mpvibeStock !== null) {
     return "остаток есть только в MPVibe";
   }
@@ -171,7 +174,7 @@ function stockMismatchRecommendation(row) {
   return diff > 20 && diff / base > 0.03 ? "сверить остатки XWAY/MPVibe" : "";
 }
 
-function buildDrrRecommendation(row, stockThreshold) {
+function buildDrrRecommendation(row, stockThreshold, mpvibeAvailable) {
   const drr = asNumber(row.drr);
   const spend = asNumber(row.spend) ?? 0;
   const ordersAds = asNumber(row.orders_ads) ?? 0;
@@ -192,14 +195,14 @@ function buildDrrRecommendation(row, stockThreshold) {
   if (stock <= stockThreshold) {
     notes.push("не разгонять рекламу до пополнения FBO");
   }
-  const stockNote = stockMismatchRecommendation(row);
+  const stockNote = stockMismatchRecommendation(row, mpvibeAvailable);
   if (stockNote) {
     notes.push(stockNote);
   }
   return notes.join("; ");
 }
 
-function buildStockNoSpendRecommendation(row, stockThreshold) {
+function buildStockNoSpendRecommendation(row, stockThreshold, mpvibeAvailable) {
   const stock = stockSignal(row);
   const notes = [];
   if ((row.active_campaigns ?? 0) > 0) {
@@ -212,7 +215,7 @@ function buildStockNoSpendRecommendation(row, stockThreshold) {
   if (stock > stockThreshold * 5) {
     notes.push("остаток высокий, приоритет для запуска");
   }
-  const stockNote = stockMismatchRecommendation(row);
+  const stockNote = stockMismatchRecommendation(row, mpvibeAvailable);
   if (stockNote) {
     notes.push(stockNote);
   }
@@ -249,6 +252,7 @@ function buildReportFileName(report) {
 function buildPachkaMarkdown(report, env) {
   const prefix = asString(env.PACHKA_REPORT_MESSAGE_PREFIX) || "Ежедневный отчет XWAY";
   const stockThreshold = report.config?.stock_min_value ?? DEFAULT_STOCK_MIN_VALUE;
+  const mpvibeAvailable = Boolean(report.sources?.mpvibe?.available);
   const lines = [
     `# ${prefix}`,
     "",
@@ -287,7 +291,7 @@ function buildPachkaMarkdown(report, env) {
       formatMoney(row.spend),
       formatNumber(row.stock_xway),
       formatNumber(row.stock_mpvibe),
-      buildDrrRecommendation(row, stockThreshold),
+      buildDrrRecommendation(row, stockThreshold, mpvibeAvailable),
     ]),
   ));
   lines.push("");
@@ -303,7 +307,7 @@ function buildPachkaMarkdown(report, env) {
       formatNumber(row.stock_xway),
       formatNumber(row.stock_mpvibe),
       formatMoney(row.spend),
-      buildStockNoSpendRecommendation(row, stockThreshold),
+      buildStockNoSpendRecommendation(row, stockThreshold, mpvibeAvailable),
     ]),
   ));
   lines.push("");
