@@ -131,6 +131,7 @@ type CategoryDriverPieSlice = {
   value: number;
   color: string;
   row: RankedCategoryDriverRow;
+  collapsedCount?: number;
 };
 type CategoryDriverShopGroup = {
   shopId: number;
@@ -152,6 +153,8 @@ const DRR_ANALYTICS_COLUMN_WIDTH_STORAGE_KEY = "xway-drr-analytics-column-widths
 const CATEGORY_DRIVER_PIE_TOOLTIP_WIDTH = 280;
 const CATEGORY_DRIVER_PIE_TOOLTIP_GAP = 12;
 const CATEGORY_DRIVER_PIE_TOOLTIP_EDGE = 8;
+const CATEGORY_DRIVER_PIE_LEGEND_LIMIT = 8;
+const CATEGORY_DRIVER_OTHER_COLOR = "#94a3b8";
 const CATEGORY_DRIVER_CHART_COLORS = [
   "#ff8a2d",
   "#8b64f6",
@@ -559,16 +562,97 @@ function formatTurnover(value: number | null) {
 }
 
 function buildCategoryDriverPieSlices(rows: RankedCategoryDriverRow[], metric: CategoryDriverPieMetric): CategoryDriverPieSlice[] {
-  return rows
+  const sortedRows = rows
     .filter((row) => row[metric] > 0)
-    .sort((left, right) => right[metric] - left[metric])
-    .map((row, index) => ({
-      key: `${row.ref}:${metric}`,
-      name: row.category,
-      value: row[metric],
-      color: CATEGORY_DRIVER_CHART_COLORS[index % CATEGORY_DRIVER_CHART_COLORS.length] ?? "#ff8a2d",
-      row,
-    }));
+    .sort((left, right) => right[metric] - left[metric]);
+  const visibleRows = sortedRows.length > CATEGORY_DRIVER_PIE_LEGEND_LIMIT ? sortedRows.slice(0, CATEGORY_DRIVER_PIE_LEGEND_LIMIT - 1) : sortedRows;
+  const tailRows = sortedRows.slice(visibleRows.length);
+  const slices: CategoryDriverPieSlice[] = visibleRows.map((row, index) => ({
+    key: `${row.ref}:${metric}`,
+    name: row.category,
+    value: row[metric],
+    color: CATEGORY_DRIVER_CHART_COLORS[index % CATEGORY_DRIVER_CHART_COLORS.length] ?? "#ff8a2d",
+    row,
+  }));
+  if (tailRows.length) {
+    const otherRow = aggregateCategoryDriverRows(tailRows, metric, visibleRows.length + 1);
+    slices.push({
+      key: `${otherRow.ref}:${metric}`,
+      name: otherRow.category,
+      value: otherRow[metric],
+      color: CATEGORY_DRIVER_OTHER_COLOR,
+      row: otherRow,
+      collapsedCount: tailRows.length,
+    });
+  }
+  return slices;
+}
+
+function aggregateCategoryDriverRows(rows: RankedCategoryDriverRow[], metric: CategoryDriverPieMetric, rank: number): RankedCategoryDriverRow {
+  const totals = rows.reduce(
+    (sum, row) => ({
+      skuCount: sum.skuCount + row.skuCount,
+      stock: sum.stock + row.stock,
+      stockMpvibe: row.stockMpvibe === null ? sum.stockMpvibe : (sum.stockMpvibe ?? 0) + row.stockMpvibe,
+      spend: sum.spend + row.spend,
+      spendShare: sum.spendShare + (row.spendShare ?? 0),
+      revenueAds: sum.revenueAds + row.revenueAds,
+      revenueAdsShare: sum.revenueAdsShare + (row.revenueAdsShare ?? 0),
+      revenueTotal: sum.revenueTotal + row.revenueTotal,
+      revenueTotalShare: sum.revenueTotalShare + (row.revenueTotalShare ?? 0),
+      ordersAds: sum.ordersAds + row.ordersAds,
+      ordersTotal: sum.ordersTotal + row.ordersTotal,
+      views: sum.views + row.views,
+      clicks: sum.clicks + row.clicks,
+      atbs: sum.atbs + row.atbs,
+      campaigns: sum.campaigns + row.campaigns,
+      activeCampaigns: sum.activeCampaigns + row.activeCampaigns,
+    }),
+    {
+      skuCount: 0,
+      stock: 0,
+      stockMpvibe: null as number | null,
+      spend: 0,
+      spendShare: 0,
+      revenueAds: 0,
+      revenueAdsShare: 0,
+      revenueTotal: 0,
+      revenueTotalShare: 0,
+      ordersAds: 0,
+      ordersTotal: 0,
+      views: 0,
+      clicks: 0,
+      atbs: 0,
+      campaigns: 0,
+      activeCampaigns: 0,
+    },
+  );
+  const firstRow = rows[0];
+  return {
+    ref: `other:${firstRow?.shopId ?? "all"}:${metric}`,
+    shopId: firstRow?.shopId ?? 0,
+    shopName: firstRow?.shopName ?? "",
+    category: `Остальные ${rows.length} категорий`,
+    rank,
+    skuCount: totals.skuCount,
+    stock: totals.stock,
+    stockMpvibe: totals.stockMpvibe,
+    spend: totals.spend,
+    spendShare: totals.spendShare,
+    revenueAds: totals.revenueAds,
+    revenueAdsShare: totals.revenueAdsShare,
+    revenueTotal: totals.revenueTotal,
+    revenueTotalShare: totals.revenueTotalShare,
+    ordersAds: totals.ordersAds,
+    ordersTotal: totals.ordersTotal,
+    views: totals.views,
+    clicks: totals.clicks,
+    atbs: totals.atbs,
+    drrAds: totals.revenueAds > 0 ? (totals.spend / totals.revenueAds) * 100 : null,
+    drrTotal: totals.revenueTotal > 0 ? (totals.spend / totals.revenueTotal) * 100 : null,
+    campaigns: totals.campaigns,
+    activeCampaigns: totals.activeCampaigns,
+  };
 }
 
 function sourceSummary(source: DataSource) {
