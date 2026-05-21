@@ -580,6 +580,11 @@ function buildAiReportContext(report, env, context) {
       shops_by_spend: groupMapToAiList(context.shop, "spend", 8),
     },
     deterministic_insights: buildReportInsights(report, context),
+    recommendation_articles: {
+      top_drr: report.top_drr.map((row) => row.article),
+      fbo_stock_no_spend: report.stock_no_spend.map((row) => row.article),
+      mpvibe_only_stock: report.mpvibe_only_stock.map((row) => row.article),
+    },
     sections: {
       top_drr: report.top_drr.map((row) =>
         compactReportRow(row, buildDrrRecommendation(row, stockThreshold, mpvibeAvailable, context), context),
@@ -679,12 +684,28 @@ function withTimeout(promise, timeoutMs, label) {
 
 function recommendationEntries(payload) {
   const raw = payload?.recommendations || payload?.row_recommendations || {};
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => [asString(item?.article), item?.recommendation ?? item?.text ?? item?.value])
-      .filter(([article]) => Boolean(article));
-  }
-  return Object.entries(raw || {});
+  const entries = [];
+  const visit = (value, fallbackArticle = "") => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, fallbackArticle));
+      return;
+    }
+    if (value && typeof value === "object") {
+      const article = asString(value.article || fallbackArticle);
+      const recommendation = value.recommendation ?? value.text ?? value.value;
+      if (article && recommendation !== undefined && recommendation !== null && typeof recommendation !== "object") {
+        entries.push([article, recommendation]);
+        return;
+      }
+      Object.entries(value).forEach(([key, child]) => visit(child, key));
+      return;
+    }
+    if (fallbackArticle && value !== undefined && value !== null) {
+      entries.push([fallbackArticle, value]);
+    }
+  };
+  visit(raw);
+  return entries;
 }
 
 function reportArticleSet(report) {
@@ -929,6 +950,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
     "Углубляйся только когда это реально нужно: высокий ДРР при заметном расходе, расход без заказов, активные РК без расхода, подозрение на ставки/поисковые фразы/лимиты/расписание.",
     "Если MPVibe недоступен, не делай выводов по его остаткам, кроме необходимости сверить позже.",
     "Не используй шаблонные формулировки. В каждой рекомендации должны быть причина из данных и следующее действие.",
+    "Поле recommendations обязательно: заполни его для каждого article из sections.top_drr, sections.fbo_stock_no_spend и sections.mpvibe_only_stock, даже если просишь углубление.",
     "Формат JSON: {\"need_deep_dive\":boolean,\"deep_dive_articles\":[{\"article\":\"...\",\"reason\":\"...\",\"focus\":[\"clusters\",\"bids\",\"campaigns\",\"daily\"]}],\"insights\":[\"...\"],\"recommendations\":{\"article\":\"короткая рекомендация\"}}.",
   ].join("\n");
 
@@ -976,6 +998,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe.",
       "Не пиши шаблонно. Каждая рекомендация должна объяснять, почему именно это действие нужно сейчас.",
       "Не выдумывай данные. Если углубление не удалось, опирайся на компактные метрики и явно не ссылайся на кластеры.",
+      "Поле recommendations обязательно: заполни его для каждого article из отчета, не группируй без article-ключа.",
       "Формат JSON: {\"analysis_note\":\"...\",\"insights\":[\"...\"],\"recommendations\":{\"article\":\"короткая рекомендация с причиной и действием\"}}.",
     ].join("\n");
     try {
