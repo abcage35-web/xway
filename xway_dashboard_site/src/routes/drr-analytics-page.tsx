@@ -764,6 +764,13 @@ function CategoryDriverPie({
   const [activeSlice, setActiveSlice] = useState<CategoryDriverPieSlice | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
 
+  const updateActiveSlice = (index: number, event?: { clientX?: number; clientY?: number }) => {
+    setActiveSlice(slices[index] ?? null);
+    if (event && typeof event.clientX === "number" && typeof event.clientY === "number") {
+      updateTooltipPosition({ clientX: event.clientX, clientY: event.clientY });
+    }
+  };
+
   const updateTooltipPosition = (event: { clientX: number; clientY: number }) => {
     const rect = bodyRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -814,10 +821,10 @@ function CategoryDriverPie({
                   stroke="rgba(9, 13, 24, 0.92)"
                   strokeWidth={2}
                   onMouseEnter={(_slice, index, event) => {
-                    setActiveSlice(slices[index] ?? null);
-                    if (event && "clientX" in event && "clientY" in event) {
-                      updateTooltipPosition(event);
-                    }
+                    updateActiveSlice(index, event);
+                  }}
+                  onMouseMove={(_slice, index, event) => {
+                    updateActiveSlice(index, event);
                   }}
                 >
                   {slices.map((slice) => (

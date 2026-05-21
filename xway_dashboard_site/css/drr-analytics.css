@@ -524,8 +524,9 @@ body.is-resizing-drr-column {
 .drr-category-pie-body {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(178px, 230px) minmax(150px, 1fr);
+  grid-template-columns: minmax(178px, 230px) minmax(172px, 330px);
   align-items: center;
+  justify-content: center;
   gap: 14px;
   height: 230px;
   min-width: 0;
@@ -568,23 +569,29 @@ body.is-resizing-drr-column {
 
 .drr-category-pie-legend {
   display: grid;
+  justify-self: stretch;
+  width: min(100%, 330px);
   max-height: 218px;
   min-width: 0;
-  gap: 7px;
   overflow: auto;
-  padding: 2px 2px 2px 0;
+  padding: 0 2px 0 0;
 }
 
 .drr-category-pie-legend-item {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr) minmax(82px, auto);
   align-items: center;
   gap: 8px;
   min-width: 0;
-  border-radius: 10px;
+  border-bottom: 1px solid rgba(126, 137, 169, 0.16);
+  padding: 7px 0 8px;
   color: var(--color-muted);
   font-size: 0.74rem;
   line-height: 1.15;
+}
+
+.drr-category-pie-legend-item:last-child {
+  border-bottom: 0;
 }
 
 .drr-category-pie-legend-dot {
