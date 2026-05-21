@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, startTransition, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ExternalLink, FileText, Filter, Pause, Play, RefreshCw, Search as SearchIcon, Settings, SlidersHorizontal, Snowflake, ThumbsUp, X } from "lucide-react";
 import type { LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData, useNavigate } from "react-router";
+import { Link, redirect, useLoaderData, useNavigate } from "react-router";
 import { fetchCatalog, fetchCatalogChart, fetchCatalogIssues, fetchCatalogProductDetails, saveCatalogArticleSnapshots } from "../lib/api";
 import type { CatalogArticleYesterdayIssues } from "../lib/catalog-article-issues";
 import { buildPresetRange, cn, formatCompactNumber, formatDate, formatDateRange, formatMoney, formatNumber, formatPercent, getRangePreset, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
@@ -2234,7 +2234,7 @@ function buildCatalogSearch(
   if (end) {
     params.set("end", end);
   }
-  if (source?.start && source?.end && isCatalogRangeWithin(start, end, source.start, source.end)) {
+  if (source?.start && source?.end && (source.start !== start || source.end !== end) && isCatalogRangeWithin(start, end, source.start, source.end)) {
     params.set("source_start", source.start);
     params.set("source_end", source.end);
   }
@@ -2627,12 +2627,19 @@ function resolveCatalogChartWindow(spanDays: number | null | undefined): Catalog
   return 60;
 }
 
-export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<CatalogLoaderData> {
+export async function catalogLoader({ request }: LoaderFunctionArgs): Promise<CatalogLoaderData | Response> {
   const url = new URL(request.url);
   const start = url.searchParams.get("start");
   const end = url.searchParams.get("end");
   const requestedSourceStart = url.searchParams.get("source_start");
   const requestedSourceEnd = url.searchParams.get("source_end");
+  if (requestedSourceStart && requestedSourceEnd && requestedSourceStart === start && requestedSourceEnd === end) {
+    const cleanParams = new URLSearchParams(url.searchParams);
+    cleanParams.delete("source_start");
+    cleanParams.delete("source_end");
+    const nextSearch = cleanParams.toString();
+    return redirect(`${url.pathname}${nextSearch ? `?${nextSearch}` : ""}`);
+  }
   const sourceWindow = resolveCatalogSourceWindow(start, end, requestedSourceStart, requestedSourceEnd);
   const payload = await fetchCatalog({
     request,

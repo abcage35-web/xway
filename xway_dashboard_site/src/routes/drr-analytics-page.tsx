@@ -1602,9 +1602,14 @@ export function DrrAnalyticsPage() {
           </>
         }
         actions={
-          <Link to="/catalog" className="metric-chip inline-flex items-center justify-center rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]">
-            Каталог
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/pachka-report" className="metric-chip inline-flex items-center justify-center rounded-2xl px-3.5 py-2 text-sm font-medium text-brand-200 transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]">
+              Pachka
+            </Link>
+            <Link to="/catalog" className="metric-chip inline-flex items-center justify-center rounded-2xl px-3.5 py-2 text-sm font-medium text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)]">
+              Каталог
+            </Link>
+          </div>
         }
       />
 

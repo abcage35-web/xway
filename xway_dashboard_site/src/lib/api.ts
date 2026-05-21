@@ -1,4 +1,4 @@
-import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, MpvibeStocksResponse, ProductsResponse, WbCardsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, MpvibeStocksResponse, PachkaReportResponse, PachkaReportSendResponse, ProductsResponse, WbCardsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
@@ -668,6 +668,52 @@ export async function fetchMpvibeStocks(options: {
       shouldWrite: (response) => response.available && response.rows.some((row) => row.stock_fbo !== null),
     },
   );
+}
+
+export async function fetchPachkaReport(options: {
+  request?: Request;
+  days?: number | null;
+  limit?: number | null;
+  forceRefresh?: boolean;
+  signal?: AbortSignal;
+} = {}) {
+  const url = new URL("/api/pachka-report", buildBaseUrl(options.request));
+  if (options.days) {
+    url.searchParams.set("days", String(options.days));
+  }
+  if (options.limit) {
+    url.searchParams.set("limit", String(options.limit));
+  }
+  if (options.forceRefresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return requestJson<PachkaReportResponse>(url.toString(), options.signal ?? options.request?.signal, { retry503: true, maxAttempts: 3, retryDelayMs: 900 });
+}
+
+export async function sendPachkaReport(options: {
+  secret: string;
+  signal?: AbortSignal;
+}) {
+  const response = await fetch(new URL("/api/pachka-report/send", window.location.origin).toString(), {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      "content-type": "application/json",
+      "x-pachka-report-secret": options.secret,
+    },
+    body: JSON.stringify({}),
+  });
+  const text = await response.text();
+  let payload: PachkaReportSendResponse & { error?: string };
+  try {
+    payload = text ? JSON.parse(text) : ({ ok: false, error: "Empty response" } as PachkaReportSendResponse & { error?: string });
+  } catch {
+    payload = { ok: false, sent_at: null, report: null, pachka: null, error: text || response.statusText } as PachkaReportSendResponse & { error?: string };
+  }
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || text || response.statusText);
+  }
+  return payload;
 }
 
 export async function fetchCatalog(options: {

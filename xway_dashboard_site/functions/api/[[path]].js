@@ -5,6 +5,7 @@ import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { handleAiRequest } from "../_lib/ai/handler.js";
 import { isAiRoute } from "../_lib/ai/auth.js";
 import { collectMpvibeStocks } from "../_lib/ai/mpvibe-client.js";
+import { buildPachkaReport, sendPachkaReport } from "../_lib/pachka-report.js";
 import { collectProducts } from "../_lib/products.js";
 import { hasSharedD1Cache, readSharedCache, writeSharedCache } from "../_lib/shared-cache.js";
 import { errorResponse, hasCookieHeaderAuth, hasCsrfToken, hasNativeStorageState, hasSessionCookieAuth, jsonResponse, sanitizeOrigin, searchParamsValue } from "../_lib/utils.js";
@@ -139,6 +140,40 @@ function searchParamsInteger(url, key) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function asTrimmedString(value) {
+  return value === null || value === undefined ? "" : String(value).trim();
+}
+
+function timingSafeEqual(left, right) {
+  const leftValue = asTrimmedString(left);
+  const rightValue = asTrimmedString(right);
+  if (!leftValue || !rightValue || leftValue.length !== rightValue.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let index = 0; index < leftValue.length; index += 1) {
+    diff |= leftValue.charCodeAt(index) ^ rightValue.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+async function validatePachkaReportSecret(context) {
+  const expectedSecret = asTrimmedString(context.env.PACHKA_REPORT_SECRET);
+  if (!expectedSecret) {
+    return errorResponse(409, "PACHKA_REPORT_SECRET is not configured.");
+  }
+  const headerSecret = context.request.headers.get("x-pachka-report-secret") || context.request.headers.get("x-xway-report-secret");
+  let bodySecret = "";
+  if (!headerSecret && !["GET", "HEAD"].includes(context.request.method)) {
+    const payload = await readJsonRequest(context.request);
+    bodySecret = asTrimmedString(payload?.secret);
+  }
+  if (!timingSafeEqual(headerSecret || bodySecret, expectedSecret)) {
+    return errorResponse(401, "Invalid Pachka report secret.");
+  }
+  return null;
+}
+
 async function proxyRequest(context, apiOrigin) {
   if (!apiOrigin) {
     return errorResponse(500, "API_ORIGIN is not configured.");
@@ -176,7 +211,7 @@ async function handleNativeRequest(context, pathname) {
     return jsonResponse({
       ok: true,
       backend: hasNativeStorageState(context.env) ? "cloudflare-native" : "proxy-only",
-      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/ai/*"],
+      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/pachka-report", "/api/pachka-report/send", "/api/ai/*"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       shared_cache: {
@@ -341,6 +376,35 @@ async function handleNativeRequest(context, pathname) {
     );
   }
 
+  if (pathname === "/api/pachka-report") {
+    if (!["GET", "HEAD"].includes(context.request.method)) {
+      return errorResponse(405, "Use GET for Pachka report preview.");
+    }
+    return jsonResponse(
+      await buildPachkaReport(context.env, {
+        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+        days: searchParamsInteger(requestUrl, "days"),
+        limit: searchParamsInteger(requestUrl, "limit"),
+      }),
+    );
+  }
+
+  if (pathname === "/api/pachka-report/send") {
+    if (context.request.method !== "POST") {
+      return errorResponse(405, "Use POST for Pachka report sending.");
+    }
+    const secretError = await validatePachkaReportSecret(context);
+    if (secretError) {
+      return secretError;
+    }
+    try {
+      return jsonResponse(await sendPachkaReport(context.env));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Pachka report sending failed.";
+      return errorResponse(message.includes("not configured") ? 409 : 502, message);
+    }
+  }
+
   return errorResponse(404, `Native handler for ${pathname} is not implemented.`);
 }
 
@@ -348,7 +412,7 @@ export async function onRequest(context) {
   const requestUrl = new URL(context.request.url);
   const pathname = requestUrl.pathname;
   const apiOrigin = sanitizeOrigin(context.env.API_ORIGIN);
-  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks"]);
+  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/pachka-report", "/api/pachka-report/send"]);
 
   if (isAiRoute(pathname)) {
     try {
@@ -365,14 +429,14 @@ export async function onRequest(context) {
       return withSourceHeader(withHeader(jsonResponse(hydratedPayload), "x-xway-shared-cache", "hit"), "native");
     }
 
-    if (pathname === "/api/health" || pathname === "/api/catalog-article-snapshots" || pathname === "/api/wb-cards" || pathname === "/api/mpvibe-stocks" || hasNativeStorageState(context.env)) {
+    if (pathname === "/api/health" || pathname === "/api/catalog-article-snapshots" || pathname === "/api/wb-cards" || pathname === "/api/mpvibe-stocks" || pathname === "/api/pachka-report" || pathname === "/api/pachka-report/send" || hasNativeStorageState(context.env)) {
       try {
         const nativeResponse = await handleNativeRequest(context, pathname);
         writeSharedApiResponse(context, pathname, requestUrl, nativeResponse);
         const cacheStatus = SHARED_API_CACHEABLE_ROUTES.has(pathname) && hasSharedD1Cache(context.env) ? "miss" : "skip";
         return withSourceHeader(withHeader(nativeResponse, "x-xway-shared-cache", cacheStatus), "native");
       } catch (error) {
-        if (!apiOrigin || pathname === "/api/health" || pathname === "/api/mpvibe-stocks") {
+        if (!apiOrigin || pathname === "/api/health" || pathname === "/api/mpvibe-stocks" || pathname === "/api/pachka-report" || pathname === "/api/pachka-report/send") {
           return errorResponse(500, error instanceof Error ? error.message : "Native handler failed.");
         }
       }

@@ -10,6 +10,7 @@ import "../css/catalog-issues.css";
 import "../css/catalog-table.css";
 import "../css/drr-analytics.css";
 import "../css/ai-chat.css";
+import "../css/pachka-report.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

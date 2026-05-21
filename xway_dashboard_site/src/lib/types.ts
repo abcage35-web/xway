@@ -526,6 +526,70 @@ export interface MpvibeStocksResponse {
   errors: Array<{ articles: string[]; error: string | null | undefined }>;
 }
 
+export interface PachkaReportRow {
+  ref: string;
+  source: "xway" | "mpvibe";
+  article: string;
+  name: string;
+  shop_id: number | null;
+  shop_name: string;
+  stock_xway: number | null;
+  stock_mpvibe: number | null;
+  spend: number | null;
+  revenue_ads: number | null;
+  revenue_total: number | null;
+  orders_ads: number | null;
+  orders_total: number | null;
+  drr: number | null;
+  campaigns: number;
+  active_campaigns: number;
+}
+
+export interface PachkaReportResponse {
+  ok: boolean;
+  generated_at: string;
+  range: {
+    start: string;
+    end: string;
+    days: number;
+  };
+  sources: {
+    xway: { available: boolean };
+    mpvibe: { available: boolean; rows: number };
+  };
+  warnings: string[];
+  totals: {
+    xway_rows: number;
+    all_rows: number;
+    mpvibe_only_rows: number;
+    spend: number;
+    zero_spend_stock_rows: number;
+  };
+  top_drr: PachkaReportRow[];
+  stock_no_spend: PachkaReportRow[];
+  mpvibe_only_stock: PachkaReportRow[];
+  message: string;
+  config: {
+    enabled: boolean;
+    token_configured: boolean;
+    entity_configured: boolean;
+    secret_configured: boolean;
+    entity_type: string;
+    days: number;
+    limit: number;
+    cron: string;
+  };
+}
+
+export interface PachkaReportSendResponse {
+  ok: boolean;
+  skipped?: boolean;
+  reason?: string;
+  sent_at: string | null;
+  report: PachkaReportResponse | null;
+  pachka: unknown;
+}
+
 export interface CatalogArticleCampaignTypeMetrics {
   views?: number | string | null;
   clicks?: number | string | null;

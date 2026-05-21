@@ -6,6 +6,7 @@ import { RouteErrorBoundary } from "../routes/error-boundary";
 import { AiPage } from "../routes/ai-page";
 import { catalogLoader, CatalogPage } from "../routes/catalog-page";
 import { DrrAnalyticsPage } from "../routes/drr-analytics-page";
+import { PachkaReportPage } from "../routes/pachka-report-page";
 import { productLoader, ProductPage } from "../routes/product-page";
 import { RootLayout } from "../routes/root-layout";
 
@@ -59,6 +60,12 @@ export const router = createBrowserRouter([
       {
         path: "drr-analytics",
         element: <DrrAnalyticsPage />,
+        hydrateFallbackElement: <RouteLoadingScreen />,
+        errorElement: <RouteErrorBoundary />,
+      },
+      {
+        path: "pachka-report",
+        element: <PachkaReportPage />,
         hydrateFallbackElement: <RouteLoadingScreen />,
         errorElement: <RouteErrorBoundary />,
       },
