@@ -474,7 +474,11 @@ function roundedNumber(value, digits = 2) {
 }
 
 function cleanAiText(value, max = 280) {
-  const text = asString(value).replace(/\s+/g, " ").replace(/\|/g, "/");
+  const text = asString(value)
+    .replace(/\bdeep dive\b/gi, "детальной проверке")
+    .replace(/\bcompact context\b/gi, "компактном отчете")
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "/");
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
@@ -1061,6 +1065,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe. Не упоминай кластеры, если deep_dive не вернул кластерные данные.",
       "Доступность MPVibe бери только из report.sources.mpvibe.available. Отсутствие MPVibe в deep_dive не означает, что MPVibe недоступен.",
       "Не выдумывай данные. Если углубление не удалось, опирайся на компактные метрики и явно не ссылайся на кластеры.",
+      "Не используй служебные слова deep_dive, compact context, first_pass или fallback в пользовательском тексте.",
       "Каждая рекомендация: максимум 1-2 предложения, без воды. Формула: 'потому что [метрика/сравнение], сделать [конкретное действие]; не делать [ограничение], если оно важно'.",
       "Поле recommendations обязательно: заполни его для каждого article из отчета, не группируй без article-ключа.",
       "Формат JSON: {\"analysis_note\":\"...\",\"insights\":[\"...\"],\"recommendations\":{\"article\":\"финальная рекомендация\"},\"self_review\":[\"какие черновые выводы были исправлены\"]}.",
