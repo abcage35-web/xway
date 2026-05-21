@@ -970,13 +970,6 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       deepDiveError = error instanceof Error ? error.message : String(error);
     }
 
-    if (!deepDive) {
-      return {
-        ...firstPass,
-        deep_dive_error: deepDiveError || "XWAY deep dive returned no data.",
-      };
-    }
-
     const finalInstructions = [
       "Ты аналитик XWAY. Сформируй финальные рекомендации для ежедневного markdown-отчета.",
       "Используй компактный отчет и, если есть, углубленные данные по кампаниям/кластерам.",
