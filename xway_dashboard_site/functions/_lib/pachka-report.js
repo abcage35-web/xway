@@ -154,6 +154,81 @@ function shortName(value, max = 54) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function stockMismatchRecommendation(row) {
+  const xwayStock = asNumber(row.stock_xway);
+  const mpvibeStock = asNumber(row.stock_mpvibe);
+  if (xwayStock === null && mpvibeStock !== null) {
+    return "остаток есть только в MPVibe";
+  }
+  if (xwayStock !== null && mpvibeStock === null) {
+    return "сверить MPVibe остаток";
+  }
+  if (xwayStock === null || mpvibeStock === null) {
+    return "";
+  }
+  const diff = Math.abs(xwayStock - mpvibeStock);
+  const base = Math.max(xwayStock, mpvibeStock, 1);
+  return diff > 20 && diff / base > 0.03 ? "сверить остатки XWAY/MPVibe" : "";
+}
+
+function buildDrrRecommendation(row, stockThreshold) {
+  const drr = asNumber(row.drr);
+  const spend = asNumber(row.spend) ?? 0;
+  const ordersAds = asNumber(row.orders_ads) ?? 0;
+  const stock = stockSignal(row);
+  const notes = [];
+  if (drr !== null && drr >= 100) {
+    notes.push("срочно снизить ставки/лимиты или поставить РК на паузу");
+  } else if (drr !== null && drr >= 70) {
+    notes.push("снизить ставки и убрать слабые запросы");
+  } else if (drr !== null && drr >= 50) {
+    notes.push("оптимизировать ставки, оставить конверсионные связки");
+  } else {
+    notes.push("контролировать ДРР, масштабировать только при достаточной марже");
+  }
+  if (spend >= 5000 && ordersAds <= 1) {
+    notes.push("проверить карточку и релевантность, заказов мало при расходе");
+  }
+  if (stock <= stockThreshold) {
+    notes.push("не разгонять рекламу до пополнения FBO");
+  }
+  const stockNote = stockMismatchRecommendation(row);
+  if (stockNote) {
+    notes.push(stockNote);
+  }
+  return notes.join("; ");
+}
+
+function buildStockNoSpendRecommendation(row, stockThreshold) {
+  const stock = stockSignal(row);
+  const notes = [];
+  if ((row.active_campaigns ?? 0) > 0) {
+    notes.push("РК есть, но расхода нет: проверить ставки, лимиты и статус показа");
+  } else if ((row.campaigns ?? 0) > 0) {
+    notes.push("есть выключенные РК: проверить причину и включить при марже");
+  } else {
+    notes.push("создать или запустить РК, если товар маржинален");
+  }
+  if (stock > stockThreshold * 5) {
+    notes.push("остаток высокий, приоритет для запуска");
+  }
+  const stockNote = stockMismatchRecommendation(row);
+  if (stockNote) {
+    notes.push(stockNote);
+  }
+  return notes.join("; ");
+}
+
+function buildMpvibeOnlyRecommendation(row, stockThreshold) {
+  const stock = stockSignal(row);
+  const notes = ["проверить маппинг/импорт в XWAY, остаток есть в MPVibe"];
+  if (stock > stockThreshold * 5) {
+    notes.push("остаток высокий, завести в XWAY приоритетно");
+  }
+  notes.push("до синхронизации учитывать FBO отдельно");
+  return notes.join("; ");
+}
+
 function markdownCell(value) {
   return asString(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ") || "-";
 }
@@ -203,7 +278,7 @@ function buildPachkaMarkdown(report, env) {
   lines.push("## Топ ДРР");
   lines.push("");
   lines.push(markdownTable(
-    ["#", "Артикул", "Товар", "ДРР", "Расход", "FBO XWAY", "FBO MPVibe"],
+    ["#", "Артикул", "Товар", "ДРР", "Расход", "FBO XWAY", "FBO MPVibe", "Рекомендация"],
     report.top_drr.map((row, index) => [
       String(index + 1),
       row.article,
@@ -212,13 +287,14 @@ function buildPachkaMarkdown(report, env) {
       formatMoney(row.spend),
       formatNumber(row.stock_xway),
       formatNumber(row.stock_mpvibe),
+      buildDrrRecommendation(row, stockThreshold),
     ]),
   ));
   lines.push("");
   lines.push(`## FBO > ${formatNumber(stockThreshold)} без расхода`);
   lines.push("");
   lines.push(markdownTable(
-    ["#", "Артикул", "Товар", "Кабинет", "FBO XWAY", "FBO MPVibe", "Расход"],
+    ["#", "Артикул", "Товар", "Кабинет", "FBO XWAY", "FBO MPVibe", "Расход", "Рекомендация"],
     report.stock_no_spend.map((row, index) => [
       String(index + 1),
       row.article,
@@ -227,18 +303,20 @@ function buildPachkaMarkdown(report, env) {
       formatNumber(row.stock_xway),
       formatNumber(row.stock_mpvibe),
       formatMoney(row.spend),
+      buildStockNoSpendRecommendation(row, stockThreshold),
     ]),
   ));
   lines.push("");
   lines.push(`## Только MPVibe FBO > ${formatNumber(stockThreshold)}`);
   lines.push("");
   lines.push(markdownTable(
-    ["#", "Артикул", "Товар", "FBO MPVibe"],
+    ["#", "Артикул", "Товар", "FBO MPVibe", "Рекомендация"],
     report.mpvibe_only_stock.map((row, index) => [
       String(index + 1),
       row.article,
       shortName(row.name, 90),
       formatNumber(row.stock_mpvibe),
+      buildMpvibeOnlyRecommendation(row, stockThreshold),
     ]),
   ));
   lines.push("");
