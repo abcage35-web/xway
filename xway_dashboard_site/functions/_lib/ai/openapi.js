@@ -26,6 +26,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         post: {
           operationId: "getArticleRecommendationData",
           summary: "Collect structured analytics for one WB article.",
+          description: "Use this only when a full recommendation context is needed. For configured show time, limits, budget top-ups, bid history or status logs, prefer the focused campaign-* methods so the system does not load the full product payload.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -86,10 +87,100 @@ export function buildAiOpenApiSpec(requestUrl) {
           },
         },
       },
+      "/api/ai/campaign-schedules": {
+        post: {
+          operationId: "getCampaignSchedules",
+          summary: "Get configured campaign display schedules without loading full product analytics.",
+          description: "Focused method for show-time diagnostics. Loads only article/product resolution, campaign rows and schedule-get for selected campaigns.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedRequest" } } },
+          },
+          responses: {
+            "200": {
+              description: "Campaign schedule settings.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedResponse" } } },
+            },
+          },
+        },
+      },
+      "/api/ai/campaign-limits": {
+        post: {
+          operationId: "getCampaignLimits",
+          summary: "Get campaign spend limits and budget rules without loading full product analytics.",
+          description: "Focused method for active limits, spent amounts, remaining limits, budget rules and budget-deposit status.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedRequest" } } },
+          },
+          responses: {
+            "200": {
+              description: "Campaign limits and budget rules.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedResponse" } } },
+            },
+          },
+        },
+      },
+      "/api/ai/campaign-budget-history": {
+        post: {
+          operationId: "getCampaignBudgetHistory",
+          summary: "Get campaign budget top-up history without loading full product analytics.",
+          description: "Focused method for budget replenishment history and budget auto-deposit rule diagnostics.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedRequest" } } },
+          },
+          responses: {
+            "200": {
+              description: "Campaign budget history.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedResponse" } } },
+            },
+          },
+        },
+      },
+      "/api/ai/campaign-bid-history": {
+        post: {
+          operationId: "getCampaignBidHistory",
+          summary: "Get campaign bid history without loading full product analytics.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedRequest" } } },
+          },
+          responses: {
+            "200": {
+              description: "Campaign bid history.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedResponse" } } },
+            },
+          },
+        },
+      },
+      "/api/ai/campaign-status-history": {
+        post: {
+          operationId: "getCampaignStatusHistory",
+          summary: "Get campaign status/pause history without loading full product analytics.",
+          description: "Focused method for schedule pauses, manual pauses, limits and status diagnostics. Use limit to keep payload small.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignStatusHistoryRequest" } } },
+          },
+          responses: {
+            "200": {
+              description: "Campaign status history.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/CampaignFocusedResponse" } } },
+            },
+          },
+        },
+      },
       "/api/ai/refresh-article": {
         post: {
           operationId: "refreshArticleRecommendationData",
           summary: "Refresh source data and collect structured analytics for one WB article.",
+          description: "Heavy full-refresh method. Prefer focused campaign-* methods for schedule, limits, top-ups, bids and status checks.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -262,6 +353,49 @@ export function buildAiOpenApiSpec(requestUrl) {
             chunk_size: { type: "integer", default: 8 },
           },
           required: ["message"],
+        },
+        CampaignFocusedRequest: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            article: { type: "string", description: "WB nmId/article. Preferred way to resolve shop/product/campaigns." },
+            shop_id: { type: "string", description: "Direct XWAY shop id. Use with product_id when article resolution is not needed." },
+            product_id: { type: "string", description: "Direct XWAY product id. Use with shop_id when article resolution is not needed." },
+            campaign_id: { type: "string", description: "Optional single XWAY campaign id or WB campaign id." },
+            campaign_ids: {
+              type: "array",
+              description: "Optional selected campaign ids. Accepts internal XWAY campaign ids or WB campaign ids. Omit to return all campaigns for the product.",
+              items: { type: "string" },
+            },
+            start: { type: "string", format: "date", description: "Range start for product/campaign state lookup. Defaults to 30 days before end." },
+            end: { type: "string", format: "date", description: "Range end for product/campaign state lookup. Defaults to today." },
+            refresh: { type: "boolean", description: "Bypass short-lived XWAY source caches for this focused method." },
+          },
+        },
+        CampaignStatusHistoryRequest: {
+          allOf: [
+            { $ref: "#/components/schemas/CampaignFocusedRequest" },
+            {
+              type: "object",
+              properties: {
+                limit: { type: "integer", default: 120, description: "Maximum status rows per history source and campaign." },
+              },
+            },
+          ],
+        },
+        CampaignFocusedResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            kind: { type: "string" },
+            generated_at: { type: "string" },
+            range: { type: "object" },
+            article: { type: ["string", "null"] },
+            product_ref: { type: "string" },
+            campaign_count: { type: "integer" },
+            not_found_campaign_ids: { type: "array", items: { type: "string" } },
+            campaigns: { type: "array", items: { type: "object" } },
+          },
         },
         ContextResponse: {
           type: "object",

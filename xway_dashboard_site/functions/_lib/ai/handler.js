@@ -7,6 +7,13 @@ import { buildAiOpenApiSpec } from "./openapi.js";
 import { collectAiAdMetrics } from "./ad-metrics.js";
 import { handleAiChat } from "./chat.js";
 import { collectAiRecommendationData } from "./recommendation-data.js";
+import {
+  collectAiCampaignBidHistory,
+  collectAiCampaignBudgetHistory,
+  collectAiCampaignLimits,
+  collectAiCampaignSchedules,
+  collectAiCampaignStatusHistory,
+} from "./campaign-details.js";
 
 function methodAllowed(context, allowed) {
   if (allowed.includes(context.request.method)) {
@@ -22,7 +29,7 @@ function authed(context) {
 
 function aiErrorResponse(error) {
   const message = error instanceof Error ? error.message : String(error || "AI handler failed.");
-  const status = /article is required|start date must not be after end date|Unexpected token|JSON/i.test(message) ? 400 : 500;
+  const status = /article is required|article or shop_id|start date must not be after end date|Unexpected token|JSON/i.test(message) ? 400 : 500;
   return errorResponse(status, message);
 }
 
@@ -98,6 +105,66 @@ export async function handleAiRequest(context, pathname) {
     }
     try {
       return jsonResponse(await collectAiAdMetrics(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/campaign-schedules") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await collectAiCampaignSchedules(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/campaign-limits") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await collectAiCampaignLimits(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/campaign-budget-history") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await collectAiCampaignBudgetHistory(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/campaign-bid-history") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await collectAiCampaignBidHistory(context));
+    } catch (error) {
+      return aiErrorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/ai/campaign-status-history") {
+    const methodError = methodAllowed(context, ["POST"]);
+    if (methodError) {
+      return methodError;
+    }
+    try {
+      return jsonResponse(await collectAiCampaignStatusHistory(context));
     } catch (error) {
       return aiErrorResponse(error);
     }

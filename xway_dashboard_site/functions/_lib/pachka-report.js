@@ -2,7 +2,13 @@ import { applyCatalogArticleSnapshots } from "./catalog-article-snapshots.js";
 import { collectCatalog, collectCatalogChart, collectCatalogProductDetails } from "./catalog.js";
 import { collectCatalogIssues } from "./catalog-issues.js";
 import { collectMpvibeStocks } from "./ai/mpvibe-client.js";
-import { collectProducts } from "./products.js";
+import {
+  collectAiCampaignBidHistory,
+  collectAiCampaignBudgetHistory,
+  collectAiCampaignLimits,
+  collectAiCampaignSchedules,
+  collectAiCampaignStatusHistory,
+} from "./ai/campaign-details.js";
 
 const PACHKA_API_ORIGIN = "https://api.pachca.com/api/shared/v1";
 const DEFAULT_REPORT_DAYS = 3;
@@ -487,6 +493,7 @@ function cleanAiText(value, max = 280) {
   const text = asString(value)
     .replace(/\bdeep dive\b/gi, "детальной проверке")
     .replace(/\bfull_refresh_context\b/gi, "полном обновлении данных")
+    .replace(/\bfocused_product_refresh\b/gi, "точечном обновлении данных")
     .replace(/\bcompact context\b/gi, "компактном отчете")
     .replace(/\bfirst_pass\b/gi, "черновом анализе")
     .replace(/\bfallback\b/gi, "резервной оценке")
@@ -1204,6 +1211,32 @@ async function timedRecommendationSource(name, timeoutMs, fn) {
   }
 }
 
+async function collectFocusedCampaignSource(env, articles, range, fn, extraBody = {}) {
+  const payloads = await Promise.all(
+    articles.map((article) =>
+      fn({
+        env,
+        request: new Request("https://xway.internal/api/ai/focused-campaign-source", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            article,
+            start: range.start,
+            end: range.end,
+            ...extraBody,
+          }),
+        }),
+      }),
+    ),
+  );
+  return {
+    ok: true,
+    generated_at: new Date().toISOString(),
+    articles: payloads.map((payload) => payload.article).filter(Boolean),
+    payloads,
+  };
+}
+
 async function collectFullRecommendationContext(env, report, articleItems, { forceRefresh = false, timeoutMs = DEFAULT_AI_DEEP_TIMEOUT_MS } = {}) {
   const articles = [...new Set((articleItems || []).map((item) => asString(item.article)).filter(Boolean))];
   const productRefs = productRefsForArticles(report, articleItems);
@@ -1215,13 +1248,30 @@ async function collectFullRecommendationContext(env, report, articleItems, { for
   const sourceTimeoutMs = Math.max(5_000, timeoutMs);
   const turnoverStart = shiftedIsoDate(report.range.end, -2);
   const sources = await Promise.all([
-    timedRecommendationSource("xway_products_full", sourceTimeoutMs, () =>
-      collectProducts(env, {
-        articles,
-        start: report.range.start,
-        end: report.range.end,
-        campaignMode: "full",
-        forceRefresh: refresh,
+    timedRecommendationSource("campaign_schedules", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectFocusedCampaignSource(env, articles, report.range, collectAiCampaignSchedules, {
+        refresh,
+      }),
+    ),
+    timedRecommendationSource("campaign_limits", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectFocusedCampaignSource(env, articles, report.range, collectAiCampaignLimits, {
+        refresh,
+      }),
+    ),
+    timedRecommendationSource("campaign_budget_history", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectFocusedCampaignSource(env, articles, report.range, collectAiCampaignBudgetHistory, {
+        refresh,
+      }),
+    ),
+    timedRecommendationSource("campaign_bid_history", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectFocusedCampaignSource(env, articles, report.range, collectAiCampaignBidHistory, {
+        refresh,
+      }),
+    ),
+    timedRecommendationSource("campaign_status_history", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectFocusedCampaignSource(env, articles, report.range, collectAiCampaignStatusHistory, {
+        refresh,
+        limit: 60,
       }),
     ),
     timedRecommendationSource("catalog_details", Math.min(sourceTimeoutMs, 18_000), () =>
@@ -1266,20 +1316,28 @@ async function collectFullRecommendationContext(env, report, articleItems, { for
   ]);
   const byName = Object.fromEntries(sources.map((source) => [source.name, source]));
   return {
-    mode: "update_product_equivalent",
+    mode: "focused_product_refresh",
     auto_refresh: refresh,
     refreshed_at: new Date().toISOString(),
     articles,
     product_refs: productRefs,
     data_manifest: [
-      "XWAY product full: product, stock, range metrics, daily stats, campaigns, limits, schedules, bid/budget/status logs, clusters and cluster action history",
+      "Focused campaign schedules: configured show-time slots from schedule-get",
+      "Focused campaign limits: spend limits, spent amounts, remaining limits and budget rules",
+      "Focused campaign budget history: budget top-ups and auto-deposit diagnostics",
+      "Focused campaign bid history: bid changes by campaign",
+      "Focused campaign status history: MP/status and pause logs with bounded row limit",
       "Catalog details: campaign states, spend/budget limits, schedules, campaign type totals and best order time",
       "Catalog chart: absolute daily metrics and campaign-type breakdown for report range",
       "Turnover 3d: fresh orders/revenue/spend/stock for the last 3 days ending on report end date",
       "Issues yesterday: campaign/product issue rows for report end date",
     ],
     sources: Object.fromEntries(sources.map((source) => [source.name, { available: Boolean(source.payload), error: source.error }])),
-    products: compactDeepDivePayload(byName.xway_products_full?.payload),
+    campaign_schedules: byName.campaign_schedules?.payload || null,
+    campaign_limits: byName.campaign_limits?.payload || null,
+    campaign_budget_history: byName.campaign_budget_history?.payload || null,
+    campaign_bid_history: byName.campaign_bid_history?.payload || null,
+    campaign_status_history: byName.campaign_status_history?.payload || null,
     catalog_details: compactCatalogDetailsPayload(byName.catalog_details?.payload),
     catalog_chart: compactCatalogChartPayload(byName.catalog_chart?.payload),
     turnover_3d: compactTurnoverPayload(byName.turnover_3d?.payload),
@@ -1316,7 +1374,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
     "",
     "Ты аналитик XWAY. Нужно подготовить осмысленные рекомендации для ежедневного markdown-отчета.",
     "Этап 1: сделай черновой диагноз и реши, достаточно ли компактного отчета или нужно углубиться в данные XWAY по кампаниям и кластерам.",
-    "После твоего решения система сама обновит полный набор данных по приоритетным SKU: это аналог ручной кнопки 'Обновить товар'.",
+    "После твоего решения система сама догрузит по приоритетным SKU только нужные точечные методы: расписания, лимиты, пополнения бюджета, ставки, статусы, график, оборачиваемость и ошибки.",
     "Углубляйся только когда это реально нужно: высокий ДРР при заметном расходе, расход без заказов, активные РК без расхода, подозрение на ставки/поисковые фразы/лимиты/расписание или когда compact context не объясняет причину.",
     "Для каждого article дай черновую рекомендацию: 1 короткое предложение, максимум 260 символов.",
     "Поле recommendations обязательно: заполни его для каждого article из sections.top_drr, sections.fbo_stock_no_spend и sections.mpvibe_only_stock, даже если просишь углубление.",
@@ -1353,13 +1411,13 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       analystProfileInstructions(),
       "",
       "Ты редактор-аналитик XWAY. Этап 2: пересобери финальные рекомендации для markdown-отчета.",
-      "Используй компактный отчет, черновик первого этапа и full_refresh_context.",
-      "full_refresh_context собран сервером автоматически с force refresh и по смыслу соответствует ручной кнопке 'Обновить товар': свежие остатки, 3-дневная оборачиваемость, детали РК/лимиты/лучшие часы, график с РК-разбивкой, ошибки за вчера и полный XWAY product payload.",
+      "Используй компактный отчет, черновик первого этапа и focused_product_refresh.",
+      "focused_product_refresh собран сервером автоматически через точечные методы, без тяжелого полного product payload: расписания показов, лимиты, пополнения бюджета, ставки, статусы, график с РК-разбивкой, 3-дневная оборачиваемость и ошибки за вчера.",
       "Сделай самопроверку: убери шаблонные советы, противоречия источникам, неподтвержденные выводы и рекомендации без действия.",
-      "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe. Не упоминай кластеры, если full_refresh_context не вернул кластерные данные.",
+      "Сам реши, какие выводы важны: ставки, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe. Не упоминай кластеры, если focused_product_refresh или compact report не вернули кластерные данные.",
       "Доступность MPVibe бери только из report.sources.mpvibe.available.",
       "Не выдумывай данные. Если углубление не удалось, опирайся на компактные метрики и явно не ссылайся на кластеры.",
-      "Не используй служебные слова deep_dive, full_refresh_context, compact context, first_pass или fallback в пользовательском тексте.",
+      "Не используй служебные слова deep_dive, full_refresh_context, focused_product_refresh, compact context, first_pass или fallback в пользовательском тексте.",
       "Каждая рекомендация: максимум 1-2 предложения, без воды. Формула: 'потому что [метрика/сравнение], сделать [конкретное действие]; не делать [ограничение], если оно важно'.",
       "Поле recommendations обязательно: заполни его для каждого article из отчета, не группируй без article-ключа.",
       "Формат JSON: {\"analysis_note\":\"...\",\"insights\":[\"...\"],\"recommendations\":{\"article\":\"финальная рекомендация\"},\"self_review\":[\"какие черновые выводы были исправлены\"]}.",
@@ -1372,7 +1430,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
         input: {
           report: reportContext,
           first_pass: decision,
-          full_refresh_context: fullContext,
+          focused_product_refresh: fullContext,
           full_refresh_errors: fullContextErrors,
         },
       });
