@@ -1,4 +1,5 @@
 import { errorResponse, jsonResponse } from "../utils.js";
+import { accessRoleSummary } from "../access-control.js";
 import { hasSharedD1Cache } from "../shared-cache.js";
 import { requireAiAuth } from "./auth.js";
 import { buildAiContextPayload } from "./context.js";
@@ -43,6 +44,7 @@ export async function handleAiRequest(context, pathname) {
       ok: true,
       service: "xway-ai-actions",
       auth_configured: Boolean(String(context.env.XWAY_AI_API_KEY || "").trim()),
+      role_access: accessRoleSummary(context.env),
       openai_configured: Boolean(String(context.env.OPENAI_API_KEY || "").trim()),
       ai_cache_configured: Boolean(context.env.XWAY_AI_CACHE && typeof context.env.XWAY_AI_CACHE.get === "function" && typeof context.env.XWAY_AI_CACHE.put === "function"),
       shared_d1_cache_configured: hasSharedD1Cache(context.env),

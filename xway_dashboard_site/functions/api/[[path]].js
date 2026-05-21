@@ -5,6 +5,7 @@ import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { handleAiRequest } from "../_lib/ai/handler.js";
 import { isAiRoute } from "../_lib/ai/auth.js";
 import { collectMpvibeStocks } from "../_lib/ai/mpvibe-client.js";
+import { ACCESS_PERMISSIONS, accessRoleSummary, hasAccessTokenHeader, requireAccessPermission } from "../_lib/access-control.js";
 import { buildPachkaReport, sendPachkaReport } from "../_lib/pachka-report.js";
 import { collectProducts } from "../_lib/products.js";
 import { hasSharedD1Cache, readSharedCache, writeSharedCache } from "../_lib/shared-cache.js";
@@ -30,6 +31,16 @@ const SHARED_API_CACHEABLE_ROUTES = new Set([
   "/api/catalog-product-details",
   "/api/catalog-issues",
   "/api/products",
+]);
+const ANALYST_NATIVE_ROUTES = new Set([
+  "/api/catalog",
+  "/api/catalog-chart",
+  "/api/catalog-product-details",
+  "/api/catalog-issues",
+  "/api/products",
+  "/api/cluster-detail",
+  "/api/wb-cards",
+  "/api/mpvibe-stocks",
 ]);
 
 async function readJsonRequest(request) {
@@ -174,6 +185,32 @@ async function validatePachkaReportSecret(context) {
   return null;
 }
 
+async function validatePachkaReportSendAccess(context) {
+  if (hasAccessTokenHeader(context.request)) {
+    const access = requireAccessPermission(context, ACCESS_PERMISSIONS.SEND_PACHKA, { errorPrefix: "Pachka report" });
+    return access.ok ? null : access.response;
+  }
+  return validatePachkaReportSecret(context);
+}
+
+function validateOptionalRoleAccess(context, pathname) {
+  if (!hasAccessTokenHeader(context.request)) {
+    return null;
+  }
+
+  if (pathname === "/api/pachka-report") {
+    const access = requireAccessPermission(context, ACCESS_PERMISSIONS.READ_REPORTS, { errorPrefix: "Pachka report" });
+    return access.ok ? null : access.response;
+  }
+
+  if (ANALYST_NATIVE_ROUTES.has(pathname)) {
+    const access = requireAccessPermission(context, ACCESS_PERMISSIONS.RUN_ANALYSIS, { errorPrefix: "XWAY analytics" });
+    return access.ok ? null : access.response;
+  }
+
+  return null;
+}
+
 async function proxyRequest(context, apiOrigin) {
   if (!apiOrigin) {
     return errorResponse(500, "API_ORIGIN is not configured.");
@@ -218,6 +255,7 @@ async function handleNativeRequest(context, pathname) {
         d1: hasSharedD1Cache(context.env),
         kv: Boolean(context.env.XWAY_AI_CACHE && typeof context.env.XWAY_AI_CACHE.get === "function" && typeof context.env.XWAY_AI_CACHE.put === "function"),
       },
+      role_access: accessRoleSummary(context.env),
       has_storage_state: hasNativeStorageState(context.env),
       auth_sources: {
         storage_state_json: Boolean(String(context.env.XWAY_STORAGE_STATE_JSON || "").trim()),
@@ -393,7 +431,7 @@ async function handleNativeRequest(context, pathname) {
     if (context.request.method !== "POST") {
       return errorResponse(405, "Use POST for Pachka report sending.");
     }
-    const secretError = await validatePachkaReportSecret(context);
+    const secretError = await validatePachkaReportSendAccess(context);
     if (secretError) {
       return secretError;
     }
@@ -423,6 +461,11 @@ export async function onRequest(context) {
   }
 
   if (nativeRoutes.has(pathname)) {
+    const roleError = validateOptionalRoleAccess(context, pathname);
+    if (roleError) {
+      return roleError;
+    }
+
     const cachedPayload = await readSharedApiResponse(context, pathname, requestUrl);
     if (cachedPayload !== null && cachedPayload !== undefined) {
       const hydratedPayload = pathname === "/api/catalog" ? await applyCatalogArticleSnapshots(context.env, cachedPayload) : cachedPayload;

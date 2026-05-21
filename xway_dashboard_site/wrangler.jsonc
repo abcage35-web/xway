@@ -23,7 +23,11 @@
   // Configure in Cloudflare dashboard or via wrangler secrets:
   // - API_ORIGIN: optional reserve proxy origin for routes not handled by Pages Functions
   // - XWAY_STORAGE_STATE_JSON or XWAY_STORAGE_STATE_BASE64: auth state for native XWAY API calls
-  // - XWAY_AI_API_KEY: required Bearer token for shared ChatGPT Actions
+  // - XWAY_AI_API_KEY: legacy analyst Bearer token for shared ChatGPT Actions
+  // - XWAY_VIEWER_TOKEN(S): optional role token(s), can read generated reports
+  // - XWAY_ANALYST_TOKEN(S): optional role token(s), can read reports and run XWAY analytics
+  // - XWAY_OPERATOR_TOKEN(S): optional role token(s), can trigger Pachka report sending
+  // - XWAY_ACCESS_TOKENS_JSON: optional role-token config, accepts {"viewer":["..."],"analyst":["..."],"operator":["..."]}
   // - OPENAI_API_KEY: optional, required for the in-site /ai chat
   // - OPENAI_MODEL: optional model override for /api/ai/chat
   // - MPVIBE_REFRESH_COOKIE_HEADER, MPVIBE_COOKIE_HEADER, or MPVIBE_AUTHORIZATION: optional MPVibe data source for AI analytics

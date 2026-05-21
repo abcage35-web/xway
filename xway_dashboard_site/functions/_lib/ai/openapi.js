@@ -5,7 +5,7 @@ export function buildAiOpenApiSpec(requestUrl) {
     info: {
       title: "XWAY AI Analytics API",
       version: "0.1.0",
-      description: "Structured XWAY, MPVibe and WB data for a shared ChatGPT analyst.",
+      description: "Structured XWAY, MPVibe and WB data for a shared ChatGPT analyst. Role tokens: viewer can read reports, analyst can read reports and run analytics, operator can send Pachka reports. Use XWAY_ANALYST_TOKEN or the legacy XWAY_AI_API_KEY for secured analytics methods.",
     },
     servers: [{ url: origin }],
     paths: {
@@ -113,7 +113,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         bearerAuth: {
           type: "http",
           scheme: "bearer",
-          description: "Use the Cloudflare secret XWAY_AI_API_KEY as Bearer token.",
+          description: "Use a role token as Bearer. For analytics, configure XWAY_ANALYST_TOKEN or use the legacy XWAY_AI_API_KEY.",
         },
       },
       schemas: {
