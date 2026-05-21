@@ -40,6 +40,12 @@ function formatPercent(value) {
   return `${formatNumber(numeric, Math.abs(numeric) >= 100 ? 0 : 1)}%`;
 }
 
+function rate(numerator, denominator) {
+  const left = asNumber(numerator);
+  const right = asNumber(denominator);
+  return left !== null && right !== null && right > 0 ? (left / right) * 100 : null;
+}
+
 function clampInteger(value, fallback, min, max) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
@@ -86,23 +92,45 @@ function flattenCatalogRows(payload) {
     (shop.articles || []).map((article) => {
       const spend = asNumber(article.expense_sum);
       const stock = asNumber(article.stock);
+      const campaignStates = Array.isArray(article.campaign_states) ? article.campaign_states : [];
       return {
         ref: `${shop.id}:${article.product_id}`,
         source: "xway",
         article: asString(article.article),
         name: asString(article.name) || `Артикул ${article.article}`,
+        category: asString(article.category_keyword) || "Без категории",
         shop_id: shop.id,
         shop_name: asString(shop.name) || `Кабинет ${shop.id}`,
+        enabled: article.enabled !== false && article.is_active !== false,
         stock_xway: stock,
         stock_mpvibe: null,
         spend,
+        views: asNumber(article.views),
+        clicks: asNumber(article.clicks),
+        atbs: asNumber(article.atbs),
         revenue_ads: asNumber(article.sum_price),
         revenue_total: asNumber(article.ordered_sum_report),
         orders_ads: asNumber(article.orders),
         orders_total: asNumber(article.ordered_report),
         drr: resolveDrr(article),
-        campaigns: Array.isArray(article.campaign_states) ? article.campaign_states.length : 0,
-        active_campaigns: Array.isArray(article.campaign_states) ? article.campaign_states.filter((campaign) => campaign?.active).length : 0,
+        ctr: asNumber(article.ctr),
+        cpc: asNumber(article.cpc),
+        cr: asNumber(article.cr),
+        cpo: asNumber(article.cpo),
+        cpo_overall: asNumber(article.cpo_overall),
+        campaigns: campaignStates.length,
+        active_campaigns: campaignStates.filter((campaign) => campaign?.active).length,
+        paused_campaigns: campaignStates.filter((campaign) => campaign?.status_code === "PAUSED").length,
+        frozen_campaigns: campaignStates.filter((campaign) => campaign?.status_code === "FROZEN").length,
+        spend_limit_active: campaignStates.some((campaign) => campaign?.spend_limit_active),
+        spend_limit: campaignStates.reduce((sum, campaign) => sum + (asNumber(campaign?.spend_limit) ?? 0), 0) || null,
+        spend_spent_today: campaignStates.reduce((sum, campaign) => sum + (asNumber(campaign?.spend_spent_today) ?? 0), 0) || null,
+        budget_rule_active: campaignStates.some((campaign) => campaign?.budget_rule_active),
+        budget_limit: campaignStates.reduce((sum, campaign) => sum + (asNumber(campaign?.budget_limit) ?? 0), 0) || null,
+        budget_spent_today: campaignStates.reduce((sum, campaign) => sum + (asNumber(campaign?.budget_spent_today) ?? 0), 0) || null,
+        schedule_active: campaignStates.some((campaign) => campaign?.schedule_active),
+        schedule_active_slots: campaignStates.reduce((sum, campaign) => sum + (asNumber(campaign?.schedule_active_slots) ?? 0), 0) || null,
+        schedule_total_slots: campaignStates.reduce((sum, campaign) => sum + (asNumber(campaign?.schedule_total_slots) ?? 0), 0) || null,
       };
     }),
   );
@@ -122,18 +150,39 @@ function mergeMpvibeRows(xwayRows, mpvibeRows) {
       source: "mpvibe",
       article: asString(row.article),
       name: asString(row.name) || `Артикул ${row.article}`,
+      category: "Только MPVibe",
       shop_id: null,
       shop_name: row.account_id ? `MPVibe account ${row.account_id}` : "MPVibe",
+      enabled: true,
       stock_xway: null,
       stock_mpvibe: asNumber(row.stock_fbo),
+      views: null,
+      clicks: null,
+      atbs: null,
       spend: null,
       revenue_ads: null,
       revenue_total: null,
       orders_ads: null,
       orders_total: null,
       drr: null,
+      ctr: null,
+      cpc: null,
+      cr: null,
+      cpo: null,
+      cpo_overall: null,
       campaigns: 0,
       active_campaigns: 0,
+      paused_campaigns: 0,
+      frozen_campaigns: 0,
+      spend_limit_active: false,
+      spend_limit: null,
+      spend_spent_today: null,
+      budget_rule_active: false,
+      budget_limit: null,
+      budget_spent_today: null,
+      schedule_active: false,
+      schedule_active_slots: null,
+      schedule_total_slots: null,
     }));
   return [...merged, ...mpvibeOnlyRows];
 }
@@ -152,6 +201,121 @@ function topRows(rows, limit, predicate, sortValue) {
 function shortName(value, max = 54) {
   const text = asString(value).replace(/\s+/g, " ");
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function pushUnique(target, value) {
+  const text = asString(value);
+  if (text && !target.includes(text)) {
+    target.push(text);
+  }
+}
+
+function aggregateRows(rows) {
+  const totals = rows.reduce(
+    (sum, row) => ({
+      rows: sum.rows + 1,
+      spend: sum.spend + (asNumber(row.spend) ?? 0),
+      revenueAds: sum.revenueAds + (asNumber(row.revenue_ads) ?? 0),
+      revenueTotal: sum.revenueTotal + (asNumber(row.revenue_total) ?? 0),
+      ordersAds: sum.ordersAds + (asNumber(row.orders_ads) ?? 0),
+      ordersTotal: sum.ordersTotal + (asNumber(row.orders_total) ?? 0),
+      views: sum.views + (asNumber(row.views) ?? 0),
+      clicks: sum.clicks + (asNumber(row.clicks) ?? 0),
+      atbs: sum.atbs + (asNumber(row.atbs) ?? 0),
+      stock: sum.stock + stockSignal(row),
+      activeCampaigns: sum.activeCampaigns + (asNumber(row.active_campaigns) ?? 0),
+      campaigns: sum.campaigns + (asNumber(row.campaigns) ?? 0),
+    }),
+    {
+      rows: 0,
+      spend: 0,
+      revenueAds: 0,
+      revenueTotal: 0,
+      ordersAds: 0,
+      ordersTotal: 0,
+      views: 0,
+      clicks: 0,
+      atbs: 0,
+      stock: 0,
+      activeCampaigns: 0,
+      campaigns: 0,
+    },
+  );
+  return {
+    ...totals,
+    drrAds: rate(totals.spend, totals.revenueAds),
+    drrTotal: rate(totals.spend, totals.revenueTotal),
+    ctr: rate(totals.clicks, totals.views),
+    cr: rate(totals.ordersAds, totals.clicks),
+    cpc: totals.clicks > 0 ? totals.spend / totals.clicks : null,
+    cpo: totals.ordersAds > 0 ? totals.spend / totals.ordersAds : null,
+  };
+}
+
+function buildGroupMap(rows, keyGetter) {
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const key = asString(keyGetter(row)) || "unknown";
+    grouped.set(key, [...(grouped.get(key) || []), row]);
+  });
+  return new Map([...grouped.entries()].map(([key, groupRows]) => [key, aggregateRows(groupRows)]));
+}
+
+function buildRecommendationContext(rows, stockThreshold) {
+  const xwayRows = rows.filter((row) => row.source === "xway");
+  const rowsWithSpend = xwayRows.filter((row) => (asNumber(row.spend) ?? 0) > 0);
+  const total = aggregateRows(xwayRows);
+  const category = buildGroupMap(xwayRows, (row) => row.category);
+  const shop = buildGroupMap(xwayRows, (row) => row.shop_name);
+  const maxSpend = rowsWithSpend.reduce((max, row) => Math.max(max, asNumber(row.spend) ?? 0), 0);
+  const highDrrRows = rowsWithSpend.filter((row) => (asNumber(row.drr) ?? 0) >= 70);
+  const noOrderSpendRows = rowsWithSpend.filter((row) => (asNumber(row.orders_ads) ?? 0) === 0);
+  const stockNoSpendRows = xwayRows.filter((row) => stockSignal(row) > stockThreshold && (asNumber(row.spend) ?? 0) === 0);
+  return {
+    total,
+    category,
+    shop,
+    maxSpend,
+    highDrrRows,
+    noOrderSpendRows,
+    stockNoSpendRows,
+  };
+}
+
+function groupStatsForRow(row, context) {
+  return {
+    category: context.category.get(asString(row.category) || "unknown") || null,
+    shop: context.shop.get(asString(row.shop_name) || "unknown") || null,
+  };
+}
+
+function rowShare(value, total) {
+  const numeric = asNumber(value) ?? 0;
+  const denominator = asNumber(total) ?? 0;
+  return denominator > 0 ? (numeric / denominator) * 100 : null;
+}
+
+function buildReportInsights(report, context) {
+  const insights = [];
+  const totalDrr = context.total.drrTotal ?? context.total.drrAds;
+  if (totalDrr !== null) {
+    insights.push(`ДРР всего: ${formatPercent(totalDrr)} при расходе ${formatMoney(context.total.spend)}.`);
+  }
+  if (context.highDrrRows.length) {
+    const spend = context.highDrrRows.reduce((sum, row) => sum + (asNumber(row.spend) ?? 0), 0);
+    insights.push(`Высокий ДРР >= 70% у ${formatNumber(context.highDrrRows.length)} SKU, расход в зоне риска ${formatMoney(spend)}.`);
+  }
+  if (context.noOrderSpendRows.length) {
+    const spend = context.noOrderSpendRows.reduce((sum, row) => sum + (asNumber(row.spend) ?? 0), 0);
+    insights.push(`Есть расход без заказов: ${formatNumber(context.noOrderSpendRows.length)} SKU на ${formatMoney(spend)}.`);
+  }
+  if (context.stockNoSpendRows.length) {
+    insights.push(`Есть товары с FBO > ${formatNumber(report.config.stock_min_value)} без расхода: ${formatNumber(context.stockNoSpendRows.length)} SKU.`);
+  }
+  if (!report.sources.mpvibe.available) {
+    insights.push("MPVibe сейчас недоступен, рекомендации по остаткам строятся по XWAY и требуют последующей сверки.");
+  }
+  return insights;
 }
 
 function stockMismatchRecommendation(row, mpvibeAvailable) {
@@ -174,52 +338,117 @@ function stockMismatchRecommendation(row, mpvibeAvailable) {
   return diff > 20 && diff / base > 0.03 ? "сверить остатки XWAY/MPVibe" : "";
 }
 
-function buildDrrRecommendation(row, stockThreshold, mpvibeAvailable) {
+function limitUsage(row) {
+  const spendLimit = asNumber(row.spend_limit);
+  const spendToday = asNumber(row.spend_spent_today);
+  const budgetLimit = asNumber(row.budget_limit);
+  const budgetToday = asNumber(row.budget_spent_today);
+  return {
+    spend: spendLimit !== null && spendLimit > 0 && spendToday !== null ? (spendToday / spendLimit) * 100 : null,
+    budget: budgetLimit !== null && budgetLimit > 0 && budgetToday !== null ? (budgetToday / budgetLimit) * 100 : null,
+  };
+}
+
+function buildDrrRecommendation(row, stockThreshold, mpvibeAvailable, context) {
   const drr = asNumber(row.drr);
   const spend = asNumber(row.spend) ?? 0;
   const ordersAds = asNumber(row.orders_ads) ?? 0;
+  const ordersTotal = asNumber(row.orders_total) ?? 0;
+  const clicks = asNumber(row.clicks) ?? 0;
+  const ctr = asNumber(row.ctr) ?? rate(row.clicks, row.views);
+  const cr = asNumber(row.cr) ?? rate(row.orders_ads, row.clicks);
+  const cpc = asNumber(row.cpc);
+  const cpo = asNumber(row.cpo);
   const stock = stockSignal(row);
   const notes = [];
+  const groups = groupStatsForRow(row, context);
+  const spendShare = rowShare(spend, context.total.spend);
+  const categoryDrr = groups.category?.drrTotal ?? groups.category?.drrAds ?? null;
+  const shopDrr = groups.shop?.drrTotal ?? groups.shop?.drrAds ?? null;
+
   if (drr !== null && drr >= 100) {
-    notes.push("срочно снизить ставки/лимиты или поставить РК на паузу");
+    pushUnique(notes, "срочно снизить ставки/лимиты, оставить только связки с заказами");
   } else if (drr !== null && drr >= 70) {
-    notes.push("снизить ставки и убрать слабые запросы");
+    pushUnique(notes, "снизить ставки и убрать слабые запросы");
   } else if (drr !== null && drr >= 50) {
-    notes.push("оптимизировать ставки, оставить конверсионные связки");
+    pushUnique(notes, "оптимизировать ставки, оставить конверсионные связки");
   } else {
-    notes.push("контролировать ДРР, масштабировать только при достаточной марже");
+    pushUnique(notes, "контролировать ДРР, масштабировать только при достаточной марже");
   }
-  if (spend >= 5000 && ordersAds <= 1) {
-    notes.push("проверить карточку и релевантность, заказов мало при расходе");
+  if (categoryDrr !== null && drr !== null && drr > categoryDrr * 1.35) {
+    pushUnique(notes, `хуже категории (${formatPercent(categoryDrr)}): перераспределить бюджет в более эффективные SKU`);
+  } else if (shopDrr !== null && drr !== null && drr > shopDrr * 1.35) {
+    pushUnique(notes, `хуже кабинета (${formatPercent(shopDrr)}): понизить приоритет в рекламе`);
+  }
+  if (spendShare !== null && spendShare >= 5 && drr !== null && drr >= 50) {
+    pushUnique(notes, `занимает ${formatPercent(spendShare)} расхода отчета, править в первую очередь`);
+  }
+  if (spend >= Math.max(5000, context.maxSpend * 0.08) && ordersAds <= 1) {
+    pushUnique(notes, "расход заметный, заказов почти нет: проверить карточку, цену и релевантность запросов");
+  }
+  if (clicks >= 80 && cr !== null && cr < 1) {
+    pushUnique(notes, `низкая конверсия ${formatPercent(cr)} при кликах: проверить цену, отзывы, фото и оффер`);
+  }
+  if (ctr !== null && groups.category?.ctr && ctr < groups.category.ctr * 0.65) {
+    pushUnique(notes, `CTR ниже категории (${formatPercent(groups.category.ctr)}): обновить креатив/название/поисковые фразы`);
+  }
+  if (cpc !== null && groups.category?.cpc && cpc > groups.category.cpc * 1.35) {
+    pushUnique(notes, `CPC выше категории (${formatMoney(groups.category.cpc)}): снизить ставки`);
+  }
+  if (cpo !== null && ordersAds > 0 && groups.category?.cpo && cpo > groups.category.cpo * 1.35) {
+    pushUnique(notes, `CPO выше категории (${formatMoney(groups.category.cpo)}): чистить неэффективные размещения`);
+  }
+  if (ordersAds === 0 && ordersTotal > 0) {
+    pushUnique(notes, "органические заказы есть, реклама не окупается: снизить платный трафик и оставить тесты");
+  }
+  if (!row.enabled) {
+    pushUnique(notes, "товар выключен в XWAY: проверить актуальность запуска рекламы");
+  }
+  if ((row.frozen_campaigns ?? 0) > 0) {
+    pushUnique(notes, "есть замороженные РК: проверить бюджет/лимиты/модерацию");
+  }
+  const usage = limitUsage(row);
+  if ((usage.spend !== null && usage.spend >= 90) || (usage.budget !== null && usage.budget >= 90)) {
+    pushUnique(notes, drr !== null && drr < 50 ? "лимит почти выбран, повышать только для эффективных связок" : "лимит почти выбран, не расширять до снижения ДРР");
   }
   if (stock <= stockThreshold) {
-    notes.push("не разгонять рекламу до пополнения FBO");
+    pushUnique(notes, "не разгонять рекламу до пополнения FBO");
   }
   const stockNote = stockMismatchRecommendation(row, mpvibeAvailable);
   if (stockNote) {
-    notes.push(stockNote);
+    pushUnique(notes, stockNote);
   }
-  return notes.join("; ");
+  return notes.slice(0, 4).join("; ");
 }
 
-function buildStockNoSpendRecommendation(row, stockThreshold, mpvibeAvailable) {
+function buildStockNoSpendRecommendation(row, stockThreshold, mpvibeAvailable, context) {
   const stock = stockSignal(row);
   const notes = [];
+  const groups = groupStatsForRow(row, context);
   if ((row.active_campaigns ?? 0) > 0) {
-    notes.push("РК есть, но расхода нет: проверить ставки, лимиты и статус показа");
+    pushUnique(notes, "РК есть, но расхода нет: проверить ставки, лимиты, расписание и статус показа");
   } else if ((row.campaigns ?? 0) > 0) {
-    notes.push("есть выключенные РК: проверить причину и включить при марже");
+    pushUnique(notes, "есть выключенные РК: проверить причину и включить при марже");
   } else {
-    notes.push("создать или запустить РК, если товар маржинален");
+    pushUnique(notes, "создать или запустить РК, если товар маржинален");
   }
   if (stock > stockThreshold * 5) {
-    notes.push("остаток высокий, приоритет для запуска");
+    pushUnique(notes, "остаток высокий, приоритет для запуска");
+  }
+  if (groups.category && groups.category.drrTotal !== null && groups.category.drrTotal < 40) {
+    pushUnique(notes, `категория эффективная (${formatPercent(groups.category.drrTotal)} ДРР), можно тестировать аккуратный запуск`);
+  }
+  if (groups.category && groups.category.drrTotal !== null && groups.category.drrTotal >= 70) {
+    pushUnique(notes, `категория дорогая (${formatPercent(groups.category.drrTotal)} ДРР), запускать только с жестким лимитом`);
+  }
+  if ((row.frozen_campaigns ?? 0) > 0 || (row.paused_campaigns ?? 0) > 0) {
+    pushUnique(notes, "разобрать паузы/заморозки перед запуском нового трафика");
   }
   const stockNote = stockMismatchRecommendation(row, mpvibeAvailable);
   if (stockNote) {
-    notes.push(stockNote);
+    pushUnique(notes, stockNote);
   }
-  return notes.join("; ");
+  return notes.slice(0, 4).join("; ");
 }
 
 function buildMpvibeOnlyRecommendation(row, stockThreshold) {
@@ -249,10 +478,12 @@ function buildReportFileName(report) {
   return `xway-report-${report.range.end}.md`;
 }
 
-function buildPachkaMarkdown(report, env) {
+function buildPachkaMarkdown(report, env, context = null) {
   const prefix = asString(env.PACHKA_REPORT_MESSAGE_PREFIX) || "Ежедневный отчет XWAY";
   const stockThreshold = report.config?.stock_min_value ?? DEFAULT_STOCK_MIN_VALUE;
   const mpvibeAvailable = Boolean(report.sources?.mpvibe?.available);
+  const recommendationContext = context || buildRecommendationContext(report.rows || [], stockThreshold);
+  const insights = buildReportInsights(report, recommendationContext);
   const lines = [
     `# ${prefix}`,
     "",
@@ -278,6 +509,12 @@ function buildPachkaMarkdown(report, env) {
     lines.push("");
     report.warnings.forEach((warning) => lines.push(`- ${warning}`));
   }
+  if (insights.length) {
+    lines.push("");
+    lines.push("## Общие выводы");
+    lines.push("");
+    insights.forEach((insight) => lines.push(`- ${insight}`));
+  }
   lines.push("");
   lines.push("## Топ ДРР");
   lines.push("");
@@ -291,7 +528,7 @@ function buildPachkaMarkdown(report, env) {
       formatMoney(row.spend),
       formatNumber(row.stock_xway),
       formatNumber(row.stock_mpvibe),
-      buildDrrRecommendation(row, stockThreshold, mpvibeAvailable),
+      buildDrrRecommendation(row, stockThreshold, mpvibeAvailable, recommendationContext),
     ]),
   ));
   lines.push("");
@@ -307,7 +544,7 @@ function buildPachkaMarkdown(report, env) {
       formatNumber(row.stock_xway),
       formatNumber(row.stock_mpvibe),
       formatMoney(row.spend),
-      buildStockNoSpendRecommendation(row, stockThreshold, mpvibeAvailable),
+      buildStockNoSpendRecommendation(row, stockThreshold, mpvibeAvailable, recommendationContext),
     ]),
   ));
   lines.push("");
@@ -388,6 +625,7 @@ export async function buildPachkaReport(env, options = {}) {
   const hasReportableStock = (row) => stockSignal(row) > stockMinValue;
   const stockNoSpend = topRows(rows, limit, (row) => hasReportableStock(row) && (row.spend ?? 0) === 0, stockSignal);
   const mpvibeOnlyStock = topRows(rows, limit, (row) => row.source === "mpvibe" && hasReportableStock(row), stockSignal);
+  const recommendationContext = buildRecommendationContext(rows, stockMinValue);
   const report = {
     ok: true,
     generated_at: new Date().toISOString(),
@@ -410,7 +648,7 @@ export async function buildPachkaReport(env, options = {}) {
     mpvibe_only_stock: mpvibeOnlyStock,
     config: { ...config, days: range.days, limit, stock_min_value: stockMinValue },
   };
-  const markdown = buildPachkaMarkdown(report, env);
+  const markdown = buildPachkaMarkdown(report, env, recommendationContext);
   const fileName = buildReportFileName(report);
   const fileSize = new TextEncoder().encode(markdown).length;
   return {
