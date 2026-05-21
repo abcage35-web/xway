@@ -817,9 +817,9 @@ function CategoryDriverPie({
                   nameKey="name"
                   innerRadius="54%"
                   outerRadius="82%"
-                  paddingAngle={slices.length > 1 ? 1 : 0}
-                  stroke="rgba(9, 13, 24, 0.92)"
-                  strokeWidth={2}
+                  paddingAngle={0}
+                  stroke="none"
+                  strokeWidth={0}
                   onMouseEnter={(_slice, index, event) => {
                     updateActiveSlice(index, event);
                   }}
