@@ -645,11 +645,15 @@ export async function fetchMpvibeStocks(options: {
   articles: string[];
   start?: string | null;
   end?: string | null;
+  includeAllWithStock?: boolean;
   forceRefresh?: boolean;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/mpvibe-stocks", buildBaseUrl(options.request));
   url.searchParams.set("articles", options.articles.join(","));
+  if (options.includeAllWithStock) {
+    url.searchParams.set("include_all_with_stock", "1");
+  }
   appendRange(url.searchParams, options.start, options.end);
   if (options.forceRefresh) {
     url.searchParams.set("refresh", "1");

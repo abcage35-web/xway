@@ -507,6 +507,7 @@ export interface MpvibeStockInfo {
   article: string;
   card_id: number | string | null;
   account_id: number | string | null;
+  name?: string | null;
   stock_fbo: number | null;
   available: boolean;
   error?: string | null;

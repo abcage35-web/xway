@@ -11,6 +11,7 @@ import type { TableColumn } from "../components/ui";
 type AnalyticsSection = "drr" | "stocks" | "categories";
 type SortDirection = "asc" | "desc";
 type DataSource = "XWAY" | "WB" | "MPVibe" | "XWAY/WB" | "Расчет";
+type AnalyticsRowSource = "xway" | "mpvibe";
 type DrrSortField =
   | "rank"
   | "article"
@@ -88,6 +89,7 @@ interface AnalyticsRowBase {
   campaigns: number;
   activeCampaigns: number;
   turnoverDays: number | null;
+  source: AnalyticsRowSource;
 }
 
 interface DrrAnalyticsRow extends AnalyticsRowBase {
@@ -323,9 +325,50 @@ function flattenCatalogRows(payload: CatalogResponse | null, days: number): Anal
         campaigns: article.campaign_states.length,
         activeCampaigns: article.campaign_states.filter((campaign) => campaign.active).length,
         turnoverDays: computeTurnoverDays(stock, ordersTotal, days),
+        source: "xway",
       };
     }),
   );
+}
+
+function buildMpvibeOnlyRows(stockByArticle: Record<string, MpvibeStockInfo>, baseRows: AnalyticsRowBase[]): AnalyticsRowBase[] {
+  const xwayArticles = new Set(baseRows.map((row) => row.article));
+  return Object.values(stockByArticle)
+    .filter((stock) => !xwayArticles.has(stock.article) && (toNumber(stock.stock_fbo) ?? 0) > 0)
+    .map((stock) => {
+      const stockFbo = toNumber(stock.stock_fbo);
+      return {
+        ref: `mpvibe:${stock.card_id ?? stock.article}`,
+        article: stock.article,
+        productId: 0,
+        name: stock.name || `Артикул ${stock.article}`,
+        shopName: stock.account_id ? `MPVibe account ${stock.account_id}` : "MPVibe",
+        shopId: 0,
+        productUrl: "",
+        imageUrl: "",
+        categoryKeyword: "Только MPVibe",
+        stock: null,
+        stockMpvibe: stockFbo,
+        spend: null,
+        revenue: null,
+        revenueTotal: null,
+        ordersAds: null,
+        ordersTotal: null,
+        views: null,
+        clicks: null,
+        atbs: null,
+        drr: null,
+        enabled: false,
+        campaigns: 0,
+        activeCampaigns: 0,
+        turnoverDays: null,
+        source: "mpvibe",
+      };
+    });
+}
+
+function stockSignal(row: AnalyticsRowBase) {
+  return row.stock ?? row.stockMpvibe ?? 0;
 }
 
 function compareSortValues(left: SortValue, right: SortValue) {
@@ -598,6 +641,7 @@ function ProductCell({ row }: { row: AnalyticsRowBase }) {
         <strong title={row.name}>{row.name}</strong>
         <span>
           {row.article} · {row.shopName}
+          {row.source === "mpvibe" ? " · только MPVibe" : ""}
         </span>
       </div>
     </div>
@@ -605,6 +649,9 @@ function ProductCell({ row }: { row: AnalyticsRowBase }) {
 }
 
 function XwayLink({ href }: { href: string }) {
+  if (!href) {
+    return null;
+  }
   return (
     <a href={href} target="_blank" rel="noreferrer" className="drr-analytics-link" title="Открыть в XWAY">
       XWAY
@@ -761,6 +808,7 @@ export function DrrAnalyticsPage() {
   const wbAbortRef = useRef<AbortController | null>(null);
   const mpvibeAbortRef = useRef<AbortController | null>(null);
   const mpvibeForceRefreshRef = useRef(false);
+  const mpvibeLoadedRequestRef = useRef<string | null>(null);
   const resizeDragRef = useRef<{ columnKey: ResizableColumnKey; startX: number; startWidth: number } | null>(null);
 
   const days = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
@@ -769,11 +817,13 @@ export function DrrAnalyticsPage() {
   const categoryMinStock = clampInteger(categoryMinStockInput, DEFAULT_CATEGORY_MIN_STOCK, 0, 1000000);
   const baseRows = useMemo(() => flattenCatalogRows(payload, loadedRange?.days ?? days), [days, loadedRange?.days, payload]);
   const rows = useMemo(
-    () =>
-      baseRows.map((row) => ({
+    () => {
+      const xwayRows = baseRows.map((row) => ({
         ...row,
         stockMpvibe: toNumber(mpvibeStockByArticle[row.article]?.stock_fbo),
-      })),
+      }));
+      return [...xwayRows, ...buildMpvibeOnlyRows(mpvibeStockByArticle, baseRows)];
+    },
     [baseRows, mpvibeStockByArticle],
   );
 
@@ -824,7 +874,7 @@ export function DrrAnalyticsPage() {
 
   const stockRows = useMemo(() => {
     const candidates = rows
-      .filter((row) => (row.stock ?? 0) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0);
+      .filter((row) => stockSignal(row) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0);
     const sorted = sortRows<AnalyticsRowBase>(candidates, stockSort, (row, field) => {
       switch (field as StockSortField) {
         case "rank":
@@ -907,7 +957,7 @@ export function DrrAnalyticsPage() {
 
   const rangeLabel = loadedRange ? formatDateRange(loadedRange.start, loadedRange.end) : "Период еще не загружен";
   const totalSpend = rows.reduce((sum, row) => sum + (row.spend ?? 0), 0);
-  const zeroSpendStockCount = rows.filter((row) => (row.stock ?? 0) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0).length;
+  const zeroSpendStockCount = rows.filter((row) => stockSignal(row) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0).length;
 
   const loadData = async (forceRefresh = false) => {
     const nextDays = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
@@ -919,6 +969,7 @@ export function DrrAnalyticsPage() {
     setLoading(true);
     setError(null);
     setMpvibeWarning(null);
+    mpvibeLoadedRequestRef.current = null;
     try {
       const catalogPayload = await fetchCatalog({
         start: nextRange.start,
@@ -989,21 +1040,24 @@ export function DrrAnalyticsPage() {
   }, [topDrrRows, wbByArticle]);
 
   useEffect(() => {
-    if (!loadedRange || !baseRows.length) {
+    if (!loadedRange) {
       return;
     }
-    const missingArticles = [...new Set(baseRows.map((row) => row.article).filter((article) => !mpvibeStockByArticle[article]))];
-    if (!missingArticles.length) {
+    const requestedArticles = [...new Set(baseRows.map((row) => row.article).filter(Boolean))];
+    const requestKey = `${loadedRange.start}:${loadedRange.end}:${requestedArticles.join(",")}`;
+    if (mpvibeLoadedRequestRef.current === requestKey) {
       return;
     }
+    mpvibeLoadedRequestRef.current = requestKey;
     mpvibeAbortRef.current?.abort();
     const abortController = new AbortController();
     mpvibeAbortRef.current = abortController;
     setMpvibeLoading(true);
     fetchMpvibeStocks({
-      articles: missingArticles,
+      articles: requestedArticles,
       start: loadedRange.start,
       end: loadedRange.end,
+      includeAllWithStock: true,
       forceRefresh: mpvibeForceRefreshRef.current,
       signal: abortController.signal,
     })
@@ -1029,7 +1083,7 @@ export function DrrAnalyticsPage() {
         mpvibeForceRefreshRef.current = false;
         setMpvibeLoading(false);
       });
-  }, [baseRows, loadedRange, mpvibeStockByArticle]);
+  }, [baseRows, loadedRange]);
 
   useEffect(() => {
     try {
@@ -1315,12 +1369,12 @@ export function DrrAnalyticsPage() {
         <span
           className={cn(
             "drr-status-chip",
-            row.activeCampaigns > 0 ? "is-on" : (row.stock ?? 0) > adOffErrorStockThreshold ? "is-error" : "is-off",
+            row.activeCampaigns > 0 ? "is-on" : stockSignal(row) > adOffErrorStockThreshold ? "is-error" : "is-off",
           )}
           title={
             row.activeCampaigns > 0
               ? "Есть активная реклама"
-              : (row.stock ?? 0) > adOffErrorStockThreshold
+              : stockSignal(row) > adOffErrorStockThreshold
                 ? `Реклама выключена при остатке больше ${formatNumber(adOffErrorStockThreshold)}`
                 : "Реклама выключена"
           }
@@ -1674,7 +1728,7 @@ export function DrrAnalyticsPage() {
       ) : section === "stocks" ? (
         <SectionCard
           title="Остатки"
-          caption={`Товары с остатком FBO больше ${formatNumber(STOCK_MIN_VALUE)} и нулевым рекламным расходом за выбранный период. Красная реклама: выключена при остатке больше ${formatNumber(adOffErrorStockThreshold)}.`}
+          caption={`Товары с остатком FBO XWAY или MPVibe больше ${formatNumber(STOCK_MIN_VALUE)} и нулевым рекламным расходом за выбранный период. Красная реклама: выключена при остатке больше ${formatNumber(adOffErrorStockThreshold)}.`}
         >
           {stockRows.length ? (
             <MetricTable

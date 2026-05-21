@@ -76,6 +76,7 @@ const STOCK_VALUE_FIELDS = [
   "count",
   "remain_stock",
 ];
+const CARD_ARTICLE_FIELDS = ["sku", "nm_id", "nmId", "article", "wb_article", "nmid"];
 
 function hasMpvibeAuth(env) {
   return Boolean(String(env.MPVIBE_COOKIE_HEADER || env.MPVIBE_REFRESH_COOKIE_HEADER || env.MPVIBE_AUTHORIZATION || "").trim());
@@ -306,7 +307,34 @@ function objectMatchesArticle(value, article) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  return ["sku", "nm_id", "nmId", "article", "wb_article", "nmid"].some((field) => asString(value[field]) === article);
+  return CARD_ARTICLE_FIELDS.some((field) => asString(value[field]) === article);
+}
+
+function cardArticle(card) {
+  for (const field of CARD_ARTICLE_FIELDS) {
+    const article = asString(card?.[field]);
+    if (article) {
+      return article;
+    }
+  }
+  return "";
+}
+
+function listRealtimeCards(payload) {
+  const matches = [];
+  for (const accountRow of Array.isArray(payload) ? payload : []) {
+    const cards = accountRow?.cards && typeof accountRow.cards === "object" ? accountRow.cards : {};
+    for (const card of Object.values(cards)) {
+      matches.push({
+        card,
+        account_id: accountRow.account_id ?? card?.account_id ?? null,
+        entity_id: accountRow.entity_id ?? card?.entity_id ?? null,
+        manager_id: accountRow.manager_id ?? null,
+        manager_name: accountRow.manager_name ?? null,
+      });
+    }
+  }
+  return matches;
 }
 
 function findFirstObject(value, predicate) {
@@ -335,18 +363,9 @@ function findFirstObject(value, predicate) {
 }
 
 function findRealtimeCard(payload, article) {
-  for (const accountRow of Array.isArray(payload) ? payload : []) {
-    const cards = accountRow?.cards && typeof accountRow.cards === "object" ? accountRow.cards : {};
-    for (const card of Object.values(cards)) {
-      if (objectMatchesArticle(card, article)) {
-        return {
-          card,
-          account_id: accountRow.account_id ?? card?.account_id ?? null,
-          entity_id: accountRow.entity_id ?? card?.entity_id ?? null,
-          manager_id: accountRow.manager_id ?? null,
-          manager_name: accountRow.manager_name ?? null,
-        };
-      }
+  for (const match of listRealtimeCards(payload)) {
+    if (objectMatchesArticle(match.card, article)) {
+      return match;
     }
   }
 
@@ -459,21 +478,10 @@ function extractMpvibeStockValue(value, depth = 0) {
 function indexRealtimeCardsByArticle(payload, articles) {
   const wanted = new Set((articles || []).map((article) => asString(article)).filter(Boolean));
   const byArticle = new Map();
-  for (const accountRow of Array.isArray(payload) ? payload : []) {
-    const cards = accountRow?.cards && typeof accountRow.cards === "object" ? accountRow.cards : {};
-    for (const card of Object.values(cards)) {
-      for (const field of ["sku", "nm_id", "nmId", "article", "wb_article", "nmid"]) {
-        const article = asString(card?.[field]);
-        if (wanted.has(article) && !byArticle.has(article)) {
-          byArticle.set(article, {
-            card,
-            account_id: accountRow.account_id ?? card?.account_id ?? null,
-            entity_id: accountRow.entity_id ?? card?.entity_id ?? null,
-            manager_id: accountRow.manager_id ?? null,
-            manager_name: accountRow.manager_name ?? null,
-          });
-        }
-      }
+  for (const match of listRealtimeCards(payload)) {
+    const article = cardArticle(match.card);
+    if (wanted.has(article) && !byArticle.has(article)) {
+      byArticle.set(article, match);
     }
   }
   return byArticle;
@@ -527,6 +535,33 @@ function normalizeMainCard(card, article, parent = {}) {
 function mpvibeRequestError(source, error) {
   const message = error instanceof Error ? error.message : asString(error) || "unknown error";
   return `${source}: ${message}`;
+}
+
+function buildMpvibeStockRow(article, mainMatch, stocksPayload) {
+  const mainCard = normalizeMainCard(mainMatch?.card, article, mainMatch);
+  const cardId = mainCard?.card_id;
+  if (!cardId) {
+    return {
+      article,
+      card_id: null,
+      account_id: null,
+      name: null,
+      stock_fbo: null,
+      available: false,
+      error: `Article ${article} was not found in MPVibe realtime data.`,
+    };
+  }
+  const stocks = stocksPayload ? findStocksForCard(stocksPayload, cardId) : null;
+  const stockFbo = extractMpvibeStockValue(stocks?.stock) ?? extractMpvibeStockValue(mainCard?.stock_data);
+  return {
+    article,
+    card_id: cardId,
+    account_id: mainCard?.account_id ?? null,
+    name: mainCard?.name ?? null,
+    stock_fbo: stockFbo,
+    available: stockFbo !== null,
+    error: stockFbo === null ? "MPVibe stock was not found for article." : null,
+  };
 }
 
 export async function collectMpvibeArticle(env, { article, start, end } = {}) {
@@ -586,9 +621,9 @@ export async function collectMpvibeArticle(env, { article, start, end } = {}) {
   };
 }
 
-export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
+export async function collectMpvibeStocks(env, { articles, start, end, includeAllWithStock = false } = {}) {
   const requestedArticles = [...new Set((articles || []).map((article) => asString(article)).filter(Boolean))];
-  if (!requestedArticles.length) {
+  if (!requestedArticles.length && !includeAllWithStock) {
     return {
       ok: true,
       available: hasMpvibeAuth(env),
@@ -610,6 +645,7 @@ export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
         article,
         card_id: null,
         account_id: null,
+        name: null,
         stock_fbo: null,
         available: false,
         error: "MPVibe auth is not configured.",
@@ -645,6 +681,7 @@ export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
         article,
         card_id: null,
         account_id: null,
+        name: null,
         stock_fbo: null,
         available: false,
         error,
@@ -657,29 +694,23 @@ export async function collectMpvibeStocks(env, { articles, start, end } = {}) {
 
   const rows = requestedArticles.map((article) => {
     const mainMatch = indexedCards.get(article) || findRealtimeCard(mainPayload, article);
-    const mainCard = normalizeMainCard(mainMatch?.card, article, mainMatch);
-    const cardId = mainCard?.card_id;
-    if (!cardId) {
-      return {
-        article,
-        card_id: null,
-        account_id: null,
-        stock_fbo: null,
-        available: false,
-        error: `Article ${article} was not found in MPVibe realtime data.`,
-      };
-    }
-    const stocks = stocksPayload ? findStocksForCard(stocksPayload, cardId) : null;
-    const stockFbo = extractMpvibeStockValue(stocks?.stock) ?? extractMpvibeStockValue(mainCard?.stock_data);
-    return {
-      article,
-      card_id: cardId,
-      account_id: mainCard?.account_id ?? null,
-      stock_fbo: stockFbo,
-      available: stockFbo !== null,
-      error: stockFbo === null ? "MPVibe stock was not found for article." : null,
-    };
+    return buildMpvibeStockRow(article, mainMatch, stocksPayload);
   });
+
+  if (includeAllWithStock) {
+    const seenArticles = new Set(rows.map((row) => row.article));
+    for (const mainMatch of listRealtimeCards(mainPayload)) {
+      const article = cardArticle(mainMatch.card);
+      if (!article || seenArticles.has(article)) {
+        continue;
+      }
+      const row = buildMpvibeStockRow(article, mainMatch, stocksPayload);
+      if ((row.stock_fbo ?? 0) > 0) {
+        rows.push(row);
+        seenArticles.add(article);
+      }
+    }
+  }
 
   return {
     ok: true,

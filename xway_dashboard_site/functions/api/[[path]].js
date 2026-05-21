@@ -336,6 +336,7 @@ async function handleNativeRequest(context, pathname) {
         articles,
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
+        includeAllWithStock: requestUrl.searchParams.get("include_all_with_stock") === "1",
       }),
     );
   }
