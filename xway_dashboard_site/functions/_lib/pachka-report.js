@@ -1,5 +1,6 @@
 import { applyCatalogArticleSnapshots } from "./catalog-article-snapshots.js";
-import { collectCatalog } from "./catalog.js";
+import { collectCatalog, collectCatalogChart, collectCatalogProductDetails } from "./catalog.js";
+import { collectCatalogIssues } from "./catalog-issues.js";
 import { collectMpvibeStocks } from "./ai/mpvibe-client.js";
 import { collectProducts } from "./products.js";
 
@@ -12,7 +13,8 @@ const DEFAULT_AI_MODEL = "gpt-5.5";
 const DEFAULT_AI_REASONING_EFFORT = "medium";
 const DEFAULT_AI_TEXT_VERBOSITY = "low";
 const DEFAULT_AI_TIMEOUT_MS = 20_000;
-const DEFAULT_AI_DEEP_TIMEOUT_MS = 16_000;
+const DEFAULT_AI_DEEP_TIMEOUT_MS = 30_000;
+const DEFAULT_AI_FULL_REFRESH_LIMIT = 2;
 
 function asString(value) {
   return value === null || value === undefined ? "" : String(value).trim();
@@ -66,6 +68,14 @@ function shiftedDate(baseDate, days) {
   const next = new Date(baseDate.getTime());
   next.setUTCDate(next.getUTCDate() + days);
   return next;
+}
+
+function shiftedIsoDate(value, days) {
+  const parsed = new Date(`${asString(value)}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return asString(value);
+  }
+  return isoDate(shiftedDate(parsed, days));
 }
 
 function reportToday(offsetMinutes) {
@@ -476,7 +486,10 @@ function roundedNumber(value, digits = 2) {
 function cleanAiText(value, max = 280) {
   const text = asString(value)
     .replace(/\bdeep dive\b/gi, "детальной проверке")
+    .replace(/\bfull_refresh_context\b/gi, "полном обновлении данных")
     .replace(/\bcompact context\b/gi, "компактном отчете")
+    .replace(/\bfirst_pass\b/gi, "черновом анализе")
+    .replace(/\bfallback\b/gi, "резервной оценке")
     .replace(/\s+/g, " ")
     .replace(/\|/g, "/");
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -781,7 +794,22 @@ function reportArticleSet(report) {
   );
 }
 
-function normalizeAiAnalysis(payload, { report, model, usedDeepDive = false, deepDiveArticles = [], deepDiveError = null } = {}) {
+function publicFullContextSummary(fullContext) {
+  if (!fullContext) {
+    return null;
+  }
+  return {
+    mode: fullContext.mode,
+    auto_refresh: Boolean(fullContext.auto_refresh),
+    refreshed_at: fullContext.refreshed_at || null,
+    articles: fullContext.articles || [],
+    product_refs: fullContext.product_refs || [],
+    sources: fullContext.sources || {},
+    data_manifest: fullContext.data_manifest || [],
+  };
+}
+
+function normalizeAiAnalysis(payload, { report, model, usedDeepDive = false, deepDiveArticles = [], deepDiveError = null, fullContext = null } = {}) {
   const allowedArticles = reportArticleSet(report);
   const recommendationsByArticle = new Map();
   recommendationEntries(payload).forEach(([article, recommendation]) => {
@@ -802,6 +830,7 @@ function normalizeAiAnalysis(payload, { report, model, usedDeepDive = false, dee
     used_deep_dive: usedDeepDive,
     deep_dive_articles: deepDiveArticles,
     deep_dive_error: deepDiveError,
+    full_context: publicFullContextSummary(fullContext),
     analysis_note: analysisNote,
     insights,
     recommendationsByArticle,
@@ -986,6 +1015,278 @@ function compactDeepDivePayload(payload) {
   };
 }
 
+function reportRowsByArticle(report) {
+  const rows = [...(report.top_drr || []), ...(report.stock_no_spend || []), ...(report.mpvibe_only_stock || [])];
+  const byArticle = new Map();
+  rows.forEach((row) => {
+    const article = asString(row.article);
+    if (article && !byArticle.has(article)) {
+      byArticle.set(article, row);
+    }
+  });
+  return byArticle;
+}
+
+function priorityRecommendationRows(report) {
+  return [...(report.top_drr || []), ...(report.stock_no_spend || [])]
+    .filter((row) => row.source === "xway" && asString(row.article))
+    .sort((left, right) => {
+      const leftScore = (asNumber(left.spend) ?? 0) * Math.max(asNumber(left.drr) ?? 1, 1) + stockSignal(left);
+      const rightScore = (asNumber(right.spend) ?? 0) * Math.max(asNumber(right.drr) ?? 1, 1) + stockSignal(right);
+      return rightScore - leftScore;
+    });
+}
+
+function buildFullRefreshArticleList(report, deepDiveArticles, limit) {
+  const rowsByArticle = reportRowsByArticle(report);
+  const articles = [];
+  const pushArticle = (article, reason = "") => {
+    const key = asString(article);
+    const row = rowsByArticle.get(key);
+    if (!key || !row || row.source !== "xway" || articles.some((item) => item.article === key)) {
+      return;
+    }
+    articles.push({
+      article: key,
+      reason: reason || "автообновление полного набора данных для рекомендации",
+      focus: ["catalog", "campaigns", "charts", "issues", "clusters"],
+    });
+  };
+
+  (deepDiveArticles || []).forEach((item) => pushArticle(item.article, item.reason));
+  priorityRecommendationRows(report).forEach((row) => pushArticle(row.article));
+  return articles.slice(0, limit);
+}
+
+function productRefsForArticles(report, articles) {
+  const rowsByArticle = reportRowsByArticle(report);
+  return articles
+    .map((item) => rowsByArticle.get(asString(item.article))?.ref)
+    .map(asString)
+    .filter((ref) => /^\d+:\d+$/.test(ref));
+}
+
+function compactCatalogChartRow(row) {
+  return {
+    day: row?.day,
+    views: roundedNumber(row?.views, 0),
+    clicks: roundedNumber(row?.clicks, 0),
+    atbs: roundedNumber(row?.atbs, 0),
+    orders: roundedNumber(row?.orders, 0),
+    ordered_total: roundedNumber(row?.ordered_total, 0),
+    spend: roundedNumber(row?.expense_sum, 0),
+    revenue_ads: roundedNumber(row?.sum_price, 0),
+    revenue_total: roundedNumber(row?.ordered_sum_total, 0),
+    ctr: roundedNumber(row?.CTR ?? rate(row?.clicks, row?.views), 2),
+    cr: roundedNumber(row?.CR ?? rate(row?.orders, row?.clicks), 2),
+    drr: roundedNumber(row?.DRR ?? rate(row?.expense_sum, row?.ordered_sum_total || row?.sum_price), 1),
+    campaign_type_metrics: row?.metrics_by_campaign_type || null,
+  };
+}
+
+function compactChartRows(rows, limit = 7) {
+  const source = Array.isArray(rows) ? rows : [];
+  return {
+    latest: source.slice(-limit).map(compactCatalogChartRow),
+    top_spend_days: [...source]
+      .sort((left, right) => (asNumber(right?.expense_sum) ?? 0) - (asNumber(left?.expense_sum) ?? 0))
+      .slice(0, 5)
+      .map(compactCatalogChartRow),
+    worst_drr_days: [...source]
+      .filter((row) => asNumber(row?.DRR ?? rate(row?.expense_sum, row?.ordered_sum_total || row?.sum_price)) !== null)
+      .sort((left, right) =>
+        (asNumber(right?.DRR ?? rate(right?.expense_sum, right?.ordered_sum_total || right?.sum_price)) ?? 0) -
+        (asNumber(left?.DRR ?? rate(left?.expense_sum, left?.ordered_sum_total || left?.sum_price)) ?? 0),
+      )
+      .slice(0, 5)
+      .map(compactCatalogChartRow),
+  };
+}
+
+function compactCatalogChartPayload(payload) {
+  if (!payload) {
+    return null;
+  }
+  return {
+    generated_at: payload.generated_at,
+    range: payload.range,
+    requested_products: payload.requested_products || [],
+    loaded_products_count: payload.loaded_products_count,
+    complete: payload.complete,
+    totals: payload.totals,
+    campaign_type_meta: payload.campaign_type_meta,
+    rows: compactChartRows(payload.rows),
+    product_rows: (payload.product_rows || []).map((product) => ({
+      product_ref: product.product_ref,
+      rows: compactChartRows(product.rows),
+    })),
+    errors: payload.errors || [],
+  };
+}
+
+function compactCatalogDetailsPayload(payload) {
+  if (!payload) {
+    return null;
+  }
+  return {
+    generated_at: payload.generated_at,
+    range: payload.range,
+    requested_products: payload.requested_products || [],
+    loaded_products_count: payload.loaded_products_count,
+    rows: (payload.rows || []).map((row) => ({
+      product_ref: row.product_ref,
+      campaign_states: (row.campaign_states || []).map((campaign) => ({
+        id: campaign.id,
+        status_code: campaign.status_code,
+        active: campaign.active,
+        spend_limit_active: campaign.spend_limit_active,
+        spend_limit: roundedNumber(campaign.spend_limit, 0),
+        spend_spent_today: roundedNumber(campaign.spend_spent_today, 0),
+        budget_rule_active: campaign.budget_rule_active,
+        budget_limit: roundedNumber(campaign.budget_limit, 0),
+        budget_spent_today: roundedNumber(campaign.budget_spent_today, 0),
+        schedule_active: campaign.schedule_active,
+      })),
+      campaign_type_totals: row.campaign_type_totals || null,
+      best_order_time: row.best_order_time || null,
+      errors: row.errors || {},
+    })),
+    errors: payload.errors || [],
+  };
+}
+
+function compactTurnoverPayload(payload) {
+  const rows = flattenCatalogRows(payload);
+  return {
+    generated_at: payload?.generated_at || null,
+    range: payload?.range || null,
+    rows: rows.map((row) => ({
+      ref: row.ref,
+      article: row.article,
+      orders_total: roundedNumber(row.orders_total, 0),
+      revenue_total: roundedNumber(row.revenue_total, 0),
+      spend: roundedNumber(row.spend, 0),
+      stock_xway: roundedNumber(row.stock_xway, 0),
+    })),
+  };
+}
+
+function compactIssuesPayload(payload) {
+  if (!payload) {
+    return null;
+  }
+  return {
+    generated_at: payload.generated_at,
+    range: payload.range,
+    requested_products: payload.requested_products || [],
+    loaded_products_count: payload.loaded_products_count,
+    rows: (payload.rows || []).map((row) => ({
+      product_ref: row.product_ref,
+      issues_count: Array.isArray(row.issues) ? row.issues.length : 0,
+      campaigns_count: Array.isArray(row.campaigns) ? row.campaigns.length : 0,
+      issues: (row.issues || []).slice(0, 10),
+      campaigns: (row.campaigns || []).slice(0, 10),
+      error: row.error || null,
+    })),
+  };
+}
+
+async function timedRecommendationSource(name, timeoutMs, fn) {
+  try {
+    const payload = await withTimeout(fn(), timeoutMs, `${name} timed out.`);
+    return { name, payload, error: null };
+  } catch (error) {
+    return {
+      name,
+      payload: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function collectFullRecommendationContext(env, report, articleItems, { forceRefresh = false, timeoutMs = DEFAULT_AI_DEEP_TIMEOUT_MS } = {}) {
+  const articles = [...new Set((articleItems || []).map((item) => asString(item.article)).filter(Boolean))];
+  const productRefs = productRefsForArticles(report, articleItems);
+  if (!articles.length || !productRefs.length) {
+    return null;
+  }
+
+  const refresh = Boolean(forceRefresh || String(env.PACHKA_REPORT_AI_AUTO_REFRESH || "1") !== "0");
+  const sourceTimeoutMs = Math.max(5_000, timeoutMs);
+  const turnoverStart = shiftedIsoDate(report.range.end, -2);
+  const sources = await Promise.all([
+    timedRecommendationSource("xway_products_full", sourceTimeoutMs, () =>
+      collectProducts(env, {
+        articles,
+        start: report.range.start,
+        end: report.range.end,
+        campaignMode: "full",
+        forceRefresh: refresh,
+      }),
+    ),
+    timedRecommendationSource("catalog_details", Math.min(sourceTimeoutMs, 18_000), () =>
+      collectCatalogProductDetails(env, {
+        productRefs,
+        start: report.range.start,
+        end: report.range.end,
+        includeCampaignDetails: true,
+        includeBestTime: true,
+        forceRefresh: refresh,
+      }),
+    ),
+    timedRecommendationSource("catalog_chart", Math.min(sourceTimeoutMs, 18_000), () =>
+      collectCatalogChart(env, {
+        productRefs,
+        start: report.range.start,
+        end: report.range.end,
+        includeCampaignTypes: true,
+        forceRefresh: refresh,
+        deadlineMs: Math.min(sourceTimeoutMs, 18_000),
+      }),
+    ),
+    timedRecommendationSource("turnover_3d", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectCatalog(env, {
+        productRefs,
+        start: turnoverStart,
+        end: report.range.end,
+        mode: "compact",
+        includeAux: false,
+        forceRefresh: refresh,
+      }),
+    ),
+    timedRecommendationSource("issues_yesterday", Math.min(sourceTimeoutMs, 12_000), () =>
+      collectCatalogIssues(env, {
+        productRefs,
+        start: report.range.end,
+        end: report.range.end,
+        forceRefresh: refresh,
+        deadlineMs: Math.min(sourceTimeoutMs, 12_000),
+      }),
+    ),
+  ]);
+  const byName = Object.fromEntries(sources.map((source) => [source.name, source]));
+  return {
+    mode: "update_product_equivalent",
+    auto_refresh: refresh,
+    refreshed_at: new Date().toISOString(),
+    articles,
+    product_refs: productRefs,
+    data_manifest: [
+      "XWAY product full: product, stock, range metrics, daily stats, campaigns, limits, schedules, bid/budget/status logs, clusters and cluster action history",
+      "Catalog details: campaign states, spend/budget limits, schedules, campaign type totals and best order time",
+      "Catalog chart: absolute daily metrics and campaign-type breakdown for report range",
+      "Turnover 3d: fresh orders/revenue/spend/stock for the last 3 days ending on report end date",
+      "Issues yesterday: campaign/product issue rows for report end date",
+    ],
+    sources: Object.fromEntries(sources.map((source) => [source.name, { available: Boolean(source.payload), error: source.error }])),
+    products: compactDeepDivePayload(byName.xway_products_full?.payload),
+    catalog_details: compactCatalogDetailsPayload(byName.catalog_details?.payload),
+    catalog_chart: compactCatalogChartPayload(byName.catalog_chart?.payload),
+    turnover_3d: compactTurnoverPayload(byName.turnover_3d?.payload),
+    issues_yesterday: compactIssuesPayload(byName.issues_yesterday?.payload),
+  };
+}
+
 function shouldUseAiRecommendations(env, options = {}) {
   if (options.skipAi || options.aiRecommendations === false) {
     return false;
@@ -1008,12 +1309,14 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
   const timeoutMs = clampInteger(env.PACHKA_REPORT_AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS, 5_000, 60_000);
   const deepTimeoutMs = clampInteger(env.PACHKA_REPORT_AI_DEEP_TIMEOUT_MS, DEFAULT_AI_DEEP_TIMEOUT_MS, 5_000, 60_000);
   const deepLimit = clampInteger(env.PACHKA_REPORT_AI_DEEP_LIMIT, DEFAULT_AI_DEEP_LIMIT, 0, 5);
+  const fullRefreshLimit = clampInteger(env.PACHKA_REPORT_AI_FULL_REFRESH_LIMIT, DEFAULT_AI_FULL_REFRESH_LIMIT, 0, 8);
   const reportContext = buildAiReportContext(report, env, recommendationContext);
   const decisionInstructions = [
     analystProfileInstructions(),
     "",
     "Ты аналитик XWAY. Нужно подготовить осмысленные рекомендации для ежедневного markdown-отчета.",
     "Этап 1: сделай черновой диагноз и реши, достаточно ли компактного отчета или нужно углубиться в данные XWAY по кампаниям и кластерам.",
+    "После твоего решения система сама обновит полный набор данных по приоритетным SKU: это аналог ручной кнопки 'Обновить товар'.",
     "Углубляйся только когда это реально нужно: высокий ДРР при заметном расходе, расход без заказов, активные РК без расхода, подозрение на ставки/поисковые фразы/лимиты/расписание или когда compact context не объясняет причину.",
     "Для каждого article дай черновую рекомендацию: 1 короткое предложение, максимум 260 символов.",
     "Поле recommendations обязательно: заполни его для каждого article из sections.top_drr, sections.fbo_stock_no_spend и sections.mpvibe_only_stock, даже если просишь углубление.",
@@ -1035,37 +1338,28 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       deepDiveArticles: requestedDeepDive,
     });
 
-    let deepDive = null;
-    let deepDiveError = null;
-    if (requestedDeepDive.length) {
-      try {
-        const deepDivePayload = await withTimeout(
-          collectProducts(env, {
-            articles: requestedDeepDive.map((item) => item.article),
-            start: report.range.start,
-            end: report.range.end,
-            campaignMode: "full",
-            forceRefresh: Boolean(options.forceRefresh),
-          }),
-          deepTimeoutMs,
-          "XWAY deep dive timed out.",
-        );
-        deepDive = compactDeepDivePayload(deepDivePayload);
-      } catch (error) {
-        deepDiveError = error instanceof Error ? error.message : String(error);
-      }
-    }
+    const fullContextArticles = String(env.PACHKA_REPORT_AI_FULL_REFRESH || "1") === "0"
+      ? requestedDeepDive
+      : buildFullRefreshArticleList(report, requestedDeepDive, Math.max(deepLimit, fullRefreshLimit));
+    const fullContext = await collectFullRecommendationContext(env, report, fullContextArticles, {
+      forceRefresh: Boolean(options.forceRefresh),
+      timeoutMs: deepTimeoutMs,
+    });
+    const fullContextErrors = Object.entries(fullContext?.sources || {})
+      .filter(([, source]) => source?.error)
+      .map(([name, source]) => `${name}: ${source.error}`);
 
     const finalInstructions = [
       analystProfileInstructions(),
       "",
       "Ты редактор-аналитик XWAY. Этап 2: пересобери финальные рекомендации для markdown-отчета.",
-      "Используй компактный отчет, черновик первого этапа и, если есть, углубленные данные по кампаниям/кластерам.",
+      "Используй компактный отчет, черновик первого этапа и full_refresh_context.",
+      "full_refresh_context собран сервером автоматически с force refresh и по смыслу соответствует ручной кнопке 'Обновить товар': свежие остатки, 3-дневная оборачиваемость, детали РК/лимиты/лучшие часы, график с РК-разбивкой, ошибки за вчера и полный XWAY product payload.",
       "Сделай самопроверку: убери шаблонные советы, противоречия источникам, неподтвержденные выводы и рекомендации без действия.",
-      "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe. Не упоминай кластеры, если deep_dive не вернул кластерные данные.",
-      "Доступность MPVibe бери только из report.sources.mpvibe.available. Отсутствие MPVibe в deep_dive не означает, что MPVibe недоступен.",
+      "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe. Не упоминай кластеры, если full_refresh_context не вернул кластерные данные.",
+      "Доступность MPVibe бери только из report.sources.mpvibe.available.",
       "Не выдумывай данные. Если углубление не удалось, опирайся на компактные метрики и явно не ссылайся на кластеры.",
-      "Не используй служебные слова deep_dive, compact context, first_pass или fallback в пользовательском тексте.",
+      "Не используй служебные слова deep_dive, full_refresh_context, compact context, first_pass или fallback в пользовательском тексте.",
       "Каждая рекомендация: максимум 1-2 предложения, без воды. Формула: 'потому что [метрика/сравнение], сделать [конкретное действие]; не делать [ограничение], если оно важно'.",
       "Поле recommendations обязательно: заполни его для каждого article из отчета, не группируй без article-ключа.",
       "Формат JSON: {\"analysis_note\":\"...\",\"insights\":[\"...\"],\"recommendations\":{\"article\":\"финальная рекомендация\"},\"self_review\":[\"какие черновые выводы были исправлены\"]}.",
@@ -1078,21 +1372,25 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
         input: {
           report: reportContext,
           first_pass: decision,
-          deep_dive: deepDive,
-          deep_dive_error: deepDiveError,
+          full_refresh_context: fullContext,
+          full_refresh_errors: fullContextErrors,
         },
       });
       return normalizeAiAnalysis(finalPayload, {
         report,
         model,
-        usedDeepDive: Boolean(deepDive),
-        deepDiveArticles: requestedDeepDive,
-        deepDiveError,
+        usedDeepDive: Boolean(fullContext),
+        deepDiveArticles: fullContextArticles,
+        deepDiveError: fullContextErrors.join(" | ") || null,
+        fullContext,
       });
     } catch (error) {
       return {
         ...firstPass,
-        deep_dive_error: deepDiveError || (error instanceof Error ? error.message : String(error)),
+        used_deep_dive: Boolean(fullContext),
+        deep_dive_articles: fullContextArticles,
+        deep_dive_error: fullContextErrors.join(" | ") || (error instanceof Error ? error.message : String(error)),
+        full_context: publicFullContextSummary(fullContext),
       };
     }
   } catch (error) {
@@ -1118,6 +1416,7 @@ function publicAiSummary(aiAnalysis) {
     used_deep_dive: Boolean(aiAnalysis.used_deep_dive),
     deep_dive_articles: aiAnalysis.deep_dive_articles || [],
     deep_dive_error: aiAnalysis.deep_dive_error || null,
+    full_context: aiAnalysis.full_context || null,
     recommendations_count: aiAnalysis.recommendationsByArticle?.size || 0,
     insights_count: aiAnalysis.insights?.length || 0,
     reason: aiAnalysis.reason || null,
@@ -1258,6 +1557,9 @@ export function pachkaReportConfig(env) {
     ai_model: asString(env.PACHKA_REPORT_AI_MODEL) || DEFAULT_AI_MODEL,
     ai_reasoning_effort: normalizeChoice(env.PACHKA_REPORT_AI_REASONING_EFFORT, DEFAULT_AI_REASONING_EFFORT, ["none", "low", "medium", "high", "xhigh"]),
     ai_deep_limit: clampInteger(env.PACHKA_REPORT_AI_DEEP_LIMIT, DEFAULT_AI_DEEP_LIMIT, 0, 5),
+    ai_full_refresh: String(env.PACHKA_REPORT_AI_FULL_REFRESH || "1") !== "0",
+    ai_auto_refresh: String(env.PACHKA_REPORT_AI_AUTO_REFRESH || "1") !== "0",
+    ai_full_refresh_limit: clampInteger(env.PACHKA_REPORT_AI_FULL_REFRESH_LIMIT, DEFAULT_AI_FULL_REFRESH_LIMIT, 0, 8),
   };
 }
 

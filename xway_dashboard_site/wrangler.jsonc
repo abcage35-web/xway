@@ -34,6 +34,7 @@
   // - PACHKA_REPORT_DAYS, PACHKA_REPORT_LIMIT, PACHKA_REPORT_STOCK_MIN_VALUE, PACHKA_REPORT_TIMEZONE_OFFSET_MINUTES: optional report controls
   // - PACHKA_REPORT_MESSAGE_PREFIX, PACHKA_REPORT_DASHBOARD_URL, PACHKA_REPORT_ENABLED: optional Pachka report controls
   // - PACHKA_REPORT_AI_RECOMMENDATIONS, PACHKA_REPORT_AI_MODEL, PACHKA_REPORT_AI_REASONING_EFFORT, PACHKA_REPORT_AI_DEEP_LIMIT: optional AI recommendation controls
+  // - PACHKA_REPORT_AI_FULL_REFRESH, PACHKA_REPORT_AI_AUTO_REFRESH, PACHKA_REPORT_AI_FULL_REFRESH_LIMIT: optional full-refresh recommendation data controls
   // - WB_FEEDBACK_ROOTS_JSON: optional article -> WB feedback root id mapping
   // - XWAY_AI_CACHE: optional KV namespace binding for shared AI response cache, MPVibe token cache, and XWAY source cache
   // - XWAY_SHARED_CACHE_DB: optional D1 binding for shared API/source cache visible to all users
