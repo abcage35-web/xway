@@ -3,8 +3,15 @@ import { readSharedCache, writeSharedCache } from "../shared-cache.js";
 import { buildAiContextPayload } from "./context.js";
 import { collectMpvibeArticle } from "./mpvibe-client.js";
 import { collectWbPublicFeedbacks } from "./wb-public.js";
+import {
+  collectAiCampaignBidHistory,
+  collectAiCampaignBudgetHistory,
+  collectAiCampaignLimits,
+  collectAiCampaignSchedules,
+  collectAiCampaignStatusHistory,
+} from "./campaign-details.js";
 
-const AI_RECOMMENDATION_CACHE_VERSION = "v1";
+const AI_RECOMMENDATION_CACHE_VERSION = "v2";
 const AI_RECOMMENDATION_D1_NAMESPACE = "ai-recommendation-data";
 
 function parseIsoDate(value) {
@@ -99,6 +106,17 @@ async function fetchSelfJson(context, pathname, params = {}) {
     throw new Error(payload?.error || text || `Self API request failed (${response.status})`);
   }
   return payload;
+}
+
+function buildPostContext(context, body) {
+  return {
+    ...context,
+    request: new Request(context.request.url, {
+      method: "POST",
+      headers: context.request.headers,
+      body: JSON.stringify(body),
+    }),
+  };
 }
 
 function firstProduct(productsPayload) {
@@ -322,6 +340,22 @@ function summarizeIssues(issues) {
   };
 }
 
+function summarizeFocusedCampaignPayload(payload) {
+  if (!payload) {
+    return null;
+  }
+  return {
+    generated_at: payload.generated_at,
+    kind: payload.kind,
+    range: payload.range,
+    article: payload.article,
+    product_ref: payload.product_ref,
+    campaign_count: payload.campaign_count,
+    not_found_campaign_ids: payload.not_found_campaign_ids || [],
+    campaigns: payload.campaigns || [],
+  };
+}
+
 function buildSourceMap(results) {
   return Object.fromEntries(
     Object.entries(results).map(([name, [, meta]]) => [
@@ -339,7 +373,9 @@ function buildAnalysisContract() {
     output_language: "ru",
     recommended_request: {
       detail_level: "full",
-      use_summary_only_for: "fast aggregate checks without phrase, cluster, bid, status or daily campaign diagnostics",
+      use_focused_campaign_methods_first: true,
+      product_heavy_details_only_when_explicit: true,
+      use_summary_only_for: "fast aggregate checks; focused campaign methods provide schedules, limits, budget top-ups, bids and status logs without loading full product cluster payload",
     },
     required_reasoning_layers: [
       "plan_vs_fact",
@@ -358,7 +394,7 @@ function buildAnalysisContract() {
       "If sales rose after price_with_wallet decreased or spp changed, treat it as price elasticity, not pure ad efficiency.",
       "For expensive manual CPM, estimate order-risk from its order share, not from its spend share.",
       "When manual CPM cluster data is present, analyze fixed/excluded clusters, cluster bids, positions, daily cluster metrics and cluster action history before recommending bid changes.",
-      "If manual CPM clusters are missing in the payload, say that the source did not return them; do not invent phrase-level recommendations.",
+      "If manual CPM clusters are missing in the payload, first use focused campaign schedules, limits, budget history, bid history and status history; do not invent phrase-level recommendations.",
     ],
   };
 }
@@ -381,10 +417,10 @@ function normalizeCampaignIds(value) {
 
 function resolveDetailLevel(requestBody) {
   const requested = String(requestBody.detail_level || "").trim().toLowerCase();
-  if (requested === "summary") {
-    return "summary";
+  if (requested === "full") {
+    return "full";
   }
-  return "full";
+  return "summary";
 }
 
 function resolveOptionalFullDefault(value, detailLevel) {
@@ -408,6 +444,8 @@ function aiCacheKey(article, range, options = {}) {
     `campaigns=${(options.campaignIds || []).slice().sort().join(",")}`,
     `charts=${options.includeXwayCharts ? "1" : "0"}`,
     `issues=${options.includeXwayIssues ? "1" : "0"}`,
+    `focused=${options.includeFocusedCampaigns ? "1" : "0"}`,
+    `product_heavy=${options.includeProductHeavyDetails ? "1" : "0"}`,
   ];
   return parts.join(":");
 }
@@ -463,13 +501,22 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
   const forceRefresh = Boolean(refreshOverride || requestBody.refresh);
   const requestedDetailLevel = resolveDetailLevel(requestBody);
   const campaignIds = normalizeCampaignIds(requestBody.campaign_ids);
-  const includeCampaignDetails = requestedDetailLevel === "full" || requestBody.include_campaign_details === true || campaignIds.length > 0;
+  const includeCampaignDetails = requestedDetailLevel === "full" || refreshOverride || requestBody.include_campaign_details === true || campaignIds.length > 0;
   const detailLevel = includeCampaignDetails ? "full" : "summary";
-  const productCampaignMode = includeCampaignDetails && campaignIds.length === 0 ? "full" : "summary";
+  const includeProductHeavyDetails = requestBody.include_product_heavy_details === true || String(requestBody.product_campaign_mode || "").toLowerCase() === "full";
+  const productCampaignMode = includeProductHeavyDetails && includeCampaignDetails && campaignIds.length === 0 ? "full" : "summary";
+  const productHeavyCampaignIds = includeProductHeavyDetails && includeCampaignDetails && campaignIds.length ? campaignIds : [];
   const includeXwayCharts = resolveOptionalFullDefault(requestBody.include_xway_charts, detailLevel);
   const includeXwayIssues = resolveOptionalFullDefault(requestBody.include_xway_issues, detailLevel);
   const cache = aiCacheBinding(context.env);
-  const cacheKey = aiCacheKey(article, range, { detailLevel, campaignIds, includeXwayCharts, includeXwayIssues });
+  const cacheKey = aiCacheKey(article, range, {
+    detailLevel,
+    campaignIds,
+    includeXwayCharts,
+    includeXwayIssues,
+    includeFocusedCampaigns: includeCampaignDetails,
+    includeProductHeavyDetails,
+  });
 
   if (!forceRefresh) {
     const d1Cached = await readSharedCache(context.env, AI_RECOMMENDATION_D1_NAMESPACE, cacheKey);
@@ -508,12 +555,19 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
       start: range.start,
       end: range.end,
       campaign_mode: productCampaignMode,
-      heavy_campaign_ids: includeCampaignDetails && campaignIds.length ? campaignIds.join(",") : "",
+      heavy_campaign_ids: productHeavyCampaignIds.length ? productHeavyCampaignIds.join(",") : "",
       force_refresh: forceRefresh ? "1" : "",
     }),
   );
   const product = firstProduct(xwayProductResult[0]);
   const productRef = productRefForProduct(product);
+  const focusedCampaignBody = {
+    article,
+    start: range.start,
+    end: range.end,
+    refresh: false,
+    campaign_ids: campaignIds,
+  };
 
   const chartCalls = productRef && includeXwayCharts
     ? {
@@ -558,10 +612,30 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
         ),
       }
     : {};
+  const focusedCampaignCalls = includeCampaignDetails
+    ? {
+        xway_campaign_schedules: safeSource("xway_campaign_schedules", () =>
+          collectAiCampaignSchedules(buildPostContext(context, focusedCampaignBody)),
+        ),
+        xway_campaign_limits: safeSource("xway_campaign_limits", () =>
+          collectAiCampaignLimits(buildPostContext(context, focusedCampaignBody)),
+        ),
+        xway_campaign_budget_history: safeSource("xway_campaign_budget_history", () =>
+          collectAiCampaignBudgetHistory(buildPostContext(context, focusedCampaignBody)),
+        ),
+        xway_campaign_bid_history: safeSource("xway_campaign_bid_history", () =>
+          collectAiCampaignBidHistory(buildPostContext(context, focusedCampaignBody)),
+        ),
+        xway_campaign_status_history: safeSource("xway_campaign_status_history", () =>
+          collectAiCampaignStatusHistory(buildPostContext(context, { ...focusedCampaignBody, limit: 60 })),
+        ),
+      }
+    : {};
 
   const settled = await Promise.all([
     ...Object.entries(chartCalls).map(async ([key, promise]) => [key, await promise]),
     ...Object.entries(issueCalls).map(async ([key, promise]) => [key, await promise]),
+    ...Object.entries(focusedCampaignCalls).map(async ([key, promise]) => [key, await promise]),
     safeSource("mpvibe", () => collectMpvibeArticle(context.env, { article, start: last7Range.start, end: last7Range.end })).then((value) => ["mpvibe", value]),
     safeSource("wb_public", () => collectWbPublicFeedbacks(context.env, { article, end: range.end, days: 30 })).then((value) => ["wb_public", value]),
   ]);
@@ -589,7 +663,8 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
       level: detailLevel,
       xway_campaign_mode: productCampaignMode,
       campaign_ids: campaignIds,
-      full_campaign_details_requested: includeCampaignDetails,
+      focused_campaign_details_requested: includeCampaignDetails,
+      product_heavy_details_requested: includeProductHeavyDetails,
       include_xway_charts: includeXwayCharts,
       include_xway_issues: includeXwayIssues,
     },
@@ -603,6 +678,15 @@ export async function collectAiRecommendationData(context, { refreshOverride = f
       chart_7d: summarizeChart(xwayChart7),
       chart_previous_7d: summarizeChart(xwayChartPrevious7),
       issues: summarizeIssues(results.xway_issues?.[0] || null),
+      focused_campaigns: includeCampaignDetails
+        ? {
+            schedules: summarizeFocusedCampaignPayload(results.xway_campaign_schedules?.[0] || null),
+            limits: summarizeFocusedCampaignPayload(results.xway_campaign_limits?.[0] || null),
+            budget_history: summarizeFocusedCampaignPayload(results.xway_campaign_budget_history?.[0] || null),
+            bid_history: summarizeFocusedCampaignPayload(results.xway_campaign_bid_history?.[0] || null),
+            status_history: summarizeFocusedCampaignPayload(results.xway_campaign_status_history?.[0] || null),
+          }
+        : null,
     },
     mpvibe,
     mpvibe_signals: collectMpvibeSignals(mpvibe),

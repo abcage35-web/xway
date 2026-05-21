@@ -290,7 +290,7 @@ export async function productLoader({ request }: LoaderFunctionArgs) {
     articles: trackedArticles,
     start: range.currentStart,
     end: range.currentEnd,
-    campaignMode: "full",
+    campaignMode: "summary",
   });
 
   return {
@@ -5772,7 +5772,7 @@ function ProductDailyPanel({ product }: { product: ProductSummary }) {
       articles: [product.article],
       start: requestedRange.start,
       end: requestedRange.end,
-      campaignMode: "full",
+      campaignMode: "summary",
       signal: controller.signal,
     })
       .then((response) => {
@@ -7574,6 +7574,8 @@ export function ProductPage() {
   const chartFetchAbortRef = useRef<AbortController | null>(null);
   const chartFetchKeyRef = useRef<string | null>(null);
   const chartFetchPromiseRef = useRef<Promise<ProductSummary | null> | null>(null);
+  const campaignDetailFetchAbortRef = useRef<AbortController | null>(null);
+  const campaignDetailFetchKeyRef = useRef<string | null>(null);
 
   const currentProduct = payloadState.products[0] ?? null;
   const overviewHeatmapMinHeight = resolveOverviewHeatmapMinHeight(currentProduct?.schedule_aggregate.days.length);
@@ -7647,7 +7649,7 @@ export function ProductPage() {
       articles: trackedArticles,
       start: start,
       end: end,
-      campaignMode: "full",
+      campaignMode: "summary",
       signal: controller.signal,
     })
       .then((response) => {
@@ -7705,6 +7707,98 @@ export function ProductPage() {
     }
     setVisibleCampaignIds((current) => buildVisibleCampaignIds(currentProduct.campaigns, current));
   }, [currentProduct]);
+
+  useEffect(() => {
+    const needsCampaignDetails =
+      activeTab === "campaign-status" ||
+      activeTab === "clusters" ||
+      activeTab === "bids" ||
+      Boolean(bidHistoryTarget || budgetHistoryTarget);
+    if (!currentProduct || !needsCampaignDetails || !visibleCampaignIds.length) {
+      campaignDetailFetchAbortRef.current?.abort();
+      campaignDetailFetchAbortRef.current = null;
+      campaignDetailFetchKeyRef.current = null;
+      return;
+    }
+
+    const missingDetailIds = visibleCampaignIds.filter((campaignId) => {
+      const campaign = currentProduct.campaigns.find((item) => item.id === campaignId);
+      return campaign && !campaign._heavy_loaded;
+    });
+    if (!missingDetailIds.length) {
+      return;
+    }
+
+    const requestKey = `${currentProduct.article}:${appliedStart}:${appliedEnd}:${missingDetailIds.join(",")}`;
+    if (campaignDetailFetchKeyRef.current === requestKey) {
+      return;
+    }
+
+    campaignDetailFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    campaignDetailFetchAbortRef.current = controller;
+    campaignDetailFetchKeyRef.current = requestKey;
+
+    fetchProducts({
+      articles: [currentProduct.article],
+      start: appliedStart,
+      end: appliedEnd,
+      campaignMode: "summary",
+      heavyCampaignIds: missingDetailIds,
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const detailedProduct = response.products.find((product) => product.article === currentProduct.article);
+        if (!detailedProduct) {
+          return;
+        }
+        setPayloadState((current) => ({
+          ...current,
+          products: current.products.map((product) => (product.article === detailedProduct.article ? detailedProduct : product)),
+        }));
+      })
+      .catch(() => {
+        // Детали РК догружаются лениво; основной экран должен остаться рабочим.
+      })
+      .finally(() => {
+        if (campaignDetailFetchAbortRef.current === controller) {
+          campaignDetailFetchAbortRef.current = null;
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    activeTab,
+    appliedEnd,
+    appliedStart,
+    bidHistoryTarget,
+    budgetHistoryTarget,
+    currentProduct,
+    visibleCampaignIds,
+  ]);
+
+  useEffect(() => {
+    if (!currentProduct) {
+      return;
+    }
+    if (bidHistoryTarget) {
+      const updatedCampaign = currentProduct.campaigns.find((campaign) => campaign.id === bidHistoryTarget.campaign.id);
+      if (updatedCampaign?._heavy_loaded && updatedCampaign !== bidHistoryTarget.campaign) {
+        setBidHistoryTarget({ ...bidHistoryTarget, campaign: updatedCampaign });
+      }
+    }
+    if (budgetHistoryTarget) {
+      const updatedCampaign = currentProduct.campaigns.find((campaign) => campaign.id === budgetHistoryTarget.campaign.id);
+      if (updatedCampaign?._heavy_loaded && updatedCampaign !== budgetHistoryTarget.campaign) {
+        setBudgetHistoryTarget({ ...budgetHistoryTarget, campaign: updatedCampaign });
+      }
+    }
+  }, [budgetHistoryTarget, bidHistoryTarget, currentProduct]);
 
   useEffect(() => {
     const summaryNode = overviewSummaryRef.current;
@@ -7943,7 +8037,7 @@ export function ProductPage() {
       articles: [currentProduct.article],
       start: preloadRange.start,
       end: preloadRange.end,
-      campaignMode: "full",
+      campaignMode: "summary",
       signal: controller.signal,
     })
       .then((response) => {

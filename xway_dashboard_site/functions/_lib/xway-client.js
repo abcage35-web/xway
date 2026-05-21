@@ -14,6 +14,9 @@ const PRODUCT_STOCKS_RULE_CACHE_TTL_MS = 180000;
 const PRODUCT_ORDERS_HEATMAP_CACHE_TTL_MS = 180000;
 const CAMPAIGN_DAILY_EXACT_CACHE_TTL_MS = 180000;
 const CAMPAIGN_SCHEDULE_CACHE_TTL_MS = 180000;
+const CAMPAIGN_BID_HISTORY_CACHE_TTL_MS = 180000;
+const CAMPAIGN_BUDGET_HISTORY_CACHE_TTL_MS = 180000;
+const CAMPAIGN_STATUS_HISTORY_CACHE_TTL_MS = 180000;
 const PRODUCT_DAILY_STATS_CHUNK_DAYS = 30;
 const PRODUCT_ORDERS_HEATMAP_CHUNK_DAYS = 7;
 const CAMPAIGN_DAILY_EXACT_CONCURRENCY = 1;
@@ -33,6 +36,10 @@ const cacheStore = {
   productOrdersHeatMap: new Map(),
   campaignDailyExact: new Map(),
   campaignSchedule: new Map(),
+  campaignBidHistory: new Map(),
+  campaignBudgetHistory: new Map(),
+  campaignStatusMpHistory: new Map(),
+  campaignStatusPauseHistory: new Map(),
 };
 
 function getCached(map, key, ttlMs) {
@@ -857,22 +864,43 @@ export class XwayApiClient {
   }
 
   async campaignBidHistory(shopId, productId, campaignId) {
-    return this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/bid-history`, {
+    const cacheKey = `${this.cacheNamespace}:campaign-bid-history:${shopId}:${productId}:${campaignId}`;
+    const cached = await this.readSourceCache(cacheStore.campaignBidHistory, cacheKey, CAMPAIGN_BID_HISTORY_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+    const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/bid-history`, {
       referer: this.buildCampaignReferer(shopId, productId, campaignId),
     });
+    await this.writeSourceCache(cacheStore.campaignBidHistory, cacheKey, payload);
+    return payload;
   }
 
   async campaignBudgetHistory(shopId, productId, campaignId) {
-    return this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/budget-history`, {
+    const cacheKey = `${this.cacheNamespace}:campaign-budget-history:${shopId}:${productId}:${campaignId}`;
+    const cached = await this.readSourceCache(cacheStore.campaignBudgetHistory, cacheKey, CAMPAIGN_BUDGET_HISTORY_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+    const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/budget-history`, {
       referer: this.buildCampaignReferer(shopId, productId, campaignId),
     });
+    await this.writeSourceCache(cacheStore.campaignBudgetHistory, cacheKey, payload);
+    return payload;
   }
 
   async campaignStatusMpHistory(shopId, productId, campaignId, offset = 0, limit = 40) {
-    return this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/status-mp-history`, {
+    const cacheKey = `${this.cacheNamespace}:campaign-status-mp-history:${shopId}:${productId}:${campaignId}:${offset}:${limit}`;
+    const cached = await this.readSourceCache(cacheStore.campaignStatusMpHistory, cacheKey, CAMPAIGN_STATUS_HISTORY_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+    const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/status-mp-history`, {
       referer: this.buildProductReferer(shopId, productId),
       params: { offset, limit },
     });
+    await this.writeSourceCache(cacheStore.campaignStatusMpHistory, cacheKey, payload);
+    return payload;
   }
 
   async campaignStatusMpHistoryFull(shopId, productId, campaignId, { pageLimit = 120, maxPages = 50, targetStart = null } = {}) {
@@ -904,12 +932,19 @@ export class XwayApiClient {
   }
 
   async campaignStatusPauseHistory(shopId, productId, campaignId, limit = 24) {
-    return this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/status-pause-history`, {
+    const cacheKey = `${this.cacheNamespace}:campaign-status-pause-history:${shopId}:${productId}:${campaignId}:${limit}`;
+    const cached = await this.readSourceCache(cacheStore.campaignStatusPauseHistory, cacheKey, CAMPAIGN_STATUS_HISTORY_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+    const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/status-pause-history`, {
       method: "POST",
       referer: this.buildProductReferer(shopId, productId),
       csrf: true,
       json: { limit },
     });
+    await this.writeSourceCache(cacheStore.campaignStatusPauseHistory, cacheKey, payload);
+    return payload;
   }
 
   async campaignStatusPauseHistoryFull(shopId, productId, campaignId, { initialLimit = 120, maxLimit = 5000, targetStart = null } = {}) {

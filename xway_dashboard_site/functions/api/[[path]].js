@@ -371,7 +371,7 @@ async function handleNativeRequest(context, pathname) {
         articles,
         start: searchParamsValue(requestUrl, "start"),
         end: searchParamsValue(requestUrl, "end"),
-        campaignMode: searchParamsValue(requestUrl, "campaign_mode") || "full",
+        campaignMode: searchParamsValue(requestUrl, "campaign_mode") || "summary",
         heavyCampaignIds,
         forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
       }),

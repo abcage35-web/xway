@@ -1244,7 +1244,7 @@ async function collectFullRecommendationContext(env, report, articleItems, { for
     return null;
   }
 
-  const refresh = Boolean(forceRefresh || String(env.PACHKA_REPORT_AI_AUTO_REFRESH || "1") !== "0");
+  const refresh = Boolean(forceRefresh || String(env.PACHKA_REPORT_AI_AUTO_REFRESH || "0") === "1");
   const sourceTimeoutMs = Math.max(5_000, timeoutMs);
   const turnoverStart = shiftedIsoDate(report.range.end, -2);
   const sources = await Promise.all([

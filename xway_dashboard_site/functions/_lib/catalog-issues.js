@@ -657,7 +657,7 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
     async (campaign) => {
       const campaignId = campaign?.id;
       const [pausePayload] = await safeCall(
-        () => client.campaignStatusPauseHistoryFull(shopId, productId, Number(campaignId), { initialLimit: 120, targetStart: client.range.current_start }),
+        () => client.campaignStatusPauseHistory(shopId, productId, Number(campaignId), 120),
         {},
       );
       const [schedulePayload, scheduleError] = await safeCall(() => client.campaignSchedule(shopId, productId, Number(campaignId)), {});

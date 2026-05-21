@@ -5949,7 +5949,7 @@ export function CatalogPage() {
           productRefs: [ref],
           start: sourcePayload.range.current_start,
           end: sourcePayload.range.current_end,
-          forceRefresh: (detailOptions.forceRefresh ?? (options.forceDeepDetailsRefresh !== false)) || attempt > 0,
+          forceRefresh: (detailOptions.forceRefresh ?? options.forceDeepDetailsRefresh ?? false) || attempt > 0,
           includeCampaignDetails: detailOptions.includeCampaignDetails,
           includeBestTime: detailOptions.includeBestTime,
           signal: options.signal,

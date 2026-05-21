@@ -1082,11 +1082,10 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
 
   let heavyIds;
   if (campaignMode === "summary") {
-    const defaultHeavyIds = campaignRefs.slice(0, 2).map((campaign) => String(campaign.id));
     heavyIds = new Set(
       campaignRefs
         .filter((campaign) =>
-          requestedHeavyIds.size ? campaign.keys.some((key) => requestedHeavyIds.has(key)) : defaultHeavyIds.includes(String(campaign.id)),
+          requestedHeavyIds.size ? campaign.keys.some((key) => requestedHeavyIds.has(key)) : false,
         )
         .map((campaign) => String(campaign.id)),
     );
@@ -1234,7 +1233,7 @@ async function collectSingleArticle(env, article, match, start, end, campaignMod
   );
 }
 
-export async function collectProducts(env, { articles = [], start = null, end = null, campaignMode = "full", heavyCampaignIds = [], forceRefresh = false } = {}) {
+export async function collectProducts(env, { articles = [], start = null, end = null, campaignMode = "summary", heavyCampaignIds = [], forceRefresh = false } = {}) {
   const requestedArticles = [...new Set((articles || []).map((article) => String(article || "").trim()).filter(Boolean))];
   const normalizedMode = String(campaignMode || "").toLowerCase() === "summary" ? "summary" : "full";
   const requestedHeavyIds = new Set((heavyCampaignIds || []).map((campaignId) => String(campaignId || "").trim()).filter(Boolean));

@@ -26,7 +26,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         post: {
           operationId: "getArticleRecommendationData",
           summary: "Collect structured analytics for one WB article.",
-          description: "Use this only when a full recommendation context is needed. For configured show time, limits, budget top-ups, bid history or status logs, prefer the focused campaign-* methods so the system does not load the full product payload.",
+          description: "Collect recommendation context through light methods by default. detail_level=full adds focused campaign schedules, limits, budget top-ups, bid history and status logs, but does not load full product cluster payload unless include_product_heavy_details is explicitly true.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -180,7 +180,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         post: {
           operationId: "refreshArticleRecommendationData",
           summary: "Refresh source data and collect structured analytics for one WB article.",
-          description: "Heavy full-refresh method. Prefer focused campaign-* methods for schedule, limits, top-ups, bids and status checks.",
+          description: "Refreshes light/focused article context. It bypasses short-lived caches, but still avoids full product cluster payload unless include_product_heavy_details is explicitly true.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -219,16 +219,21 @@ export function buildAiOpenApiSpec(requestUrl) {
             detail_level: {
               type: "string",
               enum: ["full", "summary"],
-              default: "full",
-              description: "Use full for recommendation reports. Full includes campaign daily details, bid and budget history, cluster/normquery rows, fixed/excluded flags, cluster bids and positions where XWAY provides them. Summary is only for fast aggregate checks.",
+              default: "summary",
+              description: "summary loads fast aggregate product data. full adds focused campaign schedules, limits, budget top-ups, bid history and bounded status logs without loading full cluster payload.",
             },
             include_campaign_details: {
               type: "boolean",
-              description: "When true, load campaign-level details even if detail_level is summary. If campaign_ids is omitted, details are loaded for all article campaigns.",
+              description: "When true, load focused campaign-level methods even if detail_level is summary. If campaign_ids is omitted, focused details are loaded for all article campaigns.",
+            },
+            include_product_heavy_details: {
+              type: "boolean",
+              default: false,
+              description: "Explicit escape hatch for the old heavy product details path with cluster/normquery payloads. Keep false for routine analysis, schedules, limits, budgets, bids and statuses.",
             },
             campaign_ids: {
               type: "array",
-              description: "Optional campaign ids to load with detailed clusters/phrases. Accepts either internal XWAY campaign ids or WB campaign ids. Omit for full details on every campaign.",
+              description: "Optional campaign ids for focused campaign methods. When include_product_heavy_details=true, also limits heavy product details to these campaigns.",
               items: { type: "string" },
             },
             include_xway_charts: {

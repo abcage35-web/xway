@@ -411,6 +411,7 @@ export interface CampaignSummary {
   clusters: ClusterPayload;
   schedule_config?: CampaignScheduleConfig;
   status_logs?: CampaignStatusLogs;
+  _heavy_loaded?: boolean;
   raw?: Record<string, unknown>;
 }
 
