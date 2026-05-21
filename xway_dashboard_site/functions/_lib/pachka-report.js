@@ -475,6 +475,23 @@ function cleanAiText(value, max = 280) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function cleanAiReportText(value, report, max = 280) {
+  const text = cleanAiText(value, max);
+  if (!text) {
+    return "";
+  }
+  const mpvibeAvailable = Boolean(report?.sources?.mpvibe?.available);
+  const saysMpvibeUnavailable = /(?:mpvibe|данн[а-яё\s]*mpvibe).{0,80}(?:недоступ|не доступ|нет данных|не вернул|не получ)/i.test(text);
+  const saysMpvibeAvailable = /mpvibe.{0,80}(?:доступен|доступны|учтен|учтены|подтвержден|подтверждены)/i.test(text);
+  if (mpvibeAvailable && saysMpvibeUnavailable) {
+    return "";
+  }
+  if (!mpvibeAvailable && saysMpvibeAvailable) {
+    return "";
+  }
+  return text;
+}
+
 function compactStats(stats = {}) {
   const source = stats || {};
   return {
@@ -721,16 +738,16 @@ function normalizeAiAnalysis(payload, { report, model, usedDeepDive = false, dee
   const recommendationsByArticle = new Map();
   recommendationEntries(payload).forEach(([article, recommendation]) => {
     const key = asString(article);
-    const value = cleanAiText(recommendation);
+    const value = cleanAiReportText(recommendation, report);
     if (key && value && allowedArticles.has(key)) {
       recommendationsByArticle.set(key, value);
     }
   });
   const insights = (payload?.insights || payload?.report_insights || [])
-    .map((value) => cleanAiText(value, 360))
+    .map((value) => cleanAiReportText(value, report, 360))
     .filter(Boolean)
     .slice(0, 6);
-  const analysisNote = cleanAiText(payload?.analysis_note || payload?.decision || "", 360);
+  const analysisNote = cleanAiReportText(payload?.analysis_note || payload?.decision || "", report, 360);
   return {
     available: true,
     model,
@@ -948,6 +965,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
     "Ты аналитик XWAY. Нужно подготовить осмысленные рекомендации для ежедневного markdown-отчета.",
     "Сначала реши, достаточно ли компактного отчета или нужно углубиться в данные XWAY по кампаниям и кластерам.",
     "Углубляйся только когда это реально нужно: высокий ДРР при заметном расходе, расход без заказов, активные РК без расхода, подозрение на ставки/поисковые фразы/лимиты/расписание.",
+    "Доступность MPVibe бери только из sources.mpvibe.available. Если true, не пиши, что MPVibe недоступен.",
     "Если MPVibe недоступен, не делай выводов по его остаткам, кроме необходимости сверить позже.",
     "Не используй шаблонные формулировки. В каждой рекомендации должны быть причина из данных и следующее действие.",
     "Поле recommendations обязательно: заполни его для каждого article из sections.top_drr, sections.fbo_stock_no_spend и sections.mpvibe_only_stock, даже если просишь углубление.",
@@ -996,6 +1014,7 @@ async function buildAiReportRecommendations(env, report, recommendationContext, 
       "Ты аналитик XWAY. Сформируй финальные рекомендации для ежедневного markdown-отчета.",
       "Используй компактный отчет и, если есть, углубленные данные по кампаниям/кластерам.",
       "Сам реши, какие выводы важны: кластерные ставки, запросы, лимиты, расписание, статус РК, карточка/цена/конверсия, остатки или маппинг MPVibe.",
+      "Доступность MPVibe бери только из report.sources.mpvibe.available. Отсутствие MPVibe в deep_dive не означает, что MPVibe недоступен.",
       "Не пиши шаблонно. Каждая рекомендация должна объяснять, почему именно это действие нужно сейчас.",
       "Не выдумывай данные. Если углубление не удалось, опирайся на компактные метрики и явно не ссылайся на кластеры.",
       "Поле recommendations обязательно: заполни его для каждого article из отчета, не группируй без article-ключа.",
