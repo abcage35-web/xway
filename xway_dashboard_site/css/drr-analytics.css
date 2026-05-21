@@ -525,10 +525,10 @@ body.is-resizing-drr-column {
   position: relative;
   display: grid;
   grid-template-columns: minmax(178px, 230px) minmax(172px, 330px);
-  align-items: center;
+  align-items: start;
   justify-content: center;
   gap: 14px;
-  height: 230px;
+  min-height: 230px;
   min-width: 0;
 }
 
@@ -571,9 +571,7 @@ body.is-resizing-drr-column {
   display: grid;
   justify-self: stretch;
   width: min(100%, 330px);
-  max-height: 218px;
   min-width: 0;
-  overflow: auto;
   padding: 0 2px 0 0;
 }
 
@@ -785,11 +783,6 @@ html[data-theme="dark"] .drr-status-chip.is-error {
 @media (max-width: 560px) {
   .drr-category-pie-body {
     grid-template-columns: 1fr;
-    height: auto;
-  }
-
-  .drr-category-pie-legend {
-    max-height: 150px;
   }
 }
 
