@@ -446,6 +446,22 @@ function findStocksForCard(payload, cardId) {
   };
 }
 
+function listStockEntries(payload) {
+  const entries = [];
+  for (const row of Array.isArray(payload) ? payload : []) {
+    const stocks = row?.stocks && typeof row.stocks === "object" ? row.stocks : {};
+    for (const [cardId, stock] of Object.entries(stocks)) {
+      entries.push({
+        card_id: cardId,
+        account_id: row.account_id ?? null,
+        stock,
+        supply: row.supplies?.[cardId] || null,
+      });
+    }
+  }
+  return entries;
+}
+
 function extractMpvibeStockValue(value, depth = 0) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -485,6 +501,28 @@ function indexRealtimeCardsByArticle(payload, articles) {
     }
   }
   return byArticle;
+}
+
+function indexRealtimeCardsByCardId(payload) {
+  const byCardId = new Map();
+  for (const match of listRealtimeCards(payload)) {
+    const cardId = asString(match.card?.card_id ?? match.card?.id);
+    if (cardId && !byCardId.has(cardId)) {
+      byCardId.set(cardId, match);
+    }
+  }
+  return byCardId;
+}
+
+function indexPriceCardsByCardId(payload) {
+  const byCardId = new Map();
+  for (const row of Array.isArray(payload) ? payload : []) {
+    const cardId = asString(row?.card_id ?? row?.id);
+    if (cardId && !byCardId.has(cardId)) {
+      byCardId.set(cardId, row);
+    }
+  }
+  return byCardId;
 }
 
 function normalizePlan(planPayload, cardId) {
@@ -558,6 +596,24 @@ function buildMpvibeStockRow(article, mainMatch, stocksPayload) {
     card_id: cardId,
     account_id: mainCard?.account_id ?? null,
     name: mainCard?.name ?? null,
+    stock_fbo: stockFbo,
+    available: stockFbo !== null,
+    error: stockFbo === null ? "MPVibe stock was not found for article." : null,
+  };
+}
+
+function buildMpvibeStockRowFromStockEntry(entry, mainMatch, priceRow) {
+  const mainCard = mainMatch ? normalizeMainCard(mainMatch.card, cardArticle(mainMatch.card), mainMatch) : null;
+  const article = cardArticle(mainMatch?.card) || asString(priceRow?.sku) || asString(priceRow?.nm_id) || asString(priceRow?.nmId) || asString(priceRow?.article);
+  if (!article) {
+    return null;
+  }
+  const stockFbo = extractMpvibeStockValue(entry.stock);
+  return {
+    article,
+    card_id: entry.card_id,
+    account_id: mainCard?.account_id ?? priceRow?.account_id ?? entry.account_id ?? null,
+    name: mainCard?.name ?? priceRow?.name ?? null,
     stock_fbo: stockFbo,
     available: stockFbo !== null,
     error: stockFbo === null ? "MPVibe stock was not found for article." : null,
@@ -654,9 +710,10 @@ export async function collectMpvibeStocks(env, { articles, start, end, includeAl
     };
   }
 
-  const [mainResult, stocksResult] = await Promise.allSettled([
+  const [mainResult, stocksResult, priceResult] = await Promise.allSettled([
     mpvibeJson(env, "/api/realtime/mp/wb", { start_date: start, end_date: end }),
     mpvibeJson(env, "/api/realtime/mp/wb/stocks", { start_date: start, end_date: end }),
+    includeAllWithStock ? mpvibeJson(env, "/api/price/wb") : Promise.resolve(null),
   ]);
   const requestErrors = [];
   if (mainResult.status === "rejected") {
@@ -665,9 +722,13 @@ export async function collectMpvibeStocks(env, { articles, start, end, includeAl
   if (stocksResult.status === "rejected") {
     requestErrors.push(mpvibeRequestError("stocks", stocksResult.reason));
   }
+  if (includeAllWithStock && priceResult.status === "rejected") {
+    requestErrors.push(mpvibeRequestError("price", priceResult.reason));
+  }
 
   const mainPayload = mainResult.status === "fulfilled" ? mainResult.value : null;
   const stocksPayload = stocksResult.status === "fulfilled" ? stocksResult.value : null;
+  const pricePayload = priceResult.status === "fulfilled" ? priceResult.value : null;
 
   if (!mainPayload) {
     const error = requestErrors.join(" | ") || "MPVibe realtime data is unavailable.";
@@ -699,6 +760,17 @@ export async function collectMpvibeStocks(env, { articles, start, end, includeAl
 
   if (includeAllWithStock) {
     const seenArticles = new Set(rows.map((row) => row.article));
+    const realtimeByCardId = indexRealtimeCardsByCardId(mainPayload);
+    const priceByCardId = indexPriceCardsByCardId(pricePayload);
+    for (const entry of listStockEntries(stocksPayload)) {
+      const cardId = asString(entry.card_id);
+      const row = buildMpvibeStockRowFromStockEntry(entry, realtimeByCardId.get(cardId), priceByCardId.get(cardId));
+      if (!row || seenArticles.has(row.article) || (row.stock_fbo ?? 0) <= 0) {
+        continue;
+      }
+      rows.push(row);
+      seenArticles.add(row.article);
+    }
     for (const mainMatch of listRealtimeCards(mainPayload)) {
       const article = cardArticle(mainMatch.card);
       if (!article || seenArticles.has(article)) {
