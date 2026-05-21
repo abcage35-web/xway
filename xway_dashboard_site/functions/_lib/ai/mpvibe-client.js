@@ -57,9 +57,13 @@ const PRICE_FIELDS = [
 
 const STOCK_VALUE_FIELDS = [
   "stocks_fbo",
+  "current_fbo_stocks",
   "stock_fbo",
   "fbo_stock",
+  "fbo_stocks",
   "fbo",
+  "stocks_by_warehouses",
+  "fbo_amount",
   "total_stock",
   "total_quantity",
   "quantity",
@@ -67,6 +71,7 @@ const STOCK_VALUE_FIELDS = [
   "stock",
   "stocks",
   "amount",
+  "leftover",
   "balance",
   "count",
   "remain_stock",
