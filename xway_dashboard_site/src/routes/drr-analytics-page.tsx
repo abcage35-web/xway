@@ -541,6 +541,132 @@ function buildCategoryDriverGroups(rows: AnalyticsRowBase[], sort: SortState<Cat
     .filter((group) => group.rows.length > 0);
 }
 
+function buildAllCategoryDriverGroup(rows: AnalyticsRowBase[], sort: SortState<CategorySortField>, minStock: number): CategoryDriverShopGroup | null {
+  if (!rows.length) {
+    return null;
+  }
+  const categoriesByName = new Map<string, CategoryDriverRow>();
+  const shopNamesByCategory = new Map<string, Set<string>>();
+  const totals = rows.reduce(
+    (summary, row) => ({
+      spend: summary.spend + (row.spend ?? 0),
+      revenueAds: summary.revenueAds + (row.revenue ?? 0),
+      revenueTotal: summary.revenueTotal + (row.revenueTotal ?? 0),
+    }),
+    { spend: 0, revenueAds: 0, revenueTotal: 0 },
+  );
+
+  rows.forEach((row) => {
+    const category = String(row.categoryKeyword || "").trim() || "Без категории";
+    const key = category.toLocaleLowerCase("ru");
+    const current =
+      categoriesByName.get(key) ||
+      ({
+        ref: `all:${key}`,
+        shopId: 0,
+        shopName: "Все кабинеты",
+        category,
+        skuCount: 0,
+        stock: 0,
+        stockMpvibe: null,
+        spend: 0,
+        spendShare: null,
+        revenueAds: 0,
+        revenueAdsShare: null,
+        revenueTotal: 0,
+        revenueTotalShare: null,
+        ordersAds: 0,
+        ordersTotal: 0,
+        views: 0,
+        clicks: 0,
+        atbs: 0,
+        drrAds: null,
+        drrTotal: null,
+        campaigns: 0,
+        activeCampaigns: 0,
+      } satisfies CategoryDriverRow);
+    current.skuCount += 1;
+    current.stock += row.stock ?? 0;
+    current.stockMpvibe = row.stockMpvibe === null ? current.stockMpvibe : (current.stockMpvibe ?? 0) + row.stockMpvibe;
+    current.spend += row.spend ?? 0;
+    current.revenueAds += row.revenue ?? 0;
+    current.revenueTotal += row.revenueTotal ?? 0;
+    current.ordersAds += row.ordersAds ?? 0;
+    current.ordersTotal += row.ordersTotal ?? 0;
+    current.views += row.views ?? 0;
+    current.clicks += row.clicks ?? 0;
+    current.atbs += row.atbs ?? 0;
+    current.campaigns += row.campaigns;
+    current.activeCampaigns += row.activeCampaigns;
+    categoriesByName.set(key, current);
+
+    const shopNames = shopNamesByCategory.get(key) || new Set<string>();
+    if (row.shopName) {
+      shopNames.add(row.shopName);
+    }
+    shopNamesByCategory.set(key, shopNames);
+  });
+
+  const categoryRows = [...categoriesByName.entries()].map(([key, row]) => {
+    const sourceShopNames = [...(shopNamesByCategory.get(key) || new Set<string>())];
+    const sourceShopLabel =
+      sourceShopNames.length > 1
+        ? `${formatNumber(sourceShopNames.length)} каб.`
+        : sourceShopNames[0] || "Все кабинеты";
+    return {
+      ...row,
+      shopName: sourceShopLabel,
+      spendShare: totals.spend > 0 ? (row.spend / totals.spend) * 100 : null,
+      revenueAdsShare: totals.revenueAds > 0 ? (row.revenueAds / totals.revenueAds) * 100 : null,
+      revenueTotalShare: totals.revenueTotal > 0 ? (row.revenueTotal / totals.revenueTotal) * 100 : null,
+      drrAds: row.revenueAds > 0 ? (row.spend / row.revenueAds) * 100 : null,
+      drrTotal: row.revenueTotal > 0 ? (row.spend / row.revenueTotal) * 100 : null,
+    };
+  });
+  const visibleRows = categoryRows.filter((row) => row.stock >= minStock);
+  const sortedRows = sortNamedRows<CategoryDriverRow>(visibleRows, sort, (row, field) => {
+    switch (field as CategorySortField) {
+      case "rank":
+        return visibleRows.indexOf(row) + 1;
+      case "category":
+        return row.category;
+      case "skuCount":
+        return row.skuCount;
+      case "stock":
+        return row.stock;
+      case "stockMpvibe":
+        return row.stockMpvibe;
+      case "drrAds":
+        return row.drrAds;
+      case "drrTotal":
+        return row.drrTotal;
+      case "spend":
+        return row.spend;
+      case "spendShare":
+        return row.spendShare;
+      case "revenueAds":
+        return row.revenueAds;
+      case "revenueAdsShare":
+        return row.revenueAdsShare;
+      case "revenueTotal":
+        return row.revenueTotal;
+      case "revenueTotalShare":
+        return row.revenueTotalShare;
+      case "ordersAds":
+        return row.ordersAds;
+      case "ordersTotal":
+        return row.ordersTotal;
+      case "campaigns":
+        return row.campaigns;
+      case "activeCampaigns":
+      default:
+        return row.activeCampaigns;
+    }
+  });
+  const rankedRows = sortedRows.map((row, index) => ({ ...row, rank: index + 1 }));
+  return rankedRows.length ? { shopId: 0, shopName: "Все кабинеты", rows: rankedRows } : null;
+}
+
 function formatReviewCell(wb?: WbCardInfo | null) {
   if (!wb) {
     return "—";
@@ -1204,6 +1330,7 @@ export function DrrAnalyticsPage() {
     return sorted.slice(0, limit).map((row, index) => ({ ...row, rank: index + 1 }));
   }, [limit, rows, stockSort]);
   const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(rows, categorySort, categoryMinStock), [categoryMinStock, categorySort, rows]);
+  const allCategoryGroup = useMemo(() => buildAllCategoryDriverGroup(rows, categorySort, categoryMinStock), [categoryMinStock, categorySort, rows]);
   const categoryRowsCount = categoryShopGroups.reduce((sum, group) => sum + group.rows.length, 0);
   const drrSummaryRow = useMemo(() => buildDrrSummaryRow(drrRows), [drrRows]);
   const stockSummaryRow = useMemo(() => buildStockSummaryRow(stockRows, loadedRange?.days ?? days), [days, loadedRange?.days, stockRows]);
@@ -2052,8 +2179,28 @@ export function DrrAnalyticsPage() {
         </SectionCard>
       ) : (
         <div className="space-y-4">
-          {categoryShopGroups.length ? (
-            categoryShopGroups.map((group) => (
+          {allCategoryGroup || categoryShopGroups.length ? (
+            <>
+              {allCategoryGroup ? (
+                <SectionCard
+                  title="Все кабинеты"
+                  caption={`Суммы и расчетные показатели по всем кабинетам с суммарным остатком от ${formatNumber(categoryMinStock)}: ${formatNumber(allCategoryGroup.rows.length)} категорий, ${formatNumber(allCategoryGroup.rows.reduce((sum, row) => sum + row.skuCount, 0))} SKU.`}
+                >
+                  <CategoryDriverCharts rows={allCategoryGroup.rows} />
+                  <MetricTable
+                    rows={allCategoryGroup.rows}
+                    columns={categoryColumns}
+                    summaryRow={buildCategorySummaryRow(allCategoryGroup.rows)}
+                    className="drr-category-driver-table"
+                    stickyHeader
+                    headerSummaryPlacement="inline"
+                    stickyHeaderClassName="drr-analytics-sticky-header drr-category-driver-table"
+                    getRowKey={(row) => row.ref}
+                    emptyText="Нет категорий по всем кабинетам за выбранный период."
+                  />
+                </SectionCard>
+              ) : null}
+              {categoryShopGroups.map((group) => (
               <SectionCard
                 key={group.shopId}
                 title={group.shopName}
@@ -2072,7 +2219,8 @@ export function DrrAnalyticsPage() {
                   emptyText="По кабинету нет категорий за выбранный период."
                 />
               </SectionCard>
-            ))
+              ))}
+            </>
           ) : (
             <SectionCard title="Категорийные драйверы" caption="Категории появятся после загрузки каталога.">
               <EmptyState title="Нет данных" text="Нажмите обновить или измените период." />
