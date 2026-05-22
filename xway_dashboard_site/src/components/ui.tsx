@@ -27,6 +27,7 @@ export interface TableColumn<T> {
   minWidth?: number | string;
   maxWidth?: number | string;
   stickyLeft?: number;
+  summaryClassName?: string;
   render: (row: T) => ReactNode;
 }
 
@@ -333,6 +334,8 @@ export function MetricTable<T>({
   headerStickyTop = 0,
   getRowKey,
   renderExpandedRow,
+  summaryRow,
+  summaryRowClassName,
 }: {
   columns: TableColumn<T>[];
   rows: T[];
@@ -345,6 +348,8 @@ export function MetricTable<T>({
   headerStickyTop?: number | string;
   getRowKey?: (row: T, rowIndex: number) => string | number;
   renderExpandedRow?: (row: T, rowIndex: number) => ReactNode;
+  summaryRow?: Partial<Record<string, ReactNode>>;
+  summaryRowClassName?: string;
 }) {
   const tableShellRef = useRef<HTMLDivElement | null>(null);
   const tableViewportRef = useRef<HTMLDivElement | null>(null);
@@ -629,6 +634,26 @@ export function MetricTable<T>({
             {colgroup}
             {!showStickyHeaderClone ? renderHeader() : null}
             <tbody className="divide-y divide-[var(--color-line)] bg-white">
+              {summaryRow ? (
+                <tr className={cn("metric-table-aggregate-row", summaryRowClassName)}>
+                  {columns.map((column) => (
+                    <td
+                      key={`${column.key}-aggregate`}
+                      style={getTableColumnStyle(column)}
+                      className={cn(
+                        "metric-table-aggregate-cell px-4 py-3 align-top text-[var(--color-ink)]",
+                        column.stickyLeft !== undefined && "metric-table-sticky-col metric-table-sticky-cell",
+                        column.dividerBefore && "border-l border-[var(--color-line)]",
+                        column.align === "right" ? "text-right" : "text-left",
+                        column.cellClassName,
+                        column.summaryClassName,
+                      )}
+                    >
+                      {summaryRow[column.key] ?? null}
+                    </td>
+                  ))}
+                </tr>
+              ) : null}
               {rows.map((row, rowIndex) => {
                 const expandedRow = renderExpandedRow?.(row, rowIndex);
                 const rowKey = getRowKey?.(row, rowIndex) ?? rowIndex;

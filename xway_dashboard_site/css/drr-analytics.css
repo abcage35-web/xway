@@ -328,6 +328,50 @@ body.is-resizing-drr-column {
   font-size: 1rem;
 }
 
+.drr-analytics-page .metric-table-aggregate-row td {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(30, 41, 59, 0.52);
+  color: var(--color-ink);
+  font-weight: 800;
+}
+
+.drr-analytics-page .metric-table-aggregate-row td.metric-table-sticky-col {
+  background: rgba(30, 41, 59, 0.88);
+}
+
+.drr-analytics-page .metric-table-aggregate-row .drr-col-rank,
+.drr-analytics-page .metric-table-aggregate-row .drr-col-product,
+.drr-analytics-page .metric-table-aggregate-row .drr-col-category {
+  color: var(--color-ink);
+}
+
+.drr-table-summary-label {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  line-height: 1.1;
+}
+
+.drr-table-summary-label strong,
+.drr-table-summary-label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drr-table-summary-label strong {
+  color: var(--color-ink);
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.drr-table-summary-label span {
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 .drr-category-driver-table .data-table th.metric-table-summary-head {
   height: 34px;
 }

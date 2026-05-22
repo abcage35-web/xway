@@ -98,6 +98,7 @@ interface DrrAnalyticsRow extends AnalyticsRowBase {
 
 type RankedDrrRow = DrrAnalyticsRow & { rank: number };
 type RankedStockRow = AnalyticsRowBase & { rank: number };
+type TableSummaryRow = Partial<Record<string, ReactNode>>;
 interface CategoryDriverRow {
   ref: string;
   shopId: number;
@@ -559,6 +560,136 @@ function formatBzoCell(wb?: WbCardInfo | null) {
 
 function formatTurnover(value: number | null) {
   return value === null ? "—" : `${formatNumber(value, 1)} дн`;
+}
+
+function sumMetric<T>(rows: T[], resolveValue: (row: T) => number | null | undefined) {
+  return rows.reduce((sum, row) => sum + (resolveValue(row) ?? 0), 0);
+}
+
+function nullableSumMetric<T>(rows: T[], resolveValue: (row: T) => number | null | undefined) {
+  return rows.reduce(
+    (result, row) => {
+      const value = resolveValue(row);
+      if (value === null || value === undefined) {
+        return result;
+      }
+      return {
+        sum: result.sum + value,
+        count: result.count + 1,
+      };
+    },
+    { sum: 0, count: 0 },
+  );
+}
+
+function averageMetric<T>(rows: T[], resolveValue: (row: T) => number | null | undefined) {
+  const total = nullableSumMetric(rows, resolveValue);
+  return total.count ? total.sum / total.count : null;
+}
+
+function ratioPercent(numerator: number, denominator: number) {
+  return denominator > 0 ? (numerator / denominator) * 100 : null;
+}
+
+function summaryLabel(title: string, subtitle?: string) {
+  return (
+    <div className="drr-table-summary-label">
+      <strong>{title}</strong>
+      {subtitle ? <span>{subtitle}</span> : null}
+    </div>
+  );
+}
+
+function buildDrrSummaryRow(rows: RankedDrrRow[]): TableSummaryRow {
+  const spend = sumMetric(rows, (row) => row.spend);
+  const revenue = sumMetric(rows, (row) => row.revenue);
+  const ordersAds = sumMetric(rows, (row) => row.ordersAds);
+  const ordersTotal = sumMetric(rows, (row) => row.ordersTotal);
+  const stock = sumMetric(rows, (row) => row.stock);
+  const stockMpvibe = nullableSumMetric(rows, (row) => row.stockMpvibe);
+  const reviews = nullableSumMetric(rows, (row) => row.wb?.feedbacks ?? row.wb?.nm_feedbacks);
+  const averagePrice = averageMetric(rows, (row) => row.wb?.price_spp);
+  const bzoActive = rows.filter((row) => (toNumber(row.wb?.feedback_points) ?? 0) > 0).length;
+  const uniqueShops = new Set(rows.map((row) => row.shopName).filter(Boolean)).size;
+
+  return {
+    rank: "Итого",
+    name: summaryLabel("Итого", `${formatNumber(rows.length)} товаров`),
+    article: `${formatNumber(rows.length)} SKU`,
+    stock: formatNumber(stock),
+    stockMpvibe: stockMpvibe.count ? formatNumber(stockMpvibe.sum) : formatNumber(null),
+    drr: formatPercent(ratioPercent(spend, revenue)),
+    spend: formatMoney(spend),
+    revenue: formatMoney(revenue),
+    ordersAds: formatNumber(ordersAds),
+    ordersTotal: formatNumber(ordersTotal),
+    reviews: reviews.count ? formatNumber(reviews.sum) : formatNumber(null),
+    bzo: `${formatNumber(bzoActive)} / ${formatNumber(rows.length)}`,
+    price: averagePrice === null ? formatNumber(null) : `ср. ${formatMoney(averagePrice)}`,
+    shop: `${formatNumber(uniqueShops)} каб.`,
+  };
+}
+
+function buildStockSummaryRow(rows: RankedStockRow[], days: number): TableSummaryRow {
+  const stock = sumMetric(rows, (row) => row.stock);
+  const stockMpvibe = nullableSumMetric(rows, (row) => row.stockMpvibe);
+  const spend = sumMetric(rows, (row) => row.spend);
+  const ordersTotal = sumMetric(rows, (row) => row.ordersTotal);
+  const activeCampaigns = sumMetric(rows, (row) => row.activeCampaigns);
+  const campaigns = sumMetric(rows, (row) => row.campaigns);
+  const enabledCount = rows.filter((row) => row.enabled).length;
+  const uniqueShops = new Set(rows.map((row) => row.shopName).filter(Boolean)).size;
+
+  return {
+    rank: "Итого",
+    name: summaryLabel("Итого", `${formatNumber(rows.length)} товаров`),
+    article: `${formatNumber(rows.length)} SKU`,
+    stock: formatNumber(stock),
+    stockMpvibe: stockMpvibe.count ? formatNumber(stockMpvibe.sum) : formatNumber(null),
+    turnover: formatTurnover(computeTurnoverDays(stock, ordersTotal, days)),
+    spend: formatMoney(spend),
+    ordersTotal: formatNumber(ordersTotal),
+    activeCampaigns: formatNumber(activeCampaigns),
+    campaigns: formatNumber(campaigns),
+    enabled: `${formatNumber(enabledCount)} вкл.`,
+    shop: `${formatNumber(uniqueShops)} каб.`,
+  };
+}
+
+function buildCategorySummaryRow(rows: RankedCategoryDriverRow[]): TableSummaryRow {
+  const skuCount = sumMetric(rows, (row) => row.skuCount);
+  const stock = sumMetric(rows, (row) => row.stock);
+  const stockMpvibe = nullableSumMetric(rows, (row) => row.stockMpvibe);
+  const spend = sumMetric(rows, (row) => row.spend);
+  const spendShare = sumMetric(rows, (row) => row.spendShare);
+  const revenueAds = sumMetric(rows, (row) => row.revenueAds);
+  const revenueAdsShare = sumMetric(rows, (row) => row.revenueAdsShare);
+  const revenueTotal = sumMetric(rows, (row) => row.revenueTotal);
+  const revenueTotalShare = sumMetric(rows, (row) => row.revenueTotalShare);
+  const ordersAds = sumMetric(rows, (row) => row.ordersAds);
+  const ordersTotal = sumMetric(rows, (row) => row.ordersTotal);
+  const activeCampaigns = sumMetric(rows, (row) => row.activeCampaigns);
+  const campaigns = sumMetric(rows, (row) => row.campaigns);
+
+  return {
+    rank: "Итого",
+    category: summaryLabel("Итого", `${formatNumber(rows.length)} категорий`),
+    skuCount: formatNumber(skuCount),
+    drrTotal: formatPercent(ratioPercent(spend, revenueTotal)),
+    drrAds: formatPercent(ratioPercent(spend, revenueAds)),
+    spend: formatMoney(spend),
+    spendShare: formatPercent(spendShare),
+    revenueTotal: formatMoney(revenueTotal),
+    revenueTotalShare: formatPercent(revenueTotalShare),
+    revenueAds: formatMoney(revenueAds),
+    revenueAdsShare: formatPercent(revenueAdsShare),
+    ordersAds: formatNumber(ordersAds),
+    ordersTotal: formatNumber(ordersTotal),
+    stock: formatNumber(stock),
+    stockMpvibe: stockMpvibe.count ? formatNumber(stockMpvibe.sum) : formatNumber(null),
+    activeCampaigns: formatNumber(activeCampaigns),
+    campaigns: formatNumber(campaigns),
+  };
 }
 
 function buildCategoryDriverPieSlices(rows: RankedCategoryDriverRow[], metric: CategoryDriverPieMetric): CategoryDriverPieSlice[] {
@@ -1074,6 +1205,8 @@ export function DrrAnalyticsPage() {
   }, [limit, rows, stockSort]);
   const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(rows, categorySort, categoryMinStock), [categoryMinStock, categorySort, rows]);
   const categoryRowsCount = categoryShopGroups.reduce((sum, group) => sum + group.rows.length, 0);
+  const drrSummaryRow = useMemo(() => buildDrrSummaryRow(drrRows), [drrRows]);
+  const stockSummaryRow = useMemo(() => buildStockSummaryRow(stockRows, loadedRange?.days ?? days), [days, loadedRange?.days, stockRows]);
 
   const drrHeader = useSortableHeader<DrrSortField>(drrSort, setDrrSort);
   const stockHeader = useSortableHeader<StockSortField>(stockSort, setStockSort);
@@ -1886,6 +2019,7 @@ export function DrrAnalyticsPage() {
             <MetricTable
               rows={drrRows}
               columns={drrColumns}
+              summaryRow={drrSummaryRow}
               stickyHeader
               headerSummaryPlacement="inline"
               stickyHeaderClassName="drr-analytics-sticky-header"
@@ -1905,6 +2039,7 @@ export function DrrAnalyticsPage() {
             <MetricTable
               rows={stockRows}
               columns={stockColumns}
+              summaryRow={stockSummaryRow}
               stickyHeader
               headerSummaryPlacement="inline"
               stickyHeaderClassName="drr-analytics-sticky-header"
@@ -1928,6 +2063,7 @@ export function DrrAnalyticsPage() {
                 <MetricTable
                   rows={group.rows}
                   columns={categoryColumns}
+                  summaryRow={buildCategorySummaryRow(group.rows)}
                   className="drr-category-driver-table"
                   stickyHeader
                   headerSummaryPlacement="inline"
