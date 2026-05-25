@@ -17,6 +17,7 @@ const CAMPAIGN_SCHEDULE_CACHE_TTL_MS = 180000;
 const CAMPAIGN_BID_HISTORY_CACHE_TTL_MS = 180000;
 const CAMPAIGN_BUDGET_HISTORY_CACHE_TTL_MS = 180000;
 const CAMPAIGN_STATUS_HISTORY_CACHE_TTL_MS = 180000;
+const CAMPAIGN_AUTO_EXCLUDE_RULE_CACHE_TTL_MS = 180000;
 const PRODUCT_DAILY_STATS_CHUNK_DAYS = 30;
 const PRODUCT_ORDERS_HEATMAP_CHUNK_DAYS = 7;
 const CAMPAIGN_DAILY_EXACT_CONCURRENCY = 1;
@@ -40,6 +41,7 @@ const cacheStore = {
   campaignBudgetHistory: new Map(),
   campaignStatusMpHistory: new Map(),
   campaignStatusPauseHistory: new Map(),
+  campaignAutoExcludeRule: new Map(),
 };
 
 function getCached(map, key, ttlMs) {
@@ -546,7 +548,9 @@ export class XwayApiClient {
 
   async shopListing(shopId, start = this.range.current_start, end = this.range.current_end) {
     const cacheKey = `${this.cacheNamespace}:shop-listing:${shopId}:${start}:${end}`;
-    const cached = await this.readSourceCache(cacheStore.shopListing, cacheKey, SHOP_LISTING_CACHE_TTL_MS);
+    // Product listings are large enough to exceed Cloudflare Worker limits when
+    // serialized into shared D1/KV cache. Keep only the per-isolate memory cache.
+    const cached = this.forceRefresh ? null : getCached(cacheStore.shopListing, cacheKey, SHOP_LISTING_CACHE_TTL_MS);
     if (cached) {
       return cached;
     }
@@ -570,7 +574,7 @@ export class XwayApiClient {
       list_wo: listWoResult.status === "fulfilled" ? listWoResult.value : { products_wb: [] },
       list_stat: listStatResult.status === "fulfilled" ? listStatResult.value : { products_wb: {} },
     };
-    await this.writeSourceCache(cacheStore.shopListing, cacheKey, payload);
+    setCached(cacheStore.shopListing, cacheKey, payload);
     return payload;
   }
 
@@ -966,6 +970,19 @@ export class XwayApiClient {
       const requestedLimit = Math.max(safeLimit, Number.parseInt(String(nextPage.limit || safeLimit), 10) || safeLimit);
       safeLimit = Math.min(safeMaxLimit, Math.max(requestedLimit + 120, safeLimit * 2));
     }
+  }
+
+  async campaignAutoExcludeRule(shopId, productId, campaignId) {
+    const cacheKey = `${this.cacheNamespace}:campaign-auto-exclude-rule:${shopId}:${productId}:${campaignId}`;
+    const cached = await this.readSourceCache(cacheStore.campaignAutoExcludeRule, cacheKey, CAMPAIGN_AUTO_EXCLUDE_RULE_CACHE_TTL_MS);
+    if (cached) {
+      return cached;
+    }
+    const payload = await this.requestJson(`/api/adv/shop/${shopId}/product/${productId}/campaign/${campaignId}/retrieve-ac-exclude-rule`, {
+      referer: this.buildCampaignReferer(shopId, productId, campaignId),
+    });
+    await this.writeSourceCache(cacheStore.campaignAutoExcludeRule, cacheKey, payload);
+    return payload;
   }
 
   async campaignNormqueryStats(shopId, productId, campaignId) {

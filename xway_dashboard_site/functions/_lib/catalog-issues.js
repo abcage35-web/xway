@@ -1,6 +1,6 @@
 import { normalizeSchedule, normalizeStatusPauseHistory } from "./products.js";
 import { XwayApiClient } from "./xway-client.js";
-import { mapWithConcurrency, parseCatalogChartProductRefs } from "./utils.js";
+import { iterIsoDays, mapWithConcurrency, parseCatalogChartProductRefs } from "./utils.js";
 
 const CATALOG_ISSUE_KIND_ORDER = ["budget", "limit", "schedule_setup"];
 const CATALOG_ISSUES_FETCH_CONCURRENCY = 2;
@@ -115,7 +115,17 @@ function formatStatusClock(date) {
 function splitPauseReasonTokens(values) {
   const source = Array.isArray(values) ? values : [values];
   return source
-    .flatMap((value) => String(value || "").split(/[;,/]/))
+    .flatMap((value) => {
+      if (value && typeof value === "object") {
+        return [
+          ...splitPauseReasonTokens(value.pause_reasons || []),
+          ...splitPauseReasonTokens(value.paused_limiter),
+          ...splitPauseReasonTokens(value.reason),
+          ...splitPauseReasonTokens(value.status),
+        ];
+      }
+      return String(value || "").split(/[;,\s/]+/);
+    })
     .map((value) => value.trim())
     .filter(Boolean);
 }
@@ -280,17 +290,20 @@ function buildCampaignIssueSummaries(campaign, statusDays) {
           kind,
           label: kind === "limit" ? "Израсходован лимит" : "Нет бюджета",
           hours: 0,
+          maxIncidentHours: 0,
           incidents: 0,
           days: [],
         };
         current.hours += durationHours;
+        current.maxIncidentHours = Math.max(current.maxIncidentHours || 0, durationHours);
         current.incidents += 1;
         let dayEntry = current.days.find((item) => item.day === day.day);
         if (!dayEntry) {
-          dayEntry = { day: day.day, label: day.label, hours: 0, incidents: 0, estimatedGap: null };
+          dayEntry = { day: day.day, label: day.label, hours: 0, maxIncidentHours: 0, incidents: 0, estimatedGap: null };
           current.days.push(dayEntry);
         }
         dayEntry.hours += durationHours;
+        dayEntry.maxIncidentHours = Math.max(dayEntry.maxIncidentHours || 0, durationHours);
         dayEntry.incidents += 1;
         summaries.set(kind, current);
       });
@@ -306,17 +319,20 @@ function buildCampaignIssueSummaries(campaign, statusDays) {
         kind: "schedule_setup",
         label: "Не настроено время показа",
         hours: 0,
+        maxIncidentHours: 0,
         incidents: 0,
         days: [],
       };
       current.hours += 24;
+      current.maxIncidentHours = Math.max(current.maxIncidentHours || 0, 24);
       current.incidents += 1;
       let dayEntry = current.days.find((item) => item.day === day.day);
       if (!dayEntry) {
-        dayEntry = { day: day.day, label: day.label, hours: 0, incidents: 0, estimatedGap: null };
+        dayEntry = { day: day.day, label: day.label, hours: 0, maxIncidentHours: 0, incidents: 0, estimatedGap: null };
         current.days.push(dayEntry);
       }
       dayEntry.hours += 24;
+      dayEntry.maxIncidentHours = Math.max(dayEntry.maxIncidentHours || 0, 24);
       dayEntry.incidents += 1;
       summaries.set("schedule_setup", current);
     });
@@ -347,6 +363,7 @@ function buildCampaignIssueSummaries(campaign, statusDays) {
         .filter((value) => value !== null && Number.isFinite(value));
       return {
         ...summary,
+        maxIncidentHours: Number.isFinite(summary.maxIncidentHours) ? summary.maxIncidentHours : 0,
         estimatedGapTotal: estimatedGapValues.length ? estimatedGapValues.reduce((sum, value) => sum + value, 0) : null,
         days,
       };
@@ -416,7 +433,29 @@ function resolveCampaignZoneKind(campaign) {
 function normalizeCampaignStatusCode(campaign) {
   const raw = campaign?.status_xway ?? campaign?.status ?? null;
   const normalized = String(raw || "").trim().toUpperCase();
-  return normalized || null;
+  let statusCode = normalized || null;
+  if (["PAUSED", "PAUSE", "ПАУЗА", "ПРИОСТАНОВЛЕНА", "ПРИОСТАНОВЛЕН", "ОСТАНОВЛЕНА", "ОСТАНОВЛЕН"].includes(normalized)) {
+    statusCode = "PAUSED";
+  } else if (["ACTIVE", "АКТИВНА", "АКТИВЕН", "АКТИВНАЯ", "АКТИВНЫЙ"].includes(normalized)) {
+    statusCode = "ACTIVE";
+  } else if (["FROZEN", "FREEZE", "ЗАМОРОЖЕНА", "ЗАМОРОЖЕН", "ЗАМОРОЗКА"].includes(normalized)) {
+    statusCode = "FROZEN";
+  }
+  const rawStatusText = [campaign?.status_xway, campaign?.status, campaign?.freeze_status].map((value) => String(value || "").toLowerCase()).join(" ");
+  const pausePayload = campaign?.pause_reasons || {};
+  const pauseTokens = splitPauseReasonTokens(pausePayload).map((token) => token.toLowerCase());
+  const pausedUser = pausePayload?.paused_user ?? campaign?.paused_user ?? null;
+  if (
+    campaign?.is_freeze ||
+    campaign?.is_frozen ||
+    campaign?.frozen ||
+    campaign?.freeze ||
+    /заморож|freeze|frozen/.test(rawStatusText) ||
+    (statusCode === "PAUSED" && (pausedUser || pauseTokens.some((token) => ["user", "manual", "freeze", "frozen"].includes(token) || /замороз/.test(token))))
+  ) {
+    return "FROZEN";
+  }
+  return statusCode;
 }
 
 function formatCampaignStatusLabel(statusCode) {
@@ -513,6 +552,31 @@ function collectProductDayMetrics(rows, day) {
   );
 }
 
+function collectCampaignRangeMetrics(campaign, days) {
+  return days.reduce(
+    (totals, day) => {
+      const metrics = collectCampaignDayMetrics(campaign, day);
+      totals.orders_ads += metrics.orders_ads;
+      totals.spend += metrics.spend;
+      totals.revenue_ads += metrics.revenue_ads;
+      return totals;
+    },
+    { orders_ads: 0, spend: 0, revenue_ads: 0 },
+  );
+}
+
+function collectProductRangeMetrics(rows, days) {
+  return days.reduce(
+    (totals, day) => {
+      const metrics = collectProductDayMetrics(rows, day);
+      totals.total_orders += metrics.total_orders;
+      totals.total_revenue += metrics.total_revenue;
+      return totals;
+    },
+    { total_orders: 0, total_revenue: 0 },
+  );
+}
+
 function buildIssueCampaignMeta(campaign, metrics = {}) {
   const statusCode = normalizeCampaignStatusCode(campaign);
   return {
@@ -524,6 +588,7 @@ function buildIssueCampaignMeta(campaign, metrics = {}) {
     status_label: formatCampaignStatusLabel(statusCode),
     display_status: resolveCampaignDisplayStatus(statusCode),
     hours: Number.isFinite(metrics.hours) ? metrics.hours : 0,
+    max_incident_hours: Number.isFinite(metrics.max_incident_hours) ? metrics.max_incident_hours : 0,
     incidents: Number.isFinite(metrics.incidents) ? metrics.incidents : 0,
     orders_ads: Number.isFinite(metrics.orders_ads) ? metrics.orders_ads : 0,
     drr: Number.isFinite(metrics.drr) ? metrics.drr : null,
@@ -531,26 +596,37 @@ function buildIssueCampaignMeta(campaign, metrics = {}) {
   };
 }
 
-function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday) {
-  const productDayMetrics = collectProductDayMetrics(productDailyStats, yesterday);
+function aggregateCatalogIssueSummaries(campaigns, productDailyStats, targetDays) {
+  const days = (Array.isArray(targetDays) ? targetDays : [targetDays]).filter(Boolean);
+  const productRangeMetrics = collectProductRangeMetrics(productDailyStats, days);
   const aggregated = new Map();
   for (const campaign of campaigns || []) {
-    const yesterdayStatusDay = buildCampaignYesterdayStatusDay(campaign, yesterday);
-    const campaignIssues = buildCampaignIssueSummaries(campaign, [yesterdayStatusDay]);
-    const campaignDayMetrics = collectCampaignDayMetrics(campaign, yesterday);
-    const campaignDrr = computeDrr(campaignDayMetrics.spend, campaignDayMetrics.revenue_ads);
+    const statusDays = days.map((day) => buildCampaignYesterdayStatusDay(campaign, day));
+    const campaignIssues = buildCampaignIssueSummaries(campaign, statusDays);
     for (const summary of campaignIssues) {
-      const dayEntry = summary.days.find((entry) => entry.day === yesterday);
-      if (!dayEntry) {
+      const summaryDays = summary.days.filter((entry) => days.includes(entry.day));
+      if (!summaryDays.length) {
         continue;
       }
+      const summaryDayKeys = summaryDays.map((entry) => entry.day);
+      const campaignMetrics = collectCampaignRangeMetrics(campaign, summaryDayKeys);
+      const campaignDrr = computeDrr(campaignMetrics.spend, campaignMetrics.revenue_ads);
+      const summaryHours = summaryDays.reduce((sum, entry) => sum + entry.hours, 0);
+      const summaryMaxIncidentHours = Math.max(...summaryDays.map((entry) => entry.maxIncidentHours || 0), summary.maxIncidentHours || 0);
+      const summaryIncidents = summaryDays.reduce((sum, entry) => sum + entry.incidents, 0);
+      const summaryEstimatedGap = summaryDays
+        .map((entry) => entry.estimatedGap)
+        .filter((value) => value !== null && Number.isFinite(value))
+        .reduce((sum, value) => sum + value, 0);
       const current = aggregated.get(summary.kind) || {
         kind: summary.kind,
         title: summary.label,
         hours: 0,
+        max_incident_hours: 0,
         incidents: 0,
+        days: [],
         orders_ads: 0,
-        total_orders: productDayMetrics.total_orders,
+        total_orders: productRangeMetrics.total_orders,
         drr_overall: null,
         spend: 0,
         estimated_gap: 0,
@@ -560,33 +636,56 @@ function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday)
         campaignIdSet: new Set(),
         campaignLabelSet: new Set(),
       };
-      current.hours += dayEntry.hours;
-      current.incidents += dayEntry.incidents;
-      current.orders_ads += campaignDayMetrics.orders_ads;
-      current.spend += campaignDayMetrics.spend;
-      if (dayEntry.estimatedGap !== null) {
-        current.estimated_gap = (current.estimated_gap || 0) + dayEntry.estimatedGap;
+      current.hours += summaryHours;
+      current.max_incident_hours = Math.max(current.max_incident_hours || 0, summaryMaxIncidentHours);
+      current.incidents += summaryIncidents;
+      current.orders_ads += campaignMetrics.orders_ads;
+      current.spend += campaignMetrics.spend;
+      if (summaryEstimatedGap > 0) {
+        current.estimated_gap = (current.estimated_gap || 0) + summaryEstimatedGap;
       }
+      summaryDays.forEach((entry) => {
+        let currentDay = current.days.find((dayEntry) => dayEntry.day === entry.day);
+        if (!currentDay) {
+          currentDay = {
+            day: entry.day,
+            label: entry.label,
+            hours: 0,
+            max_incident_hours: 0,
+            incidents: 0,
+            estimated_gap: 0,
+          };
+          current.days.push(currentDay);
+        }
+        currentDay.hours += entry.hours;
+        currentDay.max_incident_hours = Math.max(currentDay.max_incident_hours || 0, entry.maxIncidentHours || 0);
+        currentDay.incidents += entry.incidents;
+        if (entry.estimatedGap !== null) {
+          currentDay.estimated_gap = (currentDay.estimated_gap || 0) + entry.estimatedGap;
+        }
+      });
       if (!current.campaignIdSet.has(campaign.id)) {
         current.campaignIdSet.add(campaign.id);
         current.campaign_ids.push(campaign.id);
         current.campaigns.push(buildIssueCampaignMeta(campaign, {
-          hours: dayEntry.hours,
-          incidents: dayEntry.incidents,
-          orders_ads: campaignDayMetrics.orders_ads,
+          hours: summaryHours,
+          max_incident_hours: summaryMaxIncidentHours,
+          incidents: summaryIncidents,
+          orders_ads: campaignMetrics.orders_ads,
           drr: campaignDrr,
-          estimated_gap: dayEntry.estimatedGap,
+          estimated_gap: summaryEstimatedGap,
         }));
       } else {
         const currentCampaign = current.campaigns.find((item) => item.id === Number(campaign.id));
         if (currentCampaign) {
-          currentCampaign.hours += dayEntry.hours;
-          currentCampaign.incidents += dayEntry.incidents;
-          currentCampaign.orders_ads += campaignDayMetrics.orders_ads;
+          currentCampaign.hours += summaryHours;
+          currentCampaign.max_incident_hours = Math.max(currentCampaign.max_incident_hours || 0, summaryMaxIncidentHours);
+          currentCampaign.incidents += summaryIncidents;
+          currentCampaign.orders_ads += campaignMetrics.orders_ads;
           currentCampaign.drr = Number.isFinite(campaignDrr) ? campaignDrr : currentCampaign.drr;
           currentCampaign.estimated_gap =
-            dayEntry.estimatedGap !== null
-              ? (currentCampaign.estimated_gap || 0) + dayEntry.estimatedGap
+            summaryEstimatedGap > 0
+              ? (currentCampaign.estimated_gap || 0) + summaryEstimatedGap
               : currentCampaign.estimated_gap;
         }
       }
@@ -603,12 +702,21 @@ function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday)
     .map((kind) => aggregated.get(kind))
     .filter(Boolean)
     .map(({ campaignIdSet: _campaignIdSet, campaignLabelSet: _campaignLabelSet, spend, ...item }) => {
-      const drrOverall = computeDrr(spend, productDayMetrics.total_revenue);
+      const drrOverall = computeDrr(spend, productRangeMetrics.total_revenue);
       return {
         ...item,
         total_orders: Number.isFinite(item.total_orders) ? item.total_orders : null,
         drr_overall: Number.isFinite(drrOverall) ? drrOverall : null,
         estimated_gap: typeof item.estimated_gap === "number" && Number.isFinite(item.estimated_gap) && item.estimated_gap > 0 ? item.estimated_gap : null,
+        days: item.days
+          .map((day) => ({
+            ...day,
+            estimated_gap:
+              typeof day.estimated_gap === "number" && Number.isFinite(day.estimated_gap) && day.estimated_gap > 0
+                ? day.estimated_gap
+                : null,
+          }))
+          .sort((left, right) => left.day.localeCompare(right.day)),
         campaigns: item.campaigns
           .map((campaign) => ({
             ...campaign,
@@ -623,6 +731,10 @@ function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday)
             if (hoursDiff !== 0) {
               return hoursDiff;
             }
+            const maxIncidentDiff = (right.max_incident_hours || 0) - (left.max_incident_hours || 0);
+            if (maxIncidentDiff !== 0) {
+              return maxIncidentDiff;
+            }
             const incidentsDiff = right.incidents - left.incidents;
             if (incidentsDiff !== 0) {
               return incidentsDiff;
@@ -633,23 +745,34 @@ function aggregateCatalogIssueSummaries(campaigns, productDailyStats, yesterday)
     });
 }
 
-async function collectSingleCatalogIssue(client, [shopId, productId]) {
+async function collectSingleCatalogIssue(client, [shopId, productId], options = {}) {
+  const limitActivityOnly = options.scope === "limit_activity";
   const productRef = `${shopId}:${productId}`;
   const stata = await client.productStata(shopId, productId);
-  const campaignRows = stata?.campaign_wb || [];
+  const allCampaignRows = stata?.campaign_wb || [];
+  const campaignRows = limitActivityOnly
+    ? allCampaignRows.filter((campaign) => {
+      const displayStatus = resolveCampaignDisplayStatus(normalizeCampaignStatusCode(campaign));
+      return displayStatus === "active" || displayStatus === "paused";
+    })
+    : allCampaignRows;
   const campaignIds = campaignRows.map((campaign) => campaign?.id).filter((value) => value !== null && value !== undefined);
   if (!campaignIds.length) {
     return { product_ref: productRef, issues: [], campaigns: [] };
   }
 
-  const [dailyExactPayload] = await safeCall(
-    () => client.campaignDailyExact(shopId, productId, campaignIds, client.range.current_start, client.range.current_end),
-    {},
-  );
-  const [productDailyStats] = await safeCall(
-    () => client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end),
-    [],
-  );
+  const [dailyExactPayload] = limitActivityOnly
+    ? [{}, null]
+    : await safeCall(
+      () => client.campaignDailyExact(shopId, productId, campaignIds, client.range.current_start, client.range.current_end),
+      {},
+    );
+  const [productDailyStats] = limitActivityOnly
+    ? [[], null]
+    : await safeCall(
+      () => client.productStatsByDay(shopId, productId, client.range.current_start, client.range.current_end),
+      [],
+    );
 
   const campaigns = await mapWithConcurrency(
     campaignRows,
@@ -660,7 +783,9 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
         () => client.campaignStatusPauseHistory(shopId, productId, Number(campaignId), 120),
         {},
       );
-      const [schedulePayload, scheduleError] = await safeCall(() => client.campaignSchedule(shopId, productId, Number(campaignId)), {});
+      const [schedulePayload, scheduleError] = limitActivityOnly
+        ? [{}, null]
+        : await safeCall(() => client.campaignSchedule(shopId, productId, Number(campaignId)), {});
       return {
         id: campaignId,
         name: campaign?.name ?? null,
@@ -675,7 +800,7 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
         min_cpm_recom: campaign?.min_cpm_recom ?? null,
         mp_recom_bid: campaign?.mp_recom_bid ?? null,
         daily_exact: dailyExactPayload?.[String(campaignId)] || [],
-        schedule_config: scheduleError ? null : normalizeSchedule(schedulePayload || {}),
+        schedule_config: limitActivityOnly || scheduleError ? null : normalizeSchedule(schedulePayload || {}),
         status_logs: {
           pause_history: normalizeStatusPauseHistory(pausePayload || {}),
         },
@@ -685,12 +810,12 @@ async function collectSingleCatalogIssue(client, [shopId, productId]) {
 
   return {
     product_ref: productRef,
-    issues: aggregateCatalogIssueSummaries(campaigns, productDailyStats, client.range.current_start),
+    issues: aggregateCatalogIssueSummaries(campaigns, productDailyStats, iterIsoDays(client.range.current_start, client.range.current_end)),
     campaigns: campaigns.map((campaign) => buildIssueCampaignMeta(campaign)),
   };
 }
 
-export async function collectCatalogIssues(env, { productRefs = [], start = null, end = null, forceRefresh = false, cursor = null, limitProducts = null, deadlineMs = null } = {}) {
+export async function collectCatalogIssues(env, { productRefs = [], start = null, end = null, forceRefresh = false, cursor = null, limitProducts = null, deadlineMs = null, scope = null } = {}) {
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const parsedRefs = parseCatalogChartProductRefs(productRefs);
   const cursorIndex = normalizeCursor(cursor, parsedRefs.length);
@@ -702,11 +827,12 @@ export async function collectCatalogIssues(env, { productRefs = [], start = null
   const rows = [];
   let processedProductsCount = 0;
 
-  for (let index = 0; index < targetRefs.length; index += CATALOG_ISSUES_FETCH_CONCURRENCY) {
-    const batch = targetRefs.slice(index, index + CATALOG_ISSUES_FETCH_CONCURRENCY);
-    const batchRows = await mapWithConcurrency(batch, CATALOG_ISSUES_FETCH_CONCURRENCY, async (ref) => {
+  const fetchConcurrency = scope === "limit_activity" ? 1 : CATALOG_ISSUES_FETCH_CONCURRENCY;
+  for (let index = 0; index < targetRefs.length; index += fetchConcurrency) {
+    const batch = targetRefs.slice(index, index + fetchConcurrency);
+    const batchRows = await mapWithConcurrency(batch, fetchConcurrency, async (ref) => {
       try {
-        return await collectSingleCatalogIssue(client, ref);
+        return await collectSingleCatalogIssue(client, ref, { scope });
       } catch (error) {
         const [shopId, productId] = ref;
         return {

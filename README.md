@@ -46,6 +46,7 @@
 - Для React SPA отдельный `_redirects` не нужен, если в сборке есть корневой `index.html` и нет верхнеуровневого `404.html`.
 - Для общего доступа через ChatGPT добавлен AI data-layer: `/api/ai/openapi.json`, `/api/ai/context`, `/api/ai/recommendation-data`, `/api/ai/refresh-article`. Настройка описана в `docs/chatgpt-actions.md`.
 - Для общения сотрудников внутри сайта добавлены `/ai` и `/api/ai/chat`: Cloudflare собирает XWAY/MPVibe данные серверно, сжимает контекст и вызывает модель через `OPENAI_API_KEY`.
+- При правках каталога, карточки товара, лимитов РК и автоисключения сверяйтесь с `xway_dashboard_site/docs/light-xway-methods.md`: там зафиксированы легкие XWAY-методы и важное отличие `ac_place_auto_rule` от настоящего правила автоисключения.
 
 ## Карта крупных модулей
 

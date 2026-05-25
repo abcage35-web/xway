@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "react-router";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
-import { fetchCatalog, fetchMpvibeStocks, fetchWbCards } from "../lib/api";
+import { fetchCatalog, fetchCatalogAutoExclusions, fetchCatalogIssues, fetchCatalogProductDetails, fetchMpvibeStocks, fetchWbCards } from "../lib/api";
 import { cn, formatDateRange, formatMoney, formatNumber, formatPercent, getTodayIso, shiftIsoDate, toNumber } from "../lib/format";
-import type { CatalogArticle, CatalogResponse, CatalogShop, MpvibeStockInfo, MpvibeStocksResponse, WbCardInfo } from "../lib/types";
+import type { CatalogArticle, CatalogAutoExclusionCampaign, CatalogAutoExclusionRow, CatalogCampaignState, CatalogIssuesIssue, CatalogIssuesRow, CatalogResponse, CatalogShop, MpvibeStockInfo, MpvibeStocksResponse, WbCardInfo } from "../lib/types";
 import { EmptyState, MetricCard, MetricTable, PageHero, SectionCard, Tabs } from "../components/ui";
 import type { TableColumn } from "../components/ui";
 
-type AnalyticsSection = "drr" | "stocks" | "categories";
+type AnalyticsSection = "drr" | "stocks" | "limits" | "limitActivity" | "autoExclusions" | "categories";
 type SortDirection = "asc" | "desc";
 type DataSource = "XWAY" | "WB" | "MPVibe" | "XWAY/WB" | "Расчет";
 type AnalyticsRowSource = "xway" | "mpvibe";
@@ -38,6 +38,48 @@ type StockSortField =
   | "campaigns"
   | "activeCampaigns"
   | "enabled"
+  | "shop"
+  | "name";
+type LimitSortField =
+  | "rank"
+  | "article"
+  | "issueCount"
+  | "missingSpendLimit"
+  | "missingBudgetRule"
+  | "spendLimit"
+  | "budgetLimit"
+  | "stock"
+  | "stockMpvibe"
+  | "spend"
+  | "ordersTotal"
+  | "activeCampaigns"
+  | "shop"
+  | "name";
+type LimitActivitySortField =
+  | "rank"
+  | "article"
+  | "issueCount"
+  | "maxIncidentHours"
+  | "totalHours"
+  | "incidents"
+  | "spend"
+  | "ordersTotal"
+  | "stock"
+  | "stockMpvibe"
+  | "activeCampaigns"
+  | "shop"
+  | "name";
+type AutoExclusionSortField =
+  | "rank"
+  | "article"
+  | "campaignId"
+  | "configured"
+  | "ruleActive"
+  | "ruleDays"
+  | "spend"
+  | "ordersTotal"
+  | "stock"
+  | "stockMpvibe"
   | "shop"
   | "name";
 type CategorySortField =
@@ -90,6 +132,7 @@ interface AnalyticsRowBase {
   activeCampaigns: number;
   turnoverDays: number | null;
   source: AnalyticsRowSource;
+  campaignStates: CatalogCampaignState[];
 }
 
 interface DrrAnalyticsRow extends AnalyticsRowBase {
@@ -99,6 +142,64 @@ interface DrrAnalyticsRow extends AnalyticsRowBase {
 type RankedDrrRow = DrrAnalyticsRow & { rank: number };
 type RankedStockRow = AnalyticsRowBase & { rank: number };
 type TableSummaryRow = Partial<Record<string, ReactNode>>;
+interface LimitSetupRow extends AnalyticsRowBase {
+  activeCampaignStateCount: number;
+  spendLimitConfiguredCount: number;
+  budgetRuleConfiguredCount: number;
+  missingSpendLimit: boolean;
+  missingBudgetRule: boolean;
+  issueCount: number;
+  spendLimit: number | null;
+  spendSpentToday: number | null;
+  budgetLimit: number | null;
+  budgetSpentToday: number | null;
+}
+type RankedLimitSetupRow = LimitSetupRow & { rank: number };
+interface LimitActivityIssueSummary {
+  kind: "budget" | "limit";
+  title: string;
+  hours: number;
+  maxIncidentHours: number;
+  incidents: number;
+  campaignLabels: string[];
+  dayLabels: string[];
+}
+interface LimitActivityRow extends AnalyticsRowBase {
+  issues: LimitActivityIssueSummary[];
+  issueCount: number;
+  totalHours: number;
+  maxIncidentHours: number;
+  incidents: number;
+  campaignLabels: string[];
+}
+type RankedLimitActivityRow = LimitActivityRow & { rank: number };
+interface AutoExclusionCampaignRow extends AnalyticsRowBase {
+  productRef: string;
+  campaignId: number;
+  campaignName: string | null;
+  campaignLabel: string;
+  paymentType: "cpm" | "cpc" | null;
+  statusCode: string | null;
+  statusLabel: string | null;
+  displayStatus: "active" | "paused" | "freeze" | "muted";
+  ruleExists: boolean;
+  ruleActive: boolean | null;
+  configured: boolean;
+  exclusionMode: "all" | "conditions" | "unknown";
+  ruleDays: number | null;
+  boost: number | null;
+  efficiency: number | null;
+  popularity: number | null;
+  popularityAbove: number | null;
+  ctr: number | null;
+  ctrView: number | null;
+  cpc: number | null;
+  cpcView: number | null;
+  queriesToExclude: string[];
+  queriesNotToExclude: string[];
+  ruleError: string | null;
+}
+type RankedAutoExclusionCampaignRow = AutoExclusionCampaignRow & { rank: number };
 interface CategoryDriverRow {
   ref: string;
   shopId: number;
@@ -156,6 +257,12 @@ const CATEGORY_DRIVER_PIE_TOOLTIP_GAP = 12;
 const CATEGORY_DRIVER_PIE_TOOLTIP_EDGE = 8;
 const CATEGORY_DRIVER_PIE_LEGEND_LIMIT = 8;
 const CATEGORY_DRIVER_OTHER_COLOR = "#94a3b8";
+const LIMIT_DETAILS_BATCH_SIZE = 10;
+const LIMIT_ACTIVITY_THRESHOLD_HOURS = 4;
+const LIMIT_ACTIVITY_BATCH_SIZE = 6;
+const LIMIT_ACTIVITY_DEADLINE_MS = 12000;
+const AUTO_EXCLUSIONS_BATCH_SIZE = 8;
+const AUTO_EXCLUSIONS_DEADLINE_MS = 12000;
 const CATEGORY_DRIVER_CHART_COLORS = [
   "#ff8a2d",
   "#8b64f6",
@@ -195,6 +302,12 @@ const RESIZABLE_COLUMN_CONFIG = {
   stock: { default: 112, min: 88, max: 170 },
   stockMpvibe: { default: 124, min: 98, max: 180 },
   turnover: { default: 142, min: 112, max: 220 },
+  limitIssue: { default: 240, min: 180, max: 360 },
+  limitActivityIssue: { default: 300, min: 220, max: 460 },
+  limitActivityHours: { default: 142, min: 112, max: 190 },
+  autoExclusionCampaign: { default: 270, min: 210, max: 440 },
+  autoExclusionRule: { default: 230, min: 180, max: 360 },
+  limitAmount: { default: 186, min: 146, max: 260 },
   activeCampaigns: { default: 126, min: 104, max: 190 },
   campaigns: { default: 112, min: 86, max: 160 },
   enabled: { default: 126, min: 104, max: 190 },
@@ -333,6 +446,7 @@ function flattenCatalogRows(payload: CatalogResponse | null, days: number): Anal
         activeCampaigns: article.campaign_states.filter((campaign) => campaign.active).length,
         turnoverDays: computeTurnoverDays(stock, ordersTotal, days),
         source: "xway",
+        campaignStates: article.campaign_states,
       };
     }),
   );
@@ -370,6 +484,7 @@ function buildMpvibeOnlyRows(stockByArticle: Record<string, MpvibeStockInfo>, ba
         activeCampaigns: 0,
         turnoverDays: null,
         source: "mpvibe",
+        campaignStates: [],
       };
     });
 }
@@ -818,6 +933,322 @@ function buildCategorySummaryRow(rows: RankedCategoryDriverRow[]): TableSummaryR
   };
 }
 
+function formatHours(value: number | null | undefined) {
+  const numeric = toNumber(value as number | string | null | undefined);
+  return numeric === null ? "—" : `${formatNumber(numeric, 1)} ч`;
+}
+
+function positiveLimit(value: unknown) {
+  const numeric = toNumber(value as string | number | null | undefined);
+  return numeric !== null && numeric > 0 ? numeric : null;
+}
+
+function nonNegativeMetric(value: unknown) {
+  const numeric = toNumber(value as string | number | null | undefined);
+  return numeric !== null && numeric >= 0 ? numeric : null;
+}
+
+function sumCampaignValues(states: CatalogCampaignState[], field: keyof CatalogCampaignState, positiveOnly = false) {
+  const values = states
+    .map((state) => (positiveOnly ? positiveLimit(state[field]) : nonNegativeMetric(state[field])))
+    .filter((value): value is number => value !== null);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+}
+
+function isSpendLimitConfigured(state: CatalogCampaignState) {
+  return Boolean(state.spend_limit_active) && positiveLimit(state.spend_limit) !== null;
+}
+
+function isBudgetRuleConfigured(state: CatalogCampaignState) {
+  return Boolean(state.budget_rule_active) && positiveLimit(state.budget_limit) !== null;
+}
+
+function isLimitCheckCampaignState(state: CatalogCampaignState) {
+  const status = String(state.status_code || "").toUpperCase();
+  return status === "ACTIVE" || status === "PAUSED";
+}
+
+function chunkItems<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function isAbortError(error: unknown) {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
+function normalizeDrrApiErrorMessage(text: string) {
+  const source = String(text || "").trim();
+  if (!source) {
+    return "Не удалось загрузить данные API.";
+  }
+  const hasHtml = /<!doctype html>|<html[\s>]|<head[\s>]|<body[\s>]/i.test(source);
+  const decodeHtmlText = (value: string) =>
+    value
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&bull;/gi, "·")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  const cloudflareCode = source.match(/cf-error-code[^>]*>\s*(\d{3,4})\s*</i)?.[1] || source.match(/\bError\s+(\d{3,4})\b/i)?.[1] || null;
+  const title = source.match(/<title[^>]*>(.*?)<\/title>/i)?.[1];
+  const decodedTitle = title ? decodeHtmlText(title).replace(/\s*\|.*$/, "").trim() : "";
+  if (hasHtml && /Worker exceeded resource limits/i.test(source)) {
+    return `Cloudflare: Worker exceeded resource limits${cloudflareCode ? ` (${cloudflareCode})` : ""}.`;
+  }
+  if (hasHtml && decodedTitle) {
+    return `Cloudflare: ${decodedTitle}${cloudflareCode ? ` (${cloudflareCode})` : ""}.`;
+  }
+  const statusMatch = source.match(/\b(5\d{2}|4\d{2})\b/);
+  if ((hasHtml || /temporarily unavailable|XWAY request failed \(503\)/i.test(source)) && statusMatch?.[1] === "503") {
+    return "XWAY временно недоступен (503).";
+  }
+  if (hasHtml && statusMatch?.[1]) {
+    return `Ошибка API (${statusMatch[1]}).`;
+  }
+  return source;
+}
+
+async function readDrrApiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Response) {
+    if (error.bodyUsed) {
+      return error.statusText ? `Ошибка API (${error.status}): ${error.statusText}` : `Ошибка API (${error.status})`;
+    }
+    const text = await error.clone().text();
+    if (!text) {
+      return error.statusText ? `Ошибка API (${error.status}): ${error.statusText}` : `Ошибка API (${error.status})`;
+    }
+    try {
+      const parsed = JSON.parse(text) as { error?: string };
+      return normalizeDrrApiErrorMessage(parsed.error || text);
+    } catch {
+      return normalizeDrrApiErrorMessage(text);
+    }
+  }
+  if (error instanceof Error) {
+    return normalizeDrrApiErrorMessage(error.message);
+  }
+  return fallback;
+}
+
+function isRetryableLimitActivityError(message: string) {
+  return /resource limits|1102|временно недоступен|timeout|timed out|\b(429|502|503|504)\b/i.test(message);
+}
+
+function mergeCampaignStatesForLimitDetails(baseStates: CatalogCampaignState[], detailStates: CatalogCampaignState[]) {
+  const detailByKey = new Map(detailStates.map((state) => [state.key, state]));
+  const merged = baseStates.map((state) => {
+    const detailState = detailByKey.get(state.key);
+    return detailState ? { ...state, ...detailState } : state;
+  });
+  detailStates.forEach((state) => {
+    if (!baseStates.some((baseState) => baseState.key === state.key)) {
+      merged.push(state);
+    }
+  });
+  return merged;
+}
+
+function buildLimitSetupRow(row: AnalyticsRowBase, detailStates: CatalogCampaignState[] | undefined): LimitSetupRow | null {
+  if (row.source !== "xway") {
+    return null;
+  }
+  if (!detailStates) {
+    return null;
+  }
+  const campaignStates = mergeCampaignStatesForLimitDetails(row.campaignStates, detailStates);
+  const activeStates = campaignStates.filter(isLimitCheckCampaignState);
+  if (!activeStates.length) {
+    return null;
+  }
+
+  const spendLimitConfiguredCount = activeStates.filter(isSpendLimitConfigured).length;
+  const budgetRuleConfiguredCount = activeStates.filter(isBudgetRuleConfigured).length;
+  const missingSpendLimit = spendLimitConfiguredCount < activeStates.length;
+  const missingBudgetRule = budgetRuleConfiguredCount < activeStates.length;
+  const spendLimitConfiguredStates = activeStates.filter(isSpendLimitConfigured);
+  const budgetRuleConfiguredStates = activeStates.filter(isBudgetRuleConfigured);
+
+  return {
+    ...row,
+    campaignStates,
+    activeCampaignStateCount: activeStates.length,
+    spendLimitConfiguredCount,
+    budgetRuleConfiguredCount,
+    missingSpendLimit,
+    missingBudgetRule,
+    issueCount: Number(missingSpendLimit) + Number(missingBudgetRule),
+    spendLimit: sumCampaignValues(spendLimitConfiguredStates, "spend_limit", true),
+    spendSpentToday: sumCampaignValues(spendLimitConfiguredStates, "spend_spent_today"),
+    budgetLimit: sumCampaignValues(budgetRuleConfiguredStates, "budget_limit", true),
+    budgetSpentToday: sumCampaignValues(budgetRuleConfiguredStates, "budget_spent_today"),
+  };
+}
+
+function normalizeLimitActivityIssueTitle(issue: CatalogIssuesIssue) {
+  return issue.kind === "limit" ? "лимит расходов" : "нехватка бюджета";
+}
+
+function isLimitActivityCampaign(campaign: CatalogIssuesIssue["campaigns"][number]) {
+  return campaign.display_status === "active" || campaign.display_status === "paused";
+}
+
+function buildLimitActivityIssueSummary(issue: CatalogIssuesIssue): LimitActivityIssueSummary | null {
+  if (issue.kind !== "budget" && issue.kind !== "limit") {
+    return null;
+  }
+  const activeCampaigns = issue.campaigns.filter(isLimitActivityCampaign);
+  if (!activeCampaigns.length) {
+    return null;
+  }
+  const maxIncidentHours = Math.max(...activeCampaigns.map((campaign) => toNumber(campaign.max_incident_hours ?? null) ?? campaign.hours ?? 0));
+  if (maxIncidentHours < LIMIT_ACTIVITY_THRESHOLD_HOURS) {
+    return null;
+  }
+  const campaignLabels = activeCampaigns.map((campaign) => campaign.label).filter(Boolean);
+  const totalHours = activeCampaigns.reduce((sum, campaign) => sum + (toNumber(campaign.hours ?? null) ?? 0), 0);
+  const incidents = activeCampaigns.reduce((sum, campaign) => sum + (toNumber(campaign.incidents ?? null) ?? 0), 0);
+  const dayLabels = (issue.days || [])
+    .filter((day) => (day.max_incident_hours ?? day.hours) > 0)
+    .map((day) => `${day.label}: ${formatHours(day.max_incident_hours ?? day.hours)}`);
+  return {
+    kind: issue.kind,
+    title: normalizeLimitActivityIssueTitle(issue),
+    hours: totalHours || issue.hours,
+    maxIncidentHours,
+    incidents: incidents || issue.incidents,
+    campaignLabels,
+    dayLabels,
+  };
+}
+
+function buildLimitActivityRow(row: AnalyticsRowBase, issueRow: CatalogIssuesRow | undefined): LimitActivityRow | null {
+  if (!issueRow?.issues?.length) {
+    return null;
+  }
+  const issues = issueRow.issues
+    .map(buildLimitActivityIssueSummary)
+    .filter((issue): issue is LimitActivityIssueSummary => issue !== null);
+  if (!issues.length) {
+    return null;
+  }
+  const campaignLabels = [...new Set(issues.flatMap((issue) => issue.campaignLabels))];
+  return {
+    ...row,
+    issues,
+    issueCount: issues.length,
+    totalHours: issues.reduce((sum, issue) => sum + issue.hours, 0),
+    maxIncidentHours: Math.max(...issues.map((issue) => issue.maxIncidentHours)),
+    incidents: issues.reduce((sum, issue) => sum + issue.incidents, 0),
+    campaignLabels,
+  };
+}
+
+function buildAutoExclusionCampaignRows(row: AnalyticsRowBase, autoRow: CatalogAutoExclusionRow | undefined): AutoExclusionCampaignRow[] {
+  if (row.source !== "xway" || !autoRow?.campaigns?.length) {
+    return [];
+  }
+  return autoRow.campaigns.map((campaign: CatalogAutoExclusionCampaign) => ({
+    ...row,
+    ref: `${row.ref}:${campaign.id}`,
+    productRef: row.ref,
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    campaignLabel: campaign.label || `РК ${campaign.id}`,
+    paymentType: campaign.payment_type,
+    statusCode: campaign.status_code,
+    statusLabel: campaign.status_label,
+    displayStatus: campaign.display_status,
+    ruleExists: campaign.rule_exists,
+    ruleActive: campaign.auto_rule?.active ?? null,
+    configured: campaign.configured,
+    exclusionMode: campaign.auto_rule?.fixed === false ? "all" : campaign.auto_rule?.fixed === true ? "conditions" : "unknown",
+    ruleDays: campaign.auto_rule?.days ?? null,
+    boost: campaign.auto_rule?.boost ?? null,
+    efficiency: campaign.auto_rule?.efficiency ?? null,
+    popularity: campaign.auto_rule?.popularity ?? null,
+    popularityAbove: campaign.auto_rule?.popularity_above ?? null,
+    ctr: campaign.auto_rule?.ctr ?? null,
+    ctrView: campaign.auto_rule?.ctr_view ?? null,
+    cpc: campaign.auto_rule?.cpc ?? null,
+    cpcView: campaign.auto_rule?.cpc_view ?? null,
+    queriesToExclude: campaign.auto_rule?.queries_to_exclude ?? [],
+    queriesNotToExclude: campaign.auto_rule?.queries_not_to_exclude ?? [],
+    ruleError: campaign.rule_error ?? null,
+  }));
+}
+
+function formatAutoExclusionDays(value: number | null) {
+  if (value === null) {
+    return "период не задан";
+  }
+  if (value >= 1000) {
+    return "все время";
+  }
+  return `${formatNumber(value)} дн.`;
+}
+
+function hasAutoExclusionConditions(row: AutoExclusionCampaignRow) {
+  return (
+    row.boost !== null ||
+    row.efficiency !== null ||
+    row.popularity !== null ||
+    row.popularityAbove !== null ||
+    row.ctr !== null ||
+    row.cpc !== null ||
+    row.queriesToExclude.length > 0
+  );
+}
+
+function buildAutoExclusionConditionLabels(row: AutoExclusionCampaignRow) {
+  const labels: string[] = [];
+  if (row.ctr !== null) {
+    labels.push(`CTR < ${formatPercent(row.ctr)}${row.ctrView !== null ? `, показы от ${formatNumber(row.ctrView)}` : ""}`);
+  }
+  if (row.cpc !== null) {
+    labels.push(`CPC > ${formatMoney(row.cpc)}${row.cpcView !== null ? `, показы от ${formatNumber(row.cpcView)}` : ""}`);
+  }
+  if (row.boost !== null) {
+    labels.push(`буст от ${formatNumber(row.boost)}`);
+  }
+  if (row.efficiency !== null) {
+    labels.push(`эффективность от ${formatNumber(row.efficiency)}`);
+  }
+  if (row.popularity !== null) {
+    labels.push(`популярность < ${formatNumber(row.popularity)}`);
+  }
+  if (row.popularityAbove !== null) {
+    labels.push(`популярность > ${formatNumber(row.popularityAbove)}`);
+  }
+  if (row.queriesToExclude.length) {
+    labels.push(`если входят слова: ${formatNumber(row.queriesToExclude.length)}`);
+  }
+  if (row.queriesNotToExclude.length) {
+    labels.push(`не исключать слова: ${formatNumber(row.queriesNotToExclude.length)}`);
+  }
+  return labels;
+}
+
+function autoExclusionProblemLabel(row: AutoExclusionCampaignRow) {
+  if (row.configured) {
+    return "настроено";
+  }
+  if (row.ruleError || !row.ruleExists || row.ruleActive === false) {
+    return "выключено";
+  }
+  if (row.exclusionMode === "conditions" && !hasAutoExclusionConditions(row)) {
+    return "нет условий";
+  }
+  return "не настроено";
+}
+
 function buildCategoryDriverPieSlices(rows: RankedCategoryDriverRow[], metric: CategoryDriverPieMetric): CategoryDriverPieSlice[] {
   const sortedRows = rows
     .filter((row) => row[metric] > 0)
@@ -1019,6 +1450,106 @@ function WbLink({ article }: { article: string }) {
   );
 }
 
+function LimitIssueCell({ row }: { row: LimitSetupRow }) {
+  return (
+    <div className="drr-limit-issue-stack">
+      {row.missingSpendLimit ? <span className="drr-status-chip is-error">нет лимита расхода</span> : null}
+      {row.missingBudgetRule ? <span className="drr-status-chip is-warning">нет бюджета/пополнения</span> : null}
+      {!row.missingSpendLimit && !row.missingBudgetRule ? <span className="drr-status-chip is-on">настроено</span> : null}
+    </div>
+  );
+}
+
+function LimitActivityIssueCell({ row }: { row: LimitActivityRow }) {
+  return (
+    <div className="drr-limit-activity-cell">
+      <div className="drr-limit-issue-stack">
+        {row.issues.map((issue) => (
+          <span key={issue.kind} className={cn("drr-status-chip", issue.kind === "limit" ? "is-error" : "is-warning")}>
+            {issue.title}
+          </span>
+        ))}
+      </div>
+      <span>
+        макс. {formatHours(row.maxIncidentHours)} · всего {formatHours(row.totalHours)}
+      </span>
+      {row.campaignLabels.length ? <small title={row.campaignLabels.join(", ")}>{row.campaignLabels.slice(0, 2).join(", ")}</small> : null}
+    </div>
+  );
+}
+
+function AutoExclusionCampaignCell({ row }: { row: AutoExclusionCampaignRow }) {
+  return (
+    <div className="drr-limit-activity-cell">
+      <span title={row.campaignLabel}>{row.campaignLabel}</span>
+      <small>
+        {row.statusLabel || row.statusCode || "статус неизвестен"} · {row.paymentType === "cpm" ? "CPM" : row.paymentType?.toUpperCase() || "тип неизвестен"}
+      </small>
+    </div>
+  );
+}
+
+function AutoExclusionStatusCell({ row }: { row: AutoExclusionCampaignRow }) {
+  const label = autoExclusionProblemLabel(row);
+  return (
+    <div className="drr-limit-issue-stack">
+      <span className={cn("drr-status-chip", row.configured ? "is-on" : row.ruleExists ? "is-warning" : "is-error")}>{label}</span>
+    </div>
+  );
+}
+
+function AutoExclusionRuleCell({ row }: { row: AutoExclusionCampaignRow }) {
+  const conditionLabels = buildAutoExclusionConditionLabels(row);
+  const ruleUnavailable = Boolean(row.ruleError || !row.ruleExists || row.ruleActive === false);
+  const title = row.ruleError ? `XWAY не вернул правило: ${row.ruleError}` : conditionLabels.join(", ") || undefined;
+  const primaryLabel =
+    ruleUnavailable
+      ? "правило выключено"
+      : row.exclusionMode === "all"
+        ? "все незафиксированные"
+        : row.exclusionMode === "conditions"
+          ? "при выполнении условий"
+          : "режим не задан";
+  return (
+    <div className="drr-limit-summary" title={title}>
+      <strong className={row.configured ? undefined : "is-error"}>{primaryLabel}</strong>
+      <span>статистика: {formatAutoExclusionDays(row.ruleDays)}</span>
+      <span>
+        {ruleUnavailable
+          ? "настройка выключена"
+          : row.exclusionMode === "all"
+            ? "каждый незафиксированный кластер"
+            : conditionLabels.length
+              ? conditionLabels.slice(0, 2).join(" · ")
+              : "условия не заданы"}
+      </span>
+    </div>
+  );
+}
+
+function LimitSetupCell({
+  configured,
+  total,
+  limit,
+  spent,
+}: {
+  configured: number;
+  total: number;
+  limit: number | null;
+  spent: number | null;
+}) {
+  const missing = configured < total;
+  return (
+    <div className="drr-limit-summary">
+      <strong className={missing ? "is-error" : undefined}>
+        {configured > 0 ? `${formatNumber(configured)}/${formatNumber(total)} настроено` : "не настроено"}
+      </strong>
+      <span>{limit !== null ? `лимит ${formatMoney(limit)}` : "лимит не задан"}</span>
+      {spent !== null ? <span>расход DAY {formatMoney(spent)}</span> : null}
+    </div>
+  );
+}
+
 function CategoryDriverPieTooltip({
   slice,
 }: {
@@ -1217,6 +1748,22 @@ export function DrrAnalyticsPage() {
   const [payload, setPayload] = useState<CatalogResponse | null>(null);
   const [wbByArticle, setWbByArticle] = useState<Record<string, WbCardInfo>>({});
   const [mpvibeStockByArticle, setMpvibeStockByArticle] = useState<Record<string, MpvibeStockInfo>>({});
+  const [limitCampaignStatesByRef, setLimitCampaignStatesByRef] = useState<Record<string, CatalogCampaignState[]>>({});
+  const [limitActivityIssuesByRef, setLimitActivityIssuesByRef] = useState<Record<string, CatalogIssuesRow>>({});
+  const [autoExclusionsByRef, setAutoExclusionsByRef] = useState<Record<string, CatalogAutoExclusionRow>>({});
+  const [limitDetailsLoading, setLimitDetailsLoading] = useState(false);
+  const [limitActivityLoading, setLimitActivityLoading] = useState(false);
+  const [autoExclusionsLoading, setAutoExclusionsLoading] = useState(false);
+  const [limitDetailsProgress, setLimitDetailsProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+  const [limitActivityProgress, setLimitActivityProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+  const [autoExclusionsProgress, setAutoExclusionsProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+  const [limitDetailsError, setLimitDetailsError] = useState<string | null>(null);
+  const [limitActivityError, setLimitActivityError] = useState<string | null>(null);
+  const [autoExclusionsError, setAutoExclusionsError] = useState<string | null>(null);
+  const [mpvibeRefreshNonce, setMpvibeRefreshNonce] = useState(0);
+  const [limitDetailsRefreshNonce, setLimitDetailsRefreshNonce] = useState(0);
+  const [limitActivityRefreshNonce, setLimitActivityRefreshNonce] = useState(0);
+  const [autoExclusionsRefreshNonce, setAutoExclusionsRefreshNonce] = useState(0);
   const [loading, setLoading] = useState(false);
   const [wbLoading, setWbLoading] = useState(false);
   const [mpvibeLoading, setMpvibeLoading] = useState(false);
@@ -1225,14 +1772,27 @@ export function DrrAnalyticsPage() {
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string; days: number } | null>(null);
   const [drrSort, setDrrSort] = useState<SortState<DrrSortField>>({ field: "spend", direction: "desc" });
   const [stockSort, setStockSort] = useState<SortState<StockSortField>>({ field: "stock", direction: "desc" });
+  const [limitsSort, setLimitsSort] = useState<SortState<LimitSortField>>({ field: "issueCount", direction: "desc" });
+  const [limitActivitySort, setLimitActivitySort] = useState<SortState<LimitActivitySortField>>({ field: "maxIncidentHours", direction: "desc" });
+  const [autoExclusionsSort, setAutoExclusionsSort] = useState<SortState<AutoExclusionSortField>>({ field: "configured", direction: "asc" });
   const [categorySort, setCategorySort] = useState<SortState<CategorySortField>>({ field: "spend", direction: "desc" });
   const [columnWidths, setColumnWidths] = useState<ColumnWidthState>(readStoredColumnWidths);
   const abortRef = useRef<AbortController | null>(null);
   const wbAbortRef = useRef<AbortController | null>(null);
   const mpvibeAbortRef = useRef<AbortController | null>(null);
+  const limitDetailsAbortRef = useRef<AbortController | null>(null);
+  const limitActivityAbortRef = useRef<AbortController | null>(null);
+  const autoExclusionsAbortRef = useRef<AbortController | null>(null);
   const mpvibeForceRefreshRef = useRef(false);
   const mpvibeLoadedRequestRef = useRef<string | null>(null);
+  const limitDetailsRequestRef = useRef<string | null>(null);
+  const limitActivityRequestRef = useRef<string | null>(null);
+  const autoExclusionsRequestRef = useRef<string | null>(null);
+  const limitDetailsForceRefreshRef = useRef(false);
+  const limitActivityForceRefreshRef = useRef(false);
+  const autoExclusionsForceRefreshRef = useRef(false);
   const resizeDragRef = useRef<{ columnKey: ResizableColumnKey; startX: number; startWidth: number } | null>(null);
+  const drrBackgroundQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const days = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
   const limit = clampInteger(limitInput, DEFAULT_LIMIT, 1, MAX_LIMIT);
@@ -1249,6 +1809,14 @@ export function DrrAnalyticsPage() {
     },
     [baseRows, mpvibeStockByArticle],
   );
+  const limitDetailRefs = useMemo(
+    () =>
+      baseRows
+        .filter((row) => row.source === "xway" && row.campaignStates.some(isLimitCheckCampaignState))
+        .map((row) => row.ref),
+    [baseRows],
+  );
+  const autoExclusionRefs = limitDetailRefs;
 
   const topDrrRows = useMemo<DrrAnalyticsRow[]>(() => {
     return [...rows]
@@ -1329,6 +1897,119 @@ export function DrrAnalyticsPage() {
     });
     return sorted.slice(0, limit).map((row, index) => ({ ...row, rank: index + 1 }));
   }, [limit, rows, stockSort]);
+  const limitRows = useMemo(() => {
+    const candidates = rows
+      .map((row) => buildLimitSetupRow(row, limitCampaignStatesByRef[row.ref]))
+      .filter((row): row is LimitSetupRow => row !== null);
+    const sorted = sortRows<LimitSetupRow>(candidates, limitsSort, (row, field) => {
+      switch (field as LimitSortField) {
+        case "rank":
+          return candidates.indexOf(row) + 1;
+        case "article":
+          return articleNumber(row.article);
+        case "issueCount":
+          return row.issueCount;
+        case "missingSpendLimit":
+          return row.missingSpendLimit;
+        case "missingBudgetRule":
+          return row.missingBudgetRule;
+        case "spendLimit":
+          return row.spendLimit;
+        case "budgetLimit":
+          return row.budgetLimit;
+        case "stock":
+          return row.stock;
+        case "stockMpvibe":
+          return row.stockMpvibe;
+        case "spend":
+          return row.spend;
+        case "ordersTotal":
+          return row.ordersTotal;
+        case "activeCampaigns":
+          return row.activeCampaignStateCount;
+        case "shop":
+          return row.shopName;
+        case "name":
+        default:
+          return row.name;
+      }
+    });
+    return sorted.map((row, index) => ({ ...row, rank: index + 1 }));
+  }, [limitCampaignStatesByRef, limitsSort, rows]);
+  const limitIssueRows = useMemo(() => limitRows.filter((row) => row.missingSpendLimit || row.missingBudgetRule), [limitRows]);
+  const limitConfiguredRows = useMemo(() => limitRows.filter((row) => !row.missingSpendLimit && !row.missingBudgetRule), [limitRows]);
+  const limitActivityRows = useMemo(() => {
+    const candidates = rows
+      .map((row) => buildLimitActivityRow(row, limitActivityIssuesByRef[row.ref]))
+      .filter((row): row is LimitActivityRow => row !== null);
+    const sorted = sortRows<LimitActivityRow>(candidates, limitActivitySort, (row, field) => {
+      switch (field as LimitActivitySortField) {
+        case "rank":
+          return candidates.indexOf(row) + 1;
+        case "article":
+          return articleNumber(row.article);
+        case "issueCount":
+          return row.issueCount;
+        case "maxIncidentHours":
+          return row.maxIncidentHours;
+        case "totalHours":
+          return row.totalHours;
+        case "incidents":
+          return row.incidents;
+        case "spend":
+          return row.spend;
+        case "ordersTotal":
+          return row.ordersTotal;
+        case "stock":
+          return row.stock;
+        case "stockMpvibe":
+          return row.stockMpvibe;
+        case "activeCampaigns":
+          return row.activeCampaigns;
+        case "shop":
+          return row.shopName;
+        case "name":
+        default:
+          return row.name;
+      }
+    });
+    return sorted.map((row, index) => ({ ...row, rank: index + 1 }));
+  }, [limitActivityIssuesByRef, limitActivitySort, rows]);
+  const autoExclusionRows = useMemo(() => {
+    const candidates = rows.flatMap((row) => buildAutoExclusionCampaignRows(row, autoExclusionsByRef[row.ref]));
+    const sorted = sortRows<AutoExclusionCampaignRow>(candidates, autoExclusionsSort, (row, field) => {
+      switch (field as AutoExclusionSortField) {
+        case "rank":
+          return candidates.indexOf(row) + 1;
+        case "article":
+          return articleNumber(row.article);
+        case "campaignId":
+          return row.campaignId;
+        case "configured":
+          return row.configured;
+        case "ruleActive":
+          return row.ruleActive;
+        case "ruleDays":
+          return row.ruleDays;
+        case "spend":
+          return row.spend;
+        case "ordersTotal":
+          return row.ordersTotal;
+        case "stock":
+          return row.stock;
+        case "stockMpvibe":
+          return row.stockMpvibe;
+        case "shop":
+          return row.shopName;
+        case "name":
+        default:
+          return row.name;
+      }
+    });
+    return sorted.map((row, index) => ({ ...row, rank: index + 1 }));
+  }, [autoExclusionsByRef, autoExclusionsSort, rows]);
+  const autoExclusionIssueRows = useMemo(() => autoExclusionRows.filter((row) => !row.configured), [autoExclusionRows]);
+  const autoExclusionConfiguredRows = useMemo(() => autoExclusionRows.filter((row) => row.configured), [autoExclusionRows]);
   const categoryShopGroups = useMemo(() => buildCategoryDriverGroups(rows, categorySort, categoryMinStock), [categoryMinStock, categorySort, rows]);
   const allCategoryGroup = useMemo(() => buildAllCategoryDriverGroup(rows, categorySort, categoryMinStock), [categoryMinStock, categorySort, rows]);
   const categoryRowsCount = categoryShopGroups.reduce((sum, group) => sum + group.rows.length, 0);
@@ -1337,12 +2018,24 @@ export function DrrAnalyticsPage() {
 
   const drrHeader = useSortableHeader<DrrSortField>(drrSort, setDrrSort);
   const stockHeader = useSortableHeader<StockSortField>(stockSort, setStockSort);
+  const limitsHeader = useSortableHeader<LimitSortField>(limitsSort, setLimitsSort);
+  const limitActivityHeader = useSortableHeader<LimitActivitySortField>(limitActivitySort, setLimitActivitySort);
+  const autoExclusionsHeader = useSortableHeader<AutoExclusionSortField>(autoExclusionsSort, setAutoExclusionsSort);
   const categoryHeader = useSortableHeader<CategorySortField>(categorySort, setCategorySort);
   const columnWidthProps = (columnKey: ResizableColumnKey) => ({
     width: columnWidths[columnKey],
     minWidth: RESIZABLE_COLUMN_CONFIG[columnKey].min,
     maxWidth: RESIZABLE_COLUMN_CONFIG[columnKey].max,
   });
+
+  const runQueuedDrrBackgroundTask = async <T,>(task: () => Promise<T>): Promise<T> => {
+    const queuedTask = drrBackgroundQueueRef.current.catch(() => undefined).then(task);
+    drrBackgroundQueueRef.current = queuedTask.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queuedTask;
+  };
 
   const startColumnResize = (columnKey: ResizableColumnKey, event: ReactPointerEvent<HTMLSpanElement>) => {
     event.preventDefault();
@@ -1384,6 +2077,52 @@ export function DrrAnalyticsPage() {
   const rangeLabel = loadedRange ? formatDateRange(loadedRange.start, loadedRange.end) : "Период еще не загружен";
   const totalSpend = rows.reduce((sum, row) => sum + (row.spend ?? 0), 0);
   const zeroSpendStockCount = rows.filter((row) => stockSignal(row) > STOCK_MIN_VALUE && (row.spend ?? 0) === 0).length;
+  const missingSpendLimitCount = limitIssueRows.filter((row) => row.missingSpendLimit).length;
+  const missingBudgetRuleCount = limitIssueRows.filter((row) => row.missingBudgetRule).length;
+  const configuredLimitCount = limitConfiguredRows.length;
+  const limitActivityLimitCount = limitActivityRows.filter((row) => row.issues.some((issue) => issue.kind === "limit")).length;
+  const limitActivityBudgetCount = limitActivityRows.filter((row) => row.issues.some((issue) => issue.kind === "budget")).length;
+  const limitActivityMaxHours = limitActivityRows.length ? Math.max(...limitActivityRows.map((row) => row.maxIncidentHours)) : null;
+  const autoExclusionSkippedCpcCount = Object.values(autoExclusionsByRef).reduce((sum, row) => sum + (row.cpc_skipped_count || 0), 0);
+  const currentSectionRefreshing =
+    (section === "drr" && (loading || wbLoading)) ||
+    (section === "stocks" && mpvibeLoading) ||
+    (section === "limits" && limitDetailsLoading) ||
+    (section === "limitActivity" && limitActivityLoading) ||
+    (section === "autoExclusions" && autoExclusionsLoading) ||
+    (section === "categories" && loading);
+  const anyRefreshLoading = loading || wbLoading || mpvibeLoading || limitDetailsLoading || limitActivityLoading || autoExclusionsLoading;
+  const canRefreshCurrentSection = Boolean(loadedRange) || section === "drr" || section === "categories";
+
+  const refreshCatalogOnly = async (forceRefresh = true) => {
+    const nextDays = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
+    const nextRange = buildStatsRange(nextDays);
+    abortRef.current?.abort();
+    const abortController = new AbortController();
+    abortRef.current = abortController;
+    setLoading(true);
+    setError(null);
+    try {
+      const catalogPayload = await fetchCatalog({
+        start: nextRange.start,
+        end: nextRange.end,
+        includeAux: false,
+        forceRefresh,
+        signal: abortController.signal,
+      });
+      setPayload(catalogPayload);
+      setLoadedRange({ ...nextRange, days: nextDays });
+    } catch (loadError) {
+      if (!isAbortError(loadError)) {
+        setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить аналитику.");
+      }
+    } finally {
+      if (abortRef.current === abortController) {
+        abortRef.current = null;
+      }
+      setLoading(false);
+    }
+  };
 
   const loadData = async (forceRefresh = false) => {
     const nextDays = clampInteger(daysInput, DEFAULT_DAYS, 1, MAX_DAYS);
@@ -1392,9 +2131,30 @@ export function DrrAnalyticsPage() {
     const abortController = new AbortController();
     abortRef.current = abortController;
     mpvibeForceRefreshRef.current = forceRefresh;
+    limitDetailsForceRefreshRef.current = forceRefresh;
+    limitActivityForceRefreshRef.current = forceRefresh;
+    autoExclusionsForceRefreshRef.current = forceRefresh;
+    wbAbortRef.current?.abort();
+    mpvibeAbortRef.current?.abort();
+    limitDetailsAbortRef.current?.abort();
+    limitActivityAbortRef.current?.abort();
+    autoExclusionsAbortRef.current?.abort();
+    limitDetailsRequestRef.current = null;
+    limitActivityRequestRef.current = null;
+    autoExclusionsRequestRef.current = null;
     setLoading(true);
     setError(null);
     setMpvibeWarning(null);
+    setLimitDetailsError(null);
+    setLimitActivityError(null);
+    setAutoExclusionsError(null);
+    setWbByArticle({});
+    setLimitCampaignStatesByRef({});
+    setLimitActivityIssuesByRef({});
+    setAutoExclusionsByRef({});
+    setLimitDetailsProgress({ loaded: 0, total: 0 });
+    setLimitActivityProgress({ loaded: 0, total: 0 });
+    setAutoExclusionsProgress({ loaded: 0, total: 0 });
     mpvibeLoadedRequestRef.current = null;
     try {
       const catalogPayload = await fetchCatalog({
@@ -1419,16 +2179,391 @@ export function DrrAnalyticsPage() {
     }
   };
 
+  const refreshCurrentSection = async () => {
+    if (section === "limits") {
+      limitDetailsForceRefreshRef.current = true;
+      limitDetailsRequestRef.current = null;
+      limitDetailsAbortRef.current?.abort();
+      setLimitDetailsError(null);
+      setLimitDetailsProgress({ loaded: 0, total: 0 });
+      setLimitDetailsRefreshNonce((value) => value + 1);
+      return;
+    }
+    if (section === "limitActivity") {
+      limitActivityForceRefreshRef.current = true;
+      limitActivityRequestRef.current = null;
+      limitActivityAbortRef.current?.abort();
+      setLimitActivityError(null);
+      setLimitActivityProgress({ loaded: 0, total: 0 });
+      setLimitActivityRefreshNonce((value) => value + 1);
+      return;
+    }
+    if (section === "autoExclusions") {
+      autoExclusionsForceRefreshRef.current = true;
+      autoExclusionsRequestRef.current = null;
+      autoExclusionsAbortRef.current?.abort();
+      setAutoExclusionsError(null);
+      setAutoExclusionsProgress({ loaded: 0, total: 0 });
+      setAutoExclusionsRefreshNonce((value) => value + 1);
+      return;
+    }
+    if (section === "stocks") {
+      mpvibeForceRefreshRef.current = true;
+      mpvibeLoadedRequestRef.current = null;
+      mpvibeAbortRef.current?.abort();
+      setMpvibeWarning(null);
+      setMpvibeStockByArticle({});
+      setMpvibeRefreshNonce((value) => value + 1);
+      return;
+    }
+    await refreshCatalogOnly(true);
+    if (section === "drr") {
+      wbAbortRef.current?.abort();
+      setWbByArticle({});
+    }
+  };
+
   useEffect(() => {
     void loadData(false);
     return () => {
       abortRef.current?.abort();
       wbAbortRef.current?.abort();
       mpvibeAbortRef.current?.abort();
+      limitDetailsAbortRef.current?.abort();
+      limitActivityAbortRef.current?.abort();
+      autoExclusionsAbortRef.current?.abort();
     };
     // Initial load should use default form values only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (section !== "limits" || !loadedRange) {
+      return;
+    }
+    const refs = [...new Set(limitDetailRefs)];
+    const requestKey = `${loadedRange.start}:${loadedRange.end}:${refs.join(",")}`;
+    if (limitDetailsRequestRef.current === requestKey) {
+      return;
+    }
+
+    limitDetailsAbortRef.current?.abort();
+    const abortController = new AbortController();
+    limitDetailsAbortRef.current = abortController;
+    limitDetailsRequestRef.current = requestKey;
+    const forceRefresh = limitDetailsForceRefreshRef.current;
+
+    setLimitDetailsError(null);
+    setLimitDetailsProgress({ loaded: 0, total: refs.length });
+    setLimitDetailsLoading(Boolean(refs.length));
+
+    if (!refs.length) {
+      return () => {
+        if (limitDetailsAbortRef.current === abortController) {
+          limitDetailsAbortRef.current = null;
+        }
+      };
+    }
+
+    void runQueuedDrrBackgroundTask(async () => {
+      let checked = 0;
+      let failed = 0;
+      const chunks = chunkItems(refs, LIMIT_DETAILS_BATCH_SIZE);
+      for (const chunk of chunks) {
+        if (abortController.signal.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        const nextStatesByRef: Record<string, CatalogCampaignState[]> = {};
+        try {
+          const response = await fetchCatalogProductDetails({
+            productRefs: chunk,
+            start: loadedRange.start,
+            end: loadedRange.end,
+            forceRefresh,
+            includeCampaignDetails: true,
+            includeBestTime: false,
+            signal: abortController.signal,
+          });
+          const loadedRefs = new Set<string>();
+          response.rows.forEach((row) => {
+            if (row.errors?.campaign_details || !row.campaign_states?.length) {
+              return;
+            }
+            nextStatesByRef[row.product_ref] = row.campaign_states;
+            loadedRefs.add(row.product_ref);
+          });
+          failed += chunk.filter((ref) => !loadedRefs.has(ref)).length;
+        } catch (chunkError) {
+          if (isAbortError(chunkError)) {
+            throw chunkError;
+          }
+          failed += chunk.length;
+        }
+
+        if (Object.keys(nextStatesByRef).length) {
+          setLimitCampaignStatesByRef((current) => ({ ...current, ...nextStatesByRef }));
+        }
+        checked += chunk.length;
+        setLimitDetailsProgress({ loaded: checked, total: refs.length });
+      }
+
+      if (failed > 0) {
+        setLimitDetailsError(`Не удалось проверить лимиты для ${formatNumber(failed)} товаров. Остальные строки показаны по детальным данным XWAY.`);
+      }
+    })
+      .catch((detailsError) => {
+        if (!isAbortError(detailsError)) {
+          setLimitDetailsError(detailsError instanceof Error ? detailsError.message : "Не удалось догрузить лимиты и пополнения.");
+        }
+      })
+      .finally(() => {
+        if (limitDetailsAbortRef.current === abortController) {
+          limitDetailsAbortRef.current = null;
+          setLimitDetailsLoading(false);
+          limitDetailsForceRefreshRef.current = false;
+        }
+      });
+
+    return () => {
+      abortController.abort();
+      if (limitDetailsAbortRef.current === abortController) {
+        limitDetailsAbortRef.current = null;
+        limitDetailsRequestRef.current = null;
+        setLimitDetailsLoading(false);
+      }
+    };
+  }, [limitDetailRefs, limitDetailsRefreshNonce, loadedRange, section]);
+
+  useEffect(() => {
+    if (section !== "limitActivity" || !loadedRange) {
+      return;
+    }
+    const refs = [...new Set(limitDetailRefs)];
+    const requestKey = `${loadedRange.start}:${loadedRange.end}:${refs.join(",")}`;
+    if (limitActivityRequestRef.current === requestKey) {
+      return;
+    }
+
+    limitActivityAbortRef.current?.abort();
+    const abortController = new AbortController();
+    limitActivityAbortRef.current = abortController;
+    limitActivityRequestRef.current = requestKey;
+    const forceRefresh = limitActivityForceRefreshRef.current;
+
+    setLimitActivityError(null);
+    setLimitActivityProgress({ loaded: 0, total: refs.length });
+    setLimitActivityLoading(Boolean(refs.length));
+
+    if (!refs.length) {
+      return () => {
+        if (limitActivityAbortRef.current === abortController) {
+          limitActivityAbortRef.current = null;
+        }
+      };
+    }
+
+    void runQueuedDrrBackgroundTask(async () => {
+      let failed = 0;
+      let loaded = 0;
+      const fetchLimitActivityChunk = async (chunk: string[]): Promise<number> => {
+        try {
+          const response = await fetchCatalogIssues({
+            productRefs: chunk,
+            start: loadedRange.start,
+            end: loadedRange.end,
+            forceRefresh,
+            limitProducts: chunk.length,
+            deadlineMs: LIMIT_ACTIVITY_DEADLINE_MS,
+            scope: "limit_activity",
+            signal: abortController.signal,
+          });
+          const nextRowsByRef: Record<string, CatalogIssuesRow> = {};
+          const loadedRefs = new Set<string>();
+          let failedRows = 0;
+          response.rows.forEach((row) => {
+            nextRowsByRef[row.product_ref] = row;
+            loadedRefs.add(row.product_ref);
+            if (row.error) {
+              failedRows += 1;
+            }
+          });
+          failedRows += chunk.filter((ref) => !loadedRefs.has(ref)).length;
+          if (Object.keys(nextRowsByRef).length) {
+            setLimitActivityIssuesByRef((current) => ({ ...current, ...nextRowsByRef }));
+          }
+          return failedRows;
+        } catch (chunkError) {
+          if (isAbortError(chunkError)) {
+            throw chunkError;
+          }
+          const message = await readDrrApiErrorMessage(chunkError, "Не удалось загрузить логи активности РК.");
+          if (chunk.length > 1 && isRetryableLimitActivityError(message)) {
+            const middle = Math.max(1, Math.ceil(chunk.length / 2));
+            const leftFailed = await fetchLimitActivityChunk(chunk.slice(0, middle));
+            const rightFailed = await fetchLimitActivityChunk(chunk.slice(middle));
+            return leftFailed + rightFailed;
+          }
+          if (chunk.length > 1) {
+            const middle = Math.max(1, Math.ceil(chunk.length / 2));
+            const leftFailed = await fetchLimitActivityChunk(chunk.slice(0, middle));
+            const rightFailed = await fetchLimitActivityChunk(chunk.slice(middle));
+            return leftFailed + rightFailed;
+          }
+          return chunk.length;
+        }
+      };
+
+      const chunks = chunkItems(refs, LIMIT_ACTIVITY_BATCH_SIZE);
+      for (const chunk of chunks) {
+        if (abortController.signal.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        failed += await fetchLimitActivityChunk(chunk);
+        loaded += chunk.length;
+        setLimitActivityProgress({ loaded: Math.min(loaded, refs.length), total: refs.length });
+      }
+
+      if (failed > 0) {
+        setLimitActivityError(`Не удалось проверить логи активности для ${formatNumber(failed)} товаров. Остальные строки показаны по доступным данным XWAY.`);
+      }
+    })
+      .catch(async (activityError) => {
+        if (!isAbortError(activityError)) {
+          setLimitActivityError(await readDrrApiErrorMessage(activityError, "Не удалось загрузить логи активности РК."));
+        }
+      })
+      .finally(() => {
+        if (limitActivityAbortRef.current === abortController) {
+          limitActivityAbortRef.current = null;
+          setLimitActivityLoading(false);
+          limitActivityForceRefreshRef.current = false;
+        }
+      });
+
+    return () => {
+      abortController.abort();
+      if (limitActivityAbortRef.current === abortController) {
+        limitActivityAbortRef.current = null;
+        limitActivityRequestRef.current = null;
+        setLimitActivityLoading(false);
+      }
+    };
+  }, [limitActivityRefreshNonce, limitDetailRefs, loadedRange, section]);
+
+  useEffect(() => {
+    if (section !== "autoExclusions" || !loadedRange) {
+      return;
+    }
+    const refs = [...new Set(autoExclusionRefs)];
+    const requestKey = `${loadedRange.start}:${loadedRange.end}:${refs.join(",")}`;
+    if (autoExclusionsRequestRef.current === requestKey) {
+      return;
+    }
+
+    autoExclusionsAbortRef.current?.abort();
+    const abortController = new AbortController();
+    autoExclusionsAbortRef.current = abortController;
+    autoExclusionsRequestRef.current = requestKey;
+    const forceRefresh = autoExclusionsForceRefreshRef.current;
+
+    setAutoExclusionsError(null);
+    setAutoExclusionsProgress({ loaded: 0, total: refs.length });
+    setAutoExclusionsLoading(Boolean(refs.length));
+
+    if (!refs.length) {
+      return () => {
+        if (autoExclusionsAbortRef.current === abortController) {
+          autoExclusionsAbortRef.current = null;
+        }
+      };
+    }
+
+    void runQueuedDrrBackgroundTask(async () => {
+      let failed = 0;
+      let loaded = 0;
+      const fetchAutoExclusionChunk = async (chunk: string[]): Promise<number> => {
+        try {
+          const response = await fetchCatalogAutoExclusions({
+            productRefs: chunk,
+            start: loadedRange.start,
+            end: loadedRange.end,
+            forceRefresh,
+            limitProducts: chunk.length,
+            deadlineMs: AUTO_EXCLUSIONS_DEADLINE_MS,
+            signal: abortController.signal,
+          });
+          const nextRowsByRef: Record<string, CatalogAutoExclusionRow> = {};
+          const loadedRefs = new Set<string>();
+          let failedRows = 0;
+          response.rows.forEach((row) => {
+            nextRowsByRef[row.product_ref] = row;
+            loadedRefs.add(row.product_ref);
+            if (row.error) {
+              failedRows += 1;
+            }
+          });
+          failedRows += chunk.filter((ref) => !loadedRefs.has(ref)).length;
+          if (Object.keys(nextRowsByRef).length) {
+            setAutoExclusionsByRef((current) => ({ ...current, ...nextRowsByRef }));
+          }
+          return failedRows;
+        } catch (chunkError) {
+          if (isAbortError(chunkError)) {
+            throw chunkError;
+          }
+          const message = await readDrrApiErrorMessage(chunkError, "Не удалось загрузить настройки автоисключения.");
+          if (chunk.length > 1 && isRetryableLimitActivityError(message)) {
+            const middle = Math.max(1, Math.ceil(chunk.length / 2));
+            const leftFailed = await fetchAutoExclusionChunk(chunk.slice(0, middle));
+            const rightFailed = await fetchAutoExclusionChunk(chunk.slice(middle));
+            return leftFailed + rightFailed;
+          }
+          if (chunk.length > 1) {
+            const middle = Math.max(1, Math.ceil(chunk.length / 2));
+            const leftFailed = await fetchAutoExclusionChunk(chunk.slice(0, middle));
+            const rightFailed = await fetchAutoExclusionChunk(chunk.slice(middle));
+            return leftFailed + rightFailed;
+          }
+          return chunk.length;
+        }
+      };
+
+      const chunks = chunkItems(refs, AUTO_EXCLUSIONS_BATCH_SIZE);
+      for (const chunk of chunks) {
+        if (abortController.signal.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        failed += await fetchAutoExclusionChunk(chunk);
+        loaded += chunk.length;
+        setAutoExclusionsProgress({ loaded: Math.min(loaded, refs.length), total: refs.length });
+      }
+
+      if (failed > 0) {
+        setAutoExclusionsError(`Не удалось проверить автоисключение для ${formatNumber(failed)} товаров. Остальные строки показаны по доступным данным XWAY.`);
+      }
+    })
+      .catch(async (autoExclusionError) => {
+        if (!isAbortError(autoExclusionError)) {
+          setAutoExclusionsError(await readDrrApiErrorMessage(autoExclusionError, "Не удалось загрузить настройки автоисключения."));
+        }
+      })
+      .finally(() => {
+        if (autoExclusionsAbortRef.current === abortController) {
+          autoExclusionsAbortRef.current = null;
+          setAutoExclusionsLoading(false);
+          autoExclusionsForceRefreshRef.current = false;
+        }
+      });
+
+    return () => {
+      abortController.abort();
+      if (autoExclusionsAbortRef.current === abortController) {
+        autoExclusionsAbortRef.current = null;
+        autoExclusionsRequestRef.current = null;
+        setAutoExclusionsLoading(false);
+      }
+    };
+  }, [autoExclusionRefs, autoExclusionsRefreshNonce, loadedRange, section]);
 
   useEffect(() => {
     const missingArticles = topDrrRows.map((row) => row.article).filter((article) => !wbByArticle[article]);
@@ -1439,7 +2574,7 @@ export function DrrAnalyticsPage() {
     const abortController = new AbortController();
     wbAbortRef.current = abortController;
     setWbLoading(true);
-    fetchWbCards({ articles: missingArticles, signal: abortController.signal })
+    runQueuedDrrBackgroundTask(() => fetchWbCards({ articles: missingArticles, signal: abortController.signal }))
       .then((response) => {
         if (response.errors.length && !response.rows.length) {
           setError("WB не вернул карточные данные: отзывы, БЗО и цену можно будет догрузить повторным обновлением.");
@@ -1479,14 +2614,16 @@ export function DrrAnalyticsPage() {
     const abortController = new AbortController();
     mpvibeAbortRef.current = abortController;
     setMpvibeLoading(true);
-    fetchMpvibeStocks({
-      articles: requestedArticles,
-      start: loadedRange.start,
-      end: loadedRange.end,
-      includeAllWithStock: true,
-      forceRefresh: mpvibeForceRefreshRef.current,
-      signal: abortController.signal,
-    })
+    runQueuedDrrBackgroundTask(() =>
+      fetchMpvibeStocks({
+        articles: requestedArticles,
+        start: loadedRange.start,
+        end: loadedRange.end,
+        includeAllWithStock: true,
+        forceRefresh: mpvibeForceRefreshRef.current,
+        signal: abortController.signal,
+      }),
+    )
       .then((response) => {
         setMpvibeWarning(response.errors.length ? resolveMpvibeStockWarning(response) : null);
         setMpvibeStockByArticle((current) => {
@@ -1509,7 +2646,7 @@ export function DrrAnalyticsPage() {
         mpvibeForceRefreshRef.current = false;
         setMpvibeLoading(false);
       });
-  }, [baseRows, loadedRange]);
+  }, [baseRows, loadedRange, mpvibeRefreshNonce]);
 
   useEffect(() => {
     try {
@@ -1851,6 +2988,398 @@ export function DrrAnalyticsPage() {
     shop: "XWAY",
   });
 
+  const limitColumns = withSourceSummaries<RankedLimitSetupRow>([
+    {
+      key: "rank",
+      ...columnWidthProps("rank"),
+      header: resizableHeader("#", "rank"),
+      headerClassName: "drr-col-rank",
+      cellClassName: "drr-col-rank",
+      render: (row: RankedLimitSetupRow) => formatNumber(row.rank),
+    },
+    {
+      key: "name",
+      ...columnWidthProps("product"),
+      header: resizableHeader(limitsHeader("name", "Товар", { ariaLabel: "Товар" }), "product"),
+      headerClassName: "drr-col-product",
+      cellClassName: "drr-col-product",
+      render: (row: RankedLimitSetupRow) => <ProductCell row={row} />,
+    },
+    {
+      key: "links",
+      ...columnWidthProps("links"),
+      header: resizableHeader("Ссылки", "links"),
+      headerClassName: "drr-col-links",
+      cellClassName: "drr-col-links",
+      render: (row: RankedLimitSetupRow) => (
+        <div className="drr-analytics-link-stack">
+          <XwayLink href={row.productUrl} />
+          <WbLink article={row.article} />
+        </div>
+      ),
+    },
+    {
+      key: "article",
+      ...columnWidthProps("article"),
+      header: resizableHeader(limitsHeader("article", "Артикул", { ariaLabel: "Артикул" }), "article"),
+      headerClassName: "drr-col-article",
+      cellClassName: "drr-col-article",
+      render: (row: RankedLimitSetupRow) => row.article,
+    },
+    {
+      key: "issueCount",
+      ...columnWidthProps("limitIssue"),
+      header: resizableHeader(limitsHeader("issueCount", "Проблема", { ariaLabel: "Проблема" }), "limitIssue"),
+      headerClassName: "drr-col-limit-issue",
+      cellClassName: "drr-col-limit-issue",
+      render: (row: RankedLimitSetupRow) => <LimitIssueCell row={row} />,
+    },
+    {
+      key: "spendLimit",
+      ...columnWidthProps("limitAmount"),
+      header: resizableHeader(limitsHeader("spendLimit", "Лимит расхода", { ariaLabel: "Лимит расхода" }), "limitAmount"),
+      headerClassName: "drr-col-limit-amount",
+      cellClassName: "drr-col-limit-amount",
+      render: (row: RankedLimitSetupRow) => (
+        <LimitSetupCell
+          configured={row.spendLimitConfiguredCount}
+          total={row.activeCampaignStateCount}
+          limit={row.spendLimit}
+          spent={row.spendSpentToday}
+        />
+      ),
+    },
+    {
+      key: "budgetLimit",
+      ...columnWidthProps("limitAmount"),
+      header: resizableHeader(limitsHeader("budgetLimit", "Бюджет / пополн.", { ariaLabel: "Бюджет и пополнения" }), "limitAmount"),
+      headerClassName: "drr-col-limit-amount",
+      cellClassName: "drr-col-limit-amount",
+      render: (row: RankedLimitSetupRow) => (
+        <LimitSetupCell
+          configured={row.budgetRuleConfiguredCount}
+          total={row.activeCampaignStateCount}
+          limit={row.budgetLimit}
+          spent={row.budgetSpentToday}
+        />
+      ),
+    },
+    {
+      key: "activeCampaigns",
+      ...columnWidthProps("activeCampaigns"),
+      header: resizableHeader(limitsHeader("activeCampaigns", "РК к проверке", { ariaLabel: "РК к проверке" }), "activeCampaigns"),
+      headerClassName: "drr-col-status",
+      cellClassName: "drr-col-status",
+      render: (row: RankedLimitSetupRow) => formatNumber(row.activeCampaignStateCount),
+    },
+    {
+      key: "spend",
+      ...columnWidthProps("spend"),
+      header: resizableHeader(limitsHeader("spend", "Расход за период", { ariaLabel: "Расход" }), "spend"),
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
+      render: (row: RankedLimitSetupRow) => formatMoney(row.spend),
+    },
+    {
+      key: "ordersTotal",
+      ...columnWidthProps("ordersTotal"),
+      header: resizableHeader(limitsHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }), "ordersTotal"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitSetupRow) => formatNumber(row.ordersTotal),
+    },
+    {
+      key: "stock",
+      ...columnWidthProps("stock"),
+      header: resizableHeader(limitsHeader("stock", "Остаток XWAY", { ariaLabel: "Остаток XWAY" }), "stock"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitSetupRow) => formatNumber(row.stock),
+    },
+    {
+      key: "stockMpvibe",
+      ...columnWidthProps("stockMpvibe"),
+      header: resizableHeader(limitsHeader("stockMpvibe", "Остаток MPVibe", { ariaLabel: "Остаток MPVibe" }), "stockMpvibe"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitSetupRow) => formatNumber(row.stockMpvibe),
+    },
+    {
+      key: "shop",
+      ...columnWidthProps("shop"),
+      header: resizableHeader(limitsHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }), "shop"),
+      headerClassName: "drr-col-shop",
+      cellClassName: "drr-col-shop",
+      render: (row: RankedLimitSetupRow) => row.shopName,
+    },
+  ], {
+    rank: "Расчет",
+    name: "XWAY",
+    links: "XWAY/WB",
+    article: "XWAY",
+    issueCount: "Расчет",
+    spendLimit: "XWAY",
+    budgetLimit: "XWAY",
+    activeCampaigns: "XWAY",
+    spend: "XWAY",
+    ordersTotal: "XWAY",
+    stock: "XWAY",
+    stockMpvibe: "MPVibe",
+    shop: "XWAY",
+  });
+
+  const limitActivityColumns = withSourceSummaries<RankedLimitActivityRow>([
+    {
+      key: "rank",
+      ...columnWidthProps("rank"),
+      header: resizableHeader("#", "rank"),
+      headerClassName: "drr-col-rank",
+      cellClassName: "drr-col-rank",
+      render: (row: RankedLimitActivityRow) => formatNumber(row.rank),
+    },
+    {
+      key: "name",
+      ...columnWidthProps("product"),
+      header: resizableHeader(limitActivityHeader("name", "Товар", { ariaLabel: "Товар" }), "product"),
+      headerClassName: "drr-col-product",
+      cellClassName: "drr-col-product",
+      render: (row: RankedLimitActivityRow) => <ProductCell row={row} />,
+    },
+    {
+      key: "links",
+      ...columnWidthProps("links"),
+      header: resizableHeader("Ссылки", "links"),
+      headerClassName: "drr-col-links",
+      cellClassName: "drr-col-links",
+      render: (row: RankedLimitActivityRow) => (
+        <div className="drr-analytics-link-stack">
+          <XwayLink href={row.productUrl} />
+          <WbLink article={row.article} />
+        </div>
+      ),
+    },
+    {
+      key: "article",
+      ...columnWidthProps("article"),
+      header: resizableHeader(limitActivityHeader("article", "Артикул", { ariaLabel: "Артикул" }), "article"),
+      headerClassName: "drr-col-article",
+      cellClassName: "drr-col-article",
+      render: (row: RankedLimitActivityRow) => row.article,
+    },
+    {
+      key: "issueCount",
+      ...columnWidthProps("limitActivityIssue"),
+      header: resizableHeader(limitActivityHeader("issueCount", "Проблема", { ariaLabel: "Проблема" }), "limitActivityIssue"),
+      headerClassName: "drr-col-limit-activity-issue",
+      cellClassName: "drr-col-limit-activity-issue",
+      render: (row: RankedLimitActivityRow) => <LimitActivityIssueCell row={row} />,
+    },
+    {
+      key: "maxIncidentHours",
+      ...columnWidthProps("limitActivityHours"),
+      header: resizableHeader(limitActivityHeader("maxIncidentHours", "Макс. подряд", { ariaLabel: "Максимум подряд" }), "limitActivityHours"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitActivityRow) => formatHours(row.maxIncidentHours),
+    },
+    {
+      key: "totalHours",
+      ...columnWidthProps("limitActivityHours"),
+      header: resizableHeader(limitActivityHeader("totalHours", "Всего часов", { ariaLabel: "Всего часов" }), "limitActivityHours"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitActivityRow) => formatHours(row.totalHours),
+    },
+    {
+      key: "incidents",
+      ...columnWidthProps("ordersAds"),
+      header: resizableHeader(limitActivityHeader("incidents", "Инциденты", { ariaLabel: "Инциденты" }), "ordersAds"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitActivityRow) => formatNumber(row.incidents),
+    },
+    {
+      key: "activeCampaigns",
+      ...columnWidthProps("activeCampaigns"),
+      header: resizableHeader(limitActivityHeader("activeCampaigns", "РК", { ariaLabel: "РК" }), "activeCampaigns"),
+      headerClassName: "drr-col-status",
+      cellClassName: "drr-col-status",
+      render: (row: RankedLimitActivityRow) => formatNumber(row.campaignLabels.length),
+    },
+    {
+      key: "spend",
+      ...columnWidthProps("spend"),
+      header: resizableHeader(limitActivityHeader("spend", "Расход за период", { ariaLabel: "Расход" }), "spend"),
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
+      render: (row: RankedLimitActivityRow) => formatMoney(row.spend),
+    },
+    {
+      key: "ordersTotal",
+      ...columnWidthProps("ordersTotal"),
+      header: resizableHeader(limitActivityHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }), "ordersTotal"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitActivityRow) => formatNumber(row.ordersTotal),
+    },
+    {
+      key: "stock",
+      ...columnWidthProps("stock"),
+      header: resizableHeader(limitActivityHeader("stock", "Остаток XWAY", { ariaLabel: "Остаток XWAY" }), "stock"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitActivityRow) => formatNumber(row.stock),
+    },
+    {
+      key: "stockMpvibe",
+      ...columnWidthProps("stockMpvibe"),
+      header: resizableHeader(limitActivityHeader("stockMpvibe", "Остаток MPVibe", { ariaLabel: "Остаток MPVibe" }), "stockMpvibe"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedLimitActivityRow) => formatNumber(row.stockMpvibe),
+    },
+    {
+      key: "shop",
+      ...columnWidthProps("shop"),
+      header: resizableHeader(limitActivityHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }), "shop"),
+      headerClassName: "drr-col-shop",
+      cellClassName: "drr-col-shop",
+      render: (row: RankedLimitActivityRow) => row.shopName,
+    },
+  ], {
+    rank: "Расчет",
+    name: "XWAY",
+    links: "XWAY/WB",
+    article: "XWAY",
+    issueCount: "Расчет",
+    maxIncidentHours: "XWAY",
+    totalHours: "XWAY",
+    incidents: "XWAY",
+    activeCampaigns: "XWAY",
+    spend: "XWAY",
+    ordersTotal: "XWAY",
+    stock: "XWAY",
+    stockMpvibe: "MPVibe",
+    shop: "XWAY",
+  });
+
+  const autoExclusionColumns = withSourceSummaries<RankedAutoExclusionCampaignRow>([
+    {
+      key: "rank",
+      ...columnWidthProps("rank"),
+      header: resizableHeader("#", "rank"),
+      headerClassName: "drr-col-rank",
+      cellClassName: "drr-col-rank",
+      render: (row: RankedAutoExclusionCampaignRow) => formatNumber(row.rank),
+    },
+    {
+      key: "name",
+      ...columnWidthProps("product"),
+      header: resizableHeader(autoExclusionsHeader("name", "Товар", { ariaLabel: "Товар" }), "product"),
+      headerClassName: "drr-col-product",
+      cellClassName: "drr-col-product",
+      render: (row: RankedAutoExclusionCampaignRow) => <ProductCell row={row} />,
+    },
+    {
+      key: "links",
+      ...columnWidthProps("links"),
+      header: resizableHeader("Ссылки", "links"),
+      headerClassName: "drr-col-links",
+      cellClassName: "drr-col-links",
+      render: (row: RankedAutoExclusionCampaignRow) => (
+        <div className="drr-analytics-link-stack">
+          <XwayLink href={row.productUrl} />
+          <WbLink article={row.article} />
+        </div>
+      ),
+    },
+    {
+      key: "article",
+      ...columnWidthProps("article"),
+      header: resizableHeader(autoExclusionsHeader("article", "Артикул", { ariaLabel: "Артикул" }), "article"),
+      headerClassName: "drr-col-article",
+      cellClassName: "drr-col-article",
+      render: (row: RankedAutoExclusionCampaignRow) => row.article,
+    },
+    {
+      key: "campaignId",
+      ...columnWidthProps("autoExclusionCampaign"),
+      header: resizableHeader(autoExclusionsHeader("campaignId", "РК", { ariaLabel: "Рекламная кампания" }), "autoExclusionCampaign"),
+      headerClassName: "drr-col-auto-exclusion-campaign",
+      cellClassName: "drr-col-auto-exclusion-campaign",
+      render: (row: RankedAutoExclusionCampaignRow) => <AutoExclusionCampaignCell row={row} />,
+    },
+    {
+      key: "configured",
+      ...columnWidthProps("limitIssue"),
+      header: resizableHeader(autoExclusionsHeader("configured", "Автоисключение", { ariaLabel: "Автоисключение" }), "limitIssue"),
+      headerClassName: "drr-col-limit-issue",
+      cellClassName: "drr-col-limit-issue",
+      render: (row: RankedAutoExclusionCampaignRow) => <AutoExclusionStatusCell row={row} />,
+    },
+    {
+      key: "ruleDays",
+      ...columnWidthProps("autoExclusionRule"),
+      header: resizableHeader(autoExclusionsHeader("ruleDays", "Правило", { ariaLabel: "Правило автоисключения" }), "autoExclusionRule"),
+      headerClassName: "drr-col-auto-exclusion-rule",
+      cellClassName: "drr-col-auto-exclusion-rule",
+      render: (row: RankedAutoExclusionCampaignRow) => <AutoExclusionRuleCell row={row} />,
+    },
+    {
+      key: "spend",
+      ...columnWidthProps("spend"),
+      header: resizableHeader(autoExclusionsHeader("spend", "Расход за период", { ariaLabel: "Расход" }), "spend"),
+      headerClassName: "drr-col-money",
+      cellClassName: "drr-col-money",
+      render: (row: RankedAutoExclusionCampaignRow) => formatMoney(row.spend),
+    },
+    {
+      key: "ordersTotal",
+      ...columnWidthProps("ordersTotal"),
+      header: resizableHeader(autoExclusionsHeader("ordersTotal", "Заказы всего", { ariaLabel: "Заказы всего" }), "ordersTotal"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedAutoExclusionCampaignRow) => formatNumber(row.ordersTotal),
+    },
+    {
+      key: "stock",
+      ...columnWidthProps("stock"),
+      header: resizableHeader(autoExclusionsHeader("stock", "Остаток XWAY", { ariaLabel: "Остаток XWAY" }), "stock"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedAutoExclusionCampaignRow) => formatNumber(row.stock),
+    },
+    {
+      key: "stockMpvibe",
+      ...columnWidthProps("stockMpvibe"),
+      header: resizableHeader(autoExclusionsHeader("stockMpvibe", "Остаток MPVibe", { ariaLabel: "Остаток MPVibe" }), "stockMpvibe"),
+      headerClassName: "drr-col-number",
+      cellClassName: "drr-col-number",
+      render: (row: RankedAutoExclusionCampaignRow) => formatNumber(row.stockMpvibe),
+    },
+    {
+      key: "shop",
+      ...columnWidthProps("shop"),
+      header: resizableHeader(autoExclusionsHeader("shop", "Кабинет", { ariaLabel: "Кабинет" }), "shop"),
+      headerClassName: "drr-col-shop",
+      cellClassName: "drr-col-shop",
+      render: (row: RankedAutoExclusionCampaignRow) => row.shopName,
+    },
+  ], {
+    rank: "Расчет",
+    name: "XWAY",
+    links: "XWAY/WB",
+    article: "XWAY",
+    campaignId: "XWAY",
+    configured: "Расчет",
+    ruleDays: "XWAY",
+    spend: "XWAY",
+    ordersTotal: "XWAY",
+    stock: "XWAY",
+    stockMpvibe: "MPVibe",
+    shop: "XWAY",
+  });
+
   const categoryColumns = withSourceSummaries<RankedCategoryDriverRow>([
     {
       key: "rank",
@@ -2045,6 +3574,9 @@ export function DrrAnalyticsPage() {
         items={[
           { value: "drr", label: "Аналитика ДРР", count: drrRows.length },
           { value: "stocks", label: "Остатки", count: stockRows.length },
+          { value: "limits", label: "Лимиты", count: limitDetailRefs.length },
+          { value: "limitActivity", label: "Вылеты лимитов", count: limitActivityRows.length },
+          { value: "autoExclusions", label: "Автоисключение", count: autoExclusionRefs.length },
           { value: "categories", label: "Категорийные драйверы", count: categoryRowsCount },
         ]}
       />
@@ -2059,15 +3591,26 @@ export function DrrAnalyticsPage() {
           </>
         }
         actions={
-          <button
-            type="button"
-            onClick={() => void loadData(true)}
-            disabled={loading}
-            className="metric-chip inline-flex h-11 items-center gap-2 rounded-2xl px-4 text-sm font-semibold text-brand-200 transition hover:bg-[var(--color-surface-strong)] disabled:cursor-progress disabled:opacity-70"
-          >
-            <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-            Обновить
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void refreshCurrentSection()}
+              disabled={!canRefreshCurrentSection || currentSectionRefreshing || anyRefreshLoading}
+              className="metric-chip inline-flex h-11 items-center gap-2 rounded-2xl px-4 text-sm font-semibold text-[var(--color-muted)] transition hover:bg-[var(--color-surface-strong)] hover:text-[var(--color-ink)] disabled:cursor-progress disabled:opacity-70"
+            >
+              <RefreshCw className={cn("size-4", currentSectionRefreshing && "animate-spin")} />
+              Обновить вкладку
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadData(true)}
+              disabled={anyRefreshLoading}
+              className="metric-chip inline-flex h-11 items-center gap-2 rounded-2xl px-4 text-sm font-semibold text-brand-200 transition hover:bg-[var(--color-surface-strong)] disabled:cursor-progress disabled:opacity-70"
+            >
+              <RefreshCw className={cn("size-4", anyRefreshLoading && "animate-spin")} />
+              Обновить все
+            </button>
+          </div>
         }
       >
         <div className="drr-analytics-controls">
@@ -2081,7 +3624,7 @@ export function DrrAnalyticsPage() {
               onChange={(event) => setDaysInput(event.target.value)}
             />
           </label>
-          {section !== "categories" ? (
+          {section === "drr" || section === "stocks" ? (
             <label className="drr-analytics-input metric-chip">
               <span>Артикулов к выводу</span>
               <input
@@ -2128,6 +3671,24 @@ export function DrrAnalyticsPage() {
           <>
             <MetricCard label="Категорий" value={formatNumber(categoryRowsCount)} hint={`остаток от ${formatNumber(categoryMinStock)}`} density="compact" />
             <MetricCard label="Товаров в срезе" value={formatNumber(rows.length)} density="compact" />
+          </>
+        ) : section === "limits" ? (
+          <>
+            <MetricCard label="Без лимита расхода" value={formatNumber(missingSpendLimitCount)} hint="ACTIVE или PAUSED" density="compact" />
+            <MetricCard label="Без бюджета / пополн." value={formatNumber(missingBudgetRuleCount)} hint="ACTIVE или PAUSED" density="compact" />
+            <MetricCard label="Лимиты заданы" value={formatNumber(configuredLimitCount)} hint={`проверено ${formatNumber(limitRows.length)}`} density="compact" />
+          </>
+        ) : section === "limitActivity" ? (
+          <>
+            <MetricCard label="Вылеты 4+ ч" value={formatNumber(limitActivityRows.length)} hint={`проверено ${formatNumber(limitActivityProgress.loaded)} из ${formatNumber(limitActivityProgress.total)}`} density="compact" />
+            <MetricCard label="Лимит расходов" value={formatNumber(limitActivityLimitCount)} hint="по логам активности РК" density="compact" />
+            <MetricCard label="Нехватка бюджета" value={formatNumber(limitActivityBudgetCount)} hint={limitActivityMaxHours !== null ? `макс. ${formatHours(limitActivityMaxHours)}` : "по логам активности РК"} density="compact" />
+          </>
+        ) : section === "autoExclusions" ? (
+          <>
+            <MetricCard label="Без автоисключения" value={formatNumber(autoExclusionIssueRows.length)} hint="CPM, ACTIVE или PAUSED" density="compact" />
+            <MetricCard label="Настроено" value={formatNumber(autoExclusionConfiguredRows.length)} hint={`проверено ${formatNumber(autoExclusionRows.length)} РК`} density="compact" />
+            <MetricCard label="CPC пропущено" value={formatNumber(autoExclusionSkippedCpcCount)} hint="оплата за клик не проверяется" density="compact" />
           </>
         ) : (
           <>
@@ -2177,6 +3738,157 @@ export function DrrAnalyticsPage() {
             <EmptyState title="Нет данных" text="Нажмите обновить или измените период." />
           )}
         </SectionCard>
+      ) : section === "limits" ? (
+        <div className="space-y-4">
+          <SectionCard
+            title="Артикулы без части лимитов"
+            caption="РК в статусе ACTIVE или PAUSED, где не найден хотя бы один активный лимит расхода или бюджетное правило с лимитом пополнения. FROZEN не проверяется."
+          >
+            {limitDetailsLoading ? (
+              <div className="mb-4 rounded-2xl border border-sky-300/40 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-100">
+                <div>
+                  Проверяю лимиты: {formatNumber(limitDetailsProgress.loaded)} / {formatNumber(limitDetailsProgress.total)} товаров с РК ACTIVE или PAUSED
+                </div>
+                <div className="mt-1 text-xs font-semibold text-sky-100/80">
+                  Уже выведено: проблем {formatNumber(limitIssueRows.length)} · настроено {formatNumber(limitConfiguredRows.length)}
+                </div>
+              </div>
+            ) : null}
+            {limitDetailsError ? <div className="mb-4 rounded-2xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{limitDetailsError}</div> : null}
+            {limitIssueRows.length ? (
+              <MetricTable
+                rows={limitIssueRows}
+                columns={limitColumns}
+                stickyHeader
+                headerSummaryPlacement="inline"
+                stickyHeaderClassName="drr-analytics-sticky-header"
+                getRowKey={(row) => row.ref}
+                emptyText="Нет РК ACTIVE или PAUSED без настроенных лимитов или пополнений."
+              />
+            ) : limitDetailsLoading ? (
+              <EmptyState
+                title="Пока проблем нет"
+                text={
+                  limitConfiguredRows.length
+                    ? "Среди уже проверенных товаров проблемные строки не найдены. Настроенные строки выводятся в таблице ниже."
+                    : "Проблемные строки появятся по мере проверки детальных данных XWAY."
+                }
+              />
+            ) : (
+              <EmptyState title="Нет проблем" text="Для проверенных РК ACTIVE или PAUSED лимиты расхода и бюджетные правила заданы." />
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Артикулы с заданными лимитами"
+            caption="РК в статусе ACTIVE или PAUSED, где для каждой проверяемой кампании найден и лимит расхода, и бюджетное правило с лимитом пополнения."
+          >
+            {limitConfiguredRows.length ? (
+              <MetricTable
+                rows={limitConfiguredRows}
+                columns={limitColumns}
+                stickyHeader
+                headerSummaryPlacement="inline"
+                stickyHeaderClassName="drr-analytics-sticky-header"
+                getRowKey={(row) => row.ref}
+                emptyText="Нет РК ACTIVE или PAUSED с полностью заданными лимитами."
+              />
+            ) : limitDetailsLoading ? (
+              <EmptyState title="Догружаю лимиты" text="Настроенные строки появятся по мере проверки детальных данных XWAY." />
+            ) : (
+              <EmptyState title="Нет данных" text="Не найдено РК ACTIVE или PAUSED, где заданы оба типа лимитов." />
+            )}
+          </SectionCard>
+        </div>
+      ) : section === "limitActivity" ? (
+        <SectionCard
+          title="Вылеты лимитов по логам активности"
+          caption={`РК в статусе ACTIVE или PAUSED, где за выбранный период статус «лимит расходов» или «нехватка бюджета» держался подряд не меньше ${formatHours(LIMIT_ACTIVITY_THRESHOLD_HOURS)}. FROZEN не проверяется.`}
+        >
+          {limitActivityLoading ? (
+            <div className="mb-4 rounded-2xl border border-sky-300/40 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-100">
+              Проверяю логи активности: {formatNumber(limitActivityProgress.loaded)} / {formatNumber(limitActivityProgress.total)} товаров с РК ACTIVE или PAUSED
+            </div>
+          ) : null}
+          {limitActivityError ? <div className="mb-4 rounded-2xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{limitActivityError}</div> : null}
+          {limitActivityRows.length ? (
+            <MetricTable
+              rows={limitActivityRows}
+              columns={limitActivityColumns}
+              stickyHeader
+              headerSummaryPlacement="inline"
+              stickyHeaderClassName="drr-analytics-sticky-header"
+              getRowKey={(row) => row.ref}
+              emptyText="Нет товаров с вылетом лимита расходов или бюджета на 4+ часа."
+            />
+          ) : limitActivityLoading ? (
+            <EmptyState title="Проверяю логи" text="Строки появятся, если в логах найдется непрерывный вылет лимита или бюджета на 4+ часа." />
+          ) : (
+            <EmptyState title="Нет вылетов" text="По проверенным РК ACTIVE или PAUSED не найдено вылетов лимита расходов или бюджета на 4+ часа." />
+          )}
+        </SectionCard>
+      ) : section === "autoExclusions" ? (
+        <div className="space-y-4">
+          <SectionCard
+            title="РК без автоисключения"
+            caption="Проверяются РК в статусе ACTIVE или PAUSED, кроме кампаний с оплатой за клик. FROZEN и CPC не проверяются."
+          >
+            {autoExclusionsLoading ? (
+              <div className="mb-4 rounded-2xl border border-sky-300/40 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-100">
+                <div>
+                  Проверяю автоисключение: {formatNumber(autoExclusionsProgress.loaded)} / {formatNumber(autoExclusionsProgress.total)} товаров с РК ACTIVE или PAUSED
+                </div>
+                <div className="mt-1 text-xs font-semibold text-sky-100/80">
+                  Уже выведено: без настройки {formatNumber(autoExclusionIssueRows.length)} · настроено {formatNumber(autoExclusionConfiguredRows.length)} · CPC пропущено {formatNumber(autoExclusionSkippedCpcCount)}
+                </div>
+              </div>
+            ) : null}
+            {autoExclusionsError ? <div className="mb-4 rounded-2xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{autoExclusionsError}</div> : null}
+            {autoExclusionIssueRows.length ? (
+              <MetricTable
+                rows={autoExclusionIssueRows}
+                columns={autoExclusionColumns}
+                stickyHeader
+                headerSummaryPlacement="inline"
+                stickyHeaderClassName="drr-analytics-sticky-header"
+                getRowKey={(row) => row.ref}
+                emptyText="Нет CPM РК ACTIVE или PAUSED без автоисключения."
+              />
+            ) : autoExclusionsLoading ? (
+              <EmptyState
+                title="Пока проблем нет"
+                text={
+                  autoExclusionConfiguredRows.length
+                    ? "Среди уже проверенных РК проблемные строки не найдены. Настроенные строки выводятся в таблице ниже."
+                    : "Проблемные строки появятся по мере проверки данных XWAY."
+                }
+              />
+            ) : (
+              <EmptyState title="Нет проблем" text="Для проверенных CPM РК ACTIVE или PAUSED автоисключение настроено." />
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="РК с автоисключением"
+            caption="CPM РК в статусе ACTIVE или PAUSED, где включено правило исключения незафиксированных кластеров."
+          >
+            {autoExclusionConfiguredRows.length ? (
+              <MetricTable
+                rows={autoExclusionConfiguredRows}
+                columns={autoExclusionColumns}
+                stickyHeader
+                headerSummaryPlacement="inline"
+                stickyHeaderClassName="drr-analytics-sticky-header"
+                getRowKey={(row) => row.ref}
+                emptyText="Нет CPM РК ACTIVE или PAUSED с настроенным автоисключением."
+              />
+            ) : autoExclusionsLoading ? (
+              <EmptyState title="Догружаю автоисключение" text="Настроенные строки появятся по мере проверки данных XWAY." />
+            ) : (
+              <EmptyState title="Нет данных" text="Не найдено CPM РК ACTIVE или PAUSED с настроенным автоисключением." />
+            )}
+          </SectionCard>
+        </div>
       ) : (
         <div className="space-y-4">
           {allCategoryGroup || categoryShopGroups.length ? (

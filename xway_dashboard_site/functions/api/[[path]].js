@@ -1,5 +1,6 @@
 import { collectCatalog, collectCatalogChart, collectCatalogProductDetails } from "../_lib/catalog.js";
 import { applyCatalogArticleSnapshots, writeCatalogArticleSnapshots } from "../_lib/catalog-article-snapshots.js";
+import { collectCatalogAutoExclusions } from "../_lib/catalog-auto-exclusions.js";
 import { collectCatalogIssues } from "../_lib/catalog-issues.js";
 import { collectClusterDetail } from "../_lib/cluster-detail.js";
 import { handleAiRequest } from "../_lib/ai/handler.js";
@@ -24,11 +25,11 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-const SHARED_API_CACHE_VERSION = "v1";
+const SHARED_API_CACHE_VERSION = "v2";
 const SHARED_API_CACHEABLE_ROUTES = new Set([
-  "/api/catalog",
   "/api/catalog-chart",
   "/api/catalog-product-details",
+  "/api/catalog-auto-exclusions",
   "/api/catalog-issues",
   "/api/products",
 ]);
@@ -36,6 +37,7 @@ const ANALYST_NATIVE_ROUTES = new Set([
   "/api/catalog",
   "/api/catalog-chart",
   "/api/catalog-product-details",
+  "/api/catalog-auto-exclusions",
   "/api/catalog-issues",
   "/api/products",
   "/api/cluster-detail",
@@ -248,7 +250,7 @@ async function handleNativeRequest(context, pathname) {
     return jsonResponse({
       ok: true,
       backend: hasNativeStorageState(context.env) ? "cloudflare-native" : "proxy-only",
-      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/pachka-report", "/api/pachka-report/send", "/api/ai/*"],
+      native_routes: ["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-auto-exclusions", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/pachka-report", "/api/pachka-report/send", "/api/ai/*"],
       fallback_routes: [],
       fallback_configured: Boolean(sanitizeOrigin(context.env.API_ORIGIN)),
       shared_cache: {
@@ -339,6 +341,24 @@ async function handleNativeRequest(context, pathname) {
     );
   }
 
+  if (pathname === "/api/catalog-auto-exclusions") {
+    const productRefs = String(requestUrl.searchParams.get("products") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return jsonResponse(
+      await collectCatalogAutoExclusions(context.env, {
+        productRefs,
+        start: searchParamsValue(requestUrl, "start"),
+        end: searchParamsValue(requestUrl, "end"),
+        forceRefresh: requestUrl.searchParams.get("refresh") === "1" || requestUrl.searchParams.get("force_refresh") === "1",
+        cursor: searchParamsValue(requestUrl, "cursor"),
+        limitProducts: searchParamsInteger(requestUrl, "limit_products"),
+        deadlineMs: searchParamsInteger(requestUrl, "deadline_ms"),
+      }),
+    );
+  }
+
   if (pathname === "/api/catalog-issues") {
     const productRefs = String(requestUrl.searchParams.get("products") || "")
       .split(",")
@@ -353,6 +373,7 @@ async function handleNativeRequest(context, pathname) {
         cursor: searchParamsValue(requestUrl, "cursor"),
         limitProducts: searchParamsInteger(requestUrl, "limit_products"),
         deadlineMs: searchParamsInteger(requestUrl, "deadline_ms"),
+        scope: searchParamsValue(requestUrl, "scope"),
       }),
     );
   }
@@ -450,7 +471,7 @@ export async function onRequest(context) {
   const requestUrl = new URL(context.request.url);
   const pathname = requestUrl.pathname;
   const apiOrigin = sanitizeOrigin(context.env.API_ORIGIN);
-  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/pachka-report", "/api/pachka-report/send"]);
+  const nativeRoutes = new Set(["/api/health", "/api/catalog", "/api/catalog-chart", "/api/catalog-product-details", "/api/catalog-auto-exclusions", "/api/catalog-issues", "/api/catalog-article-snapshots", "/api/products", "/api/cluster-detail", "/api/wb-cards", "/api/mpvibe-stocks", "/api/pachka-report", "/api/pachka-report/send"]);
 
   if (isAiRoute(pathname)) {
     try {

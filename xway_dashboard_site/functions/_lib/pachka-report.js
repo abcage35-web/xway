@@ -21,6 +21,7 @@ const DEFAULT_AI_TEXT_VERBOSITY = "low";
 const DEFAULT_AI_TIMEOUT_MS = 20_000;
 const DEFAULT_AI_DEEP_TIMEOUT_MS = 30_000;
 const DEFAULT_AI_FULL_REFRESH_LIMIT = 2;
+const DEFAULT_LIMIT_DETAILS_CONCURRENCY = 4;
 
 function asString(value) {
   return value === null || value === undefined ? "" : String(value).trim();
@@ -122,6 +123,7 @@ function flattenCatalogRows(payload) {
         article: asString(article.article),
         name: asString(article.name) || `Артикул ${article.article}`,
         category: asString(article.category_keyword) || "Без категории",
+        product_url: asString(article.product_url),
         shop_id: shop.id,
         shop_name: asString(shop.name) || `Кабинет ${shop.id}`,
         enabled: article.enabled !== false && article.is_active !== false,
@@ -174,6 +176,7 @@ function mergeMpvibeRows(xwayRows, mpvibeRows) {
       article: asString(row.article),
       name: asString(row.name) || `Артикул ${row.article}`,
       category: "Только MPVibe",
+      product_url: "",
       shop_id: null,
       shop_name: row.account_id ? `MPVibe account ${row.account_id}` : "MPVibe",
       enabled: true,
@@ -335,6 +338,9 @@ function buildReportInsights(report, context) {
   if (context.stockNoSpendRows.length) {
     insights.push(`Есть товары с FBO > ${formatNumber(report.config.stock_min_value)} без расхода: ${formatNumber(context.stockNoSpendRows.length)} SKU.`);
   }
+  if (report.limit_issues?.rows?.length) {
+    insights.push(`Лимиты требуют настройки: ${formatNumber(report.limit_issues.rows.length)} SKU с РК ACTIVE или PAUSED.`);
+  }
   if (!report.sources.mpvibe.available) {
     insights.push("MPVibe сейчас недоступен, рекомендации по остаткам строятся по XWAY и требуют последующей сверки.");
   }
@@ -369,6 +375,153 @@ function limitUsage(row) {
   return {
     spend: spendLimit !== null && spendLimit > 0 && spendToday !== null ? (spendToday / spendLimit) * 100 : null,
     budget: budgetLimit !== null && budgetLimit > 0 && budgetToday !== null ? (budgetToday / budgetLimit) * 100 : null,
+  };
+}
+
+function positiveLimit(value) {
+  const numeric = asNumber(value);
+  return numeric !== null && numeric > 0 ? numeric : null;
+}
+
+function nonNegativeMetric(value) {
+  const numeric = asNumber(value);
+  return numeric !== null && numeric >= 0 ? numeric : null;
+}
+
+function sumCampaignValues(states, field, positiveOnly = false) {
+  const values = (states || [])
+    .map((state) => (positiveOnly ? positiveLimit(state?.[field]) : nonNegativeMetric(state?.[field])))
+    .filter((value) => value !== null);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+}
+
+function isSpendLimitConfigured(state) {
+  return Boolean(state?.spend_limit_active) && positiveLimit(state?.spend_limit) !== null;
+}
+
+function isBudgetRuleConfigured(state) {
+  return Boolean(state?.budget_rule_active) && positiveLimit(state?.budget_limit) !== null;
+}
+
+function isLimitCheckCampaignState(state) {
+  const status = asString(state?.status_code).toUpperCase();
+  return status === "ACTIVE" || status === "PAUSED";
+}
+
+function activeLimitCampaignLabel(state) {
+  const label = asString(state?.short_label || state?.label || state?.key) || "РК";
+  const status = asString(state?.status_label || state?.status_code);
+  return status ? `${label} (${status})` : label;
+}
+
+function buildLimitSetupRow(row, campaignStates) {
+  const activeStates = (campaignStates || []).filter(isLimitCheckCampaignState);
+  if (!activeStates.length) {
+    return null;
+  }
+  const spendLimitConfiguredCount = activeStates.filter(isSpendLimitConfigured).length;
+  const budgetRuleConfiguredCount = activeStates.filter(isBudgetRuleConfigured).length;
+  const missingSpendLimit = spendLimitConfiguredCount < activeStates.length;
+  const missingBudgetRule = budgetRuleConfiguredCount < activeStates.length;
+  return {
+    ...row,
+    active_campaigns: activeStates.length,
+    active_campaign_labels: activeStates.map(activeLimitCampaignLabel).join(", "),
+    spend_limit_configured_count: spendLimitConfiguredCount,
+    budget_rule_configured_count: budgetRuleConfiguredCount,
+    missing_spend_limit: missingSpendLimit,
+    missing_budget_rule: missingBudgetRule,
+    issue_count: Number(missingSpendLimit) + Number(missingBudgetRule),
+    spend_limit: sumCampaignValues(activeStates, "spend_limit", true),
+    spend_spent_today: sumCampaignValues(activeStates, "spend_spent_today"),
+    budget_limit: sumCampaignValues(activeStates, "budget_limit", true),
+    budget_spent_today: sumCampaignValues(activeStates, "budget_spent_today"),
+  };
+}
+
+function limitIssueLabel(row) {
+  const labels = [];
+  if (row.missing_spend_limit) {
+    labels.push("нет лимита расхода");
+  }
+  if (row.missing_budget_rule) {
+    labels.push("нет бюджета/пополнения");
+  }
+  return labels.join("; ") || "лимиты заданы";
+}
+
+function limitSetupLabel(configured, total, limit, spent) {
+  const status = configured >= total ? `${formatNumber(configured)}/${formatNumber(total)} задано` : `${formatNumber(configured)}/${formatNumber(total)} задано`;
+  const amount = limit !== null ? `лимит ${formatMoney(limit)}` : "лимит не задан";
+  const spentLabel = spent !== null ? `сегодня ${formatMoney(spent)}` : "";
+  return [status, amount, spentLabel].filter(Boolean).join("; ");
+}
+
+async function buildLimitIssuesReport(env, rows, range, options = {}) {
+  const candidates = rows.filter((row) => row.source === "xway" && ((asNumber(row.active_campaigns) ?? 0) > 0 || (asNumber(row.paused_campaigns) ?? 0) > 0));
+  if (!candidates.length) {
+    return {
+      rows: [],
+      warnings: [],
+      totals: {
+        candidate_rows: 0,
+        checked_rows: 0,
+        failed_rows: 0,
+        missing_spend_limit_rows: 0,
+        missing_budget_rule_rows: 0,
+      },
+    };
+  }
+
+  const detailResponse = await collectCatalogProductDetails(env, {
+    productRefs: candidates.map((row) => row.ref),
+    start: range.start,
+    end: range.end,
+    forceRefresh: Boolean(options.forceRefresh),
+    includeCampaignDetails: true,
+    includeBestTime: false,
+    concurrency: clampInteger(env.PACHKA_REPORT_LIMIT_DETAILS_CONCURRENCY, DEFAULT_LIMIT_DETAILS_CONCURRENCY, 1, 8),
+  });
+  const detailsByRef = new Map(
+    (detailResponse.rows || [])
+      .filter((row) => !row.errors?.campaign_details && Array.isArray(row.campaign_states))
+      .map((row) => [row.product_ref, row.campaign_states]),
+  );
+  const checkedRows = [];
+  for (const row of candidates) {
+    const campaignStates = detailsByRef.get(row.ref);
+    if (!campaignStates) {
+      continue;
+    }
+    const setupRow = buildLimitSetupRow(row, campaignStates);
+    if (setupRow) {
+      checkedRows.push(setupRow);
+    }
+  }
+  const issueRows = checkedRows
+    .filter((row) => row.missing_spend_limit || row.missing_budget_rule)
+    .sort((left, right) => {
+      const issueResult = (right.issue_count ?? 0) - (left.issue_count ?? 0);
+      if (issueResult) {
+        return issueResult;
+      }
+      return (asNumber(right.spend) ?? 0) - (asNumber(left.spend) ?? 0);
+    });
+  const failedRows = Math.max(0, candidates.length - detailsByRef.size);
+  const warnings = [];
+  if (failedRows > 0) {
+    warnings.push(`Не удалось проверить лимиты для ${formatNumber(failedRows)} SKU с РК ACTIVE или PAUSED.`);
+  }
+  return {
+    rows: issueRows,
+    warnings,
+    totals: {
+      candidate_rows: candidates.length,
+      checked_rows: checkedRows.length,
+      failed_rows: failedRows,
+      missing_spend_limit_rows: issueRows.filter((row) => row.missing_spend_limit).length,
+      missing_budget_rule_rows: issueRows.filter((row) => row.missing_budget_rule).length,
+    },
   };
 }
 
@@ -616,6 +769,8 @@ function buildAiReportContext(report, env, context) {
       spend: roundedNumber(report.totals.spend, 0),
       mpvibe_only_rows: report.totals.mpvibe_only_rows,
       zero_spend_stock_rows: report.totals.zero_spend_stock_rows,
+      limit_issue_rows: report.limit_issues?.rows?.length ?? 0,
+      limit_checked_rows: report.limit_issues?.totals?.checked_rows ?? 0,
       total_metrics: compactStats(context.total),
     },
     aggregates: {
@@ -1498,6 +1653,92 @@ function buildReportFileName(report) {
   return `xway-report-${report.range.end}.md`;
 }
 
+function buildLimitReportFileName(report) {
+  return `xway-limit-issues-${report.range.end}.md`;
+}
+
+function buildLimitIssuesMarkdown(report, env) {
+  const prefix = asString(env.PACHKA_REPORT_MESSAGE_PREFIX) || "Ежедневный отчет XWAY";
+  const limitIssues = report.limit_issues || { rows: [], warnings: [], totals: {} };
+  const totals = limitIssues.totals || {};
+  const rows = limitIssues.rows || [];
+  const lines = [
+    `# ${prefix}: лимиты и пополнения`,
+    "",
+    `Период: ${report.range.start} - ${report.range.end}`,
+    `Сформировано: ${report.generated_at}`,
+    "",
+    "## Сводка",
+    "",
+    markdownTable(
+      ["Метрика", "Значение"],
+      [
+        ["SKU с РК ACTIVE или PAUSED", formatNumber(totals.candidate_rows)],
+        ["Проверено по детальным данным", formatNumber(totals.checked_rows)],
+        ["SKU с проблемами", formatNumber(rows.length)],
+        ["Без лимита расхода", formatNumber(totals.missing_spend_limit_rows)],
+        ["Без бюджета / пополнения", formatNumber(totals.missing_budget_rule_rows)],
+        ["Не проверено", formatNumber(totals.failed_rows)],
+      ],
+    ),
+  ];
+  if (limitIssues.warnings?.length) {
+    lines.push("");
+    lines.push("## Предупреждения");
+    lines.push("");
+    limitIssues.warnings.forEach((warning) => lines.push(`- ${warning}`));
+  }
+  lines.push("");
+  lines.push("## Артикулы без части лимитов");
+  lines.push("");
+  lines.push(markdownTable(
+    ["#", "Артикул", "Товар", "Кабинет", "Проблема", "РК к проверке", "Лимит расхода", "Бюджет / пополн.", "Расход периода", "Заказы", "FBO XWAY", "Ссылка"],
+    rows.map((row, index) => [
+      String(index + 1),
+      row.article,
+      shortName(row.name, 84),
+      row.shop_name,
+      limitIssueLabel(row),
+      `${formatNumber(row.active_campaigns)} (${row.active_campaign_labels || "-"})`,
+      limitSetupLabel(row.spend_limit_configured_count, row.active_campaigns, row.spend_limit, row.spend_spent_today),
+      limitSetupLabel(row.budget_rule_configured_count, row.active_campaigns, row.budget_limit, row.budget_spent_today),
+      formatMoney(row.spend),
+      formatNumber(row.orders_total),
+      formatNumber(row.stock_xway),
+      row.product_url || "-",
+    ]),
+  ));
+  lines.push("");
+  lines.push("---");
+  lines.push(`Источник: ${asString(env.PACHKA_REPORT_DASHBOARD_URL) || "https://xway-bt4.pages.dev/drr-analytics"}`);
+  return lines.join("\n");
+}
+
+function buildLimitIssuesMessage(report) {
+  const rows = report.limit_issues?.rows || [];
+  const totals = report.limit_issues?.totals || {};
+  return `Отдельный файл по лимитам XWAY: ${formatNumber(rows.length)} SKU требуют настройки. Без лимита расхода: ${formatNumber(totals.missing_spend_limit_rows)}, без бюджета/пополнения: ${formatNumber(totals.missing_budget_rule_rows)}.`;
+}
+
+function buildLimitIssuesArtifact(report, env) {
+  if (!report.limit_issues?.rows?.length) {
+    return null;
+  }
+  const markdown = buildLimitIssuesMarkdown(report, env);
+  return {
+    message: buildLimitIssuesMessage(report),
+    markdown,
+    file: {
+      name: buildLimitReportFileName(report),
+      type: "text/markdown; charset=utf-8",
+      size: new TextEncoder().encode(markdown).length,
+    },
+    rows: report.limit_issues.rows,
+    totals: report.limit_issues.totals,
+    warnings: report.limit_issues.warnings,
+  };
+}
+
 function buildPachkaMarkdown(report, env, context = null, aiAnalysis = null) {
   const prefix = asString(env.PACHKA_REPORT_MESSAGE_PREFIX) || "Ежедневный отчет XWAY";
   const stockThreshold = report.config?.stock_min_value ?? DEFAULT_STOCK_MIN_VALUE;
@@ -1521,6 +1762,7 @@ function buildPachkaMarkdown(report, env, context = null, aiAnalysis = null) {
         ["SKU XWAY", formatNumber(report.totals.xway_rows)],
         ["MPVibe-only FBO", formatNumber(report.totals.mpvibe_only_rows)],
         [`Остатки > ${formatNumber(stockThreshold)} без расхода`, formatNumber(report.totals.zero_spend_stock_rows)],
+        ["SKU без части лимитов", formatNumber(report.limit_issues?.rows?.length ?? 0)],
         ["MPVibe", report.sources.mpvibe.available ? "доступен" : "недоступен"],
       ],
     ),
@@ -1663,6 +1905,23 @@ export async function buildPachkaReport(env, options = {}) {
   const stockNoSpend = topRows(rows, limit, (row) => hasReportableStock(row) && (row.spend ?? 0) === 0, stockSignal);
   const mpvibeOnlyStock = topRows(rows, limit, (row) => row.source === "mpvibe" && hasReportableStock(row), stockSignal);
   const recommendationContext = buildRecommendationContext(rows, stockMinValue);
+  let limitIssues = {
+    rows: [],
+    warnings: [],
+    totals: {
+      candidate_rows: 0,
+      checked_rows: 0,
+      failed_rows: 0,
+      missing_spend_limit_rows: 0,
+      missing_budget_rule_rows: 0,
+    },
+  };
+  try {
+    limitIssues = await buildLimitIssuesReport(env, rows, range, options);
+    limitIssues.warnings.forEach((warning) => warnings.push(`Лимиты: ${warning}`));
+  } catch (error) {
+    warnings.push(`Лимиты: ${error instanceof Error ? error.message : "не удалось проверить настройки лимитов"}`);
+  }
   const report = {
     ok: true,
     generated_at: new Date().toISOString(),
@@ -1683,12 +1942,14 @@ export async function buildPachkaReport(env, options = {}) {
     top_drr: topDrr,
     stock_no_spend: stockNoSpend,
     mpvibe_only_stock: mpvibeOnlyStock,
+    limit_issues: limitIssues,
     config: { ...config, days: range.days, limit, stock_min_value: stockMinValue },
   };
   const aiAnalysis = await buildAiReportRecommendations(env, report, recommendationContext, options);
   const markdown = buildPachkaMarkdown(report, env, recommendationContext, aiAnalysis);
   const fileName = buildReportFileName(report);
   const fileSize = new TextEncoder().encode(markdown).length;
+  const limitIssuesArtifact = buildLimitIssuesArtifact(report, env);
   return {
     ...report,
     ai_recommendations: publicAiSummary(aiAnalysis),
@@ -1699,6 +1960,7 @@ export async function buildPachkaReport(env, options = {}) {
       type: "text/markdown; charset=utf-8",
       size: fileSize,
     },
+    limit_report: limitIssuesArtifact,
   };
 }
 
@@ -1814,12 +2076,16 @@ export async function sendPachkaReport(env) {
     throw new Error("Pachka is not configured. Set PACHKA_ACCESS_TOKEN and PACHKA_ENTITY_ID.");
   }
   const file = await uploadPachkaMarkdownFile(token, report);
+  const limitFile = report.limit_report ? await uploadPachkaMarkdownFile(token, report.limit_report) : null;
   const pachka = await sendPachkaMessage(env, report.message, [file]);
+  const limitPachka = report.limit_report && limitFile ? await sendPachkaMessage(env, report.limit_report.message, [limitFile]) : null;
   return {
     ok: true,
     sent_at: new Date().toISOString(),
     report,
     file,
+    limit_file: limitFile,
     pachka,
+    limit_pachka: limitPachka,
   };
 }

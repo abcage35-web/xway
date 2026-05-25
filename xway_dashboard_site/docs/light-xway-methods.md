@@ -31,6 +31,29 @@
 - `/api/catalog-product-details` с `campaign_details=0&best_time=1` - только лучшие часы заказов.
 - `/api/catalog-chart` - абсолютные дневные метрики; `include_campaign_types=1` добавлять только когда нужна разбивка по типам РК.
 - `/api/catalog-issues` - диагностика ошибок; внутри должен использоваться ограниченный `status-pause-history`, без полной пагинации.
+- `/api/catalog-auto-exclusions` - проверка настройки автоисключения по каталогу без загрузки полного товара.
+
+## Каталог/товар: лимиты и автоисключение
+
+При правках в каталоге, карточке товара, ДРР-аналитике или уведомлениях по лимитам нужно ссылаться на эти источники данных:
+
+- Список РК товара берется из `productStata(shopId, productId)` и массива `campaign_wb`.
+- Для проверки лимитов расхода используйте `campaign.limits_by_period` и `product.spend_limits` из focused-деталей, а не полный `/api/products?campaign_mode=full`.
+- Для проверки бюджета и автопополнений используйте `campaign.budget_rule` / `campaign.budget_rule_config` и focused-метод `/api/ai/campaign-budget-history`.
+- Для расписаний и лучших часов используйте `campaignSchedule(shopId, productId, campaignId)` / `/api/ai/campaign-schedules`.
+- Для логов активности и вылетов лимитов используйте ограниченный `campaignStatusPauseHistory(..., limit)` и/или `campaignStatusMpHistory(..., offset, limit)`. Полные `*HistoryFull` нельзя вызывать в массовом обновлении каталога.
+- Для автоисключения используйте только `campaignAutoExcludeRule(shopId, productId, campaignId)`, который ходит в XWAY:
+  `/api/adv/shop/{shopId}/product/{productId}/campaign/{campaignId}/retrieve-ac-exclude-rule`.
+
+Важно: `ac_place_auto_rule` из `productStata` не является правилом автоисключения кластеров. Это настройки удержания места/ставки, поэтому по нему нельзя делать вывод "автоисключение включено/выключено".
+
+Правило автоисключения считается настроенным так:
+
+- `active === true` и `fixed === false` - включено "все незафиксированные", правило настроено.
+- `active === true` и `fixed === true` - правило настроено только если есть хотя бы одно условие: `boost`, `efficiency`, `popularity`, `popularity_above`, `ctr`, `cpc` или фразы в `queries_to_exclude`.
+- `active !== true`, пустой ответ или ошибка чтения - правило считается выключенным; отдельный статус "ошибка чтения" в витрине не показываем.
+
+В массовых проверках по каталогу проверяются только РК в состоянии `ACTIVE` или `PAUSED`; `FROZEN` не проверяется. Для автоисключения также пропускаются CPC-кампании, потому что в XWAY это правило относится к CPM-кластерам.
 
 ## Текущие дефолты
 

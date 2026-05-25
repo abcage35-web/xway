@@ -532,6 +532,7 @@ export interface PachkaReportRow {
   source: "xway" | "mpvibe";
   article: string;
   name: string;
+  product_url?: string | null;
   shop_id: number | null;
   shop_name: string;
   stock_xway: number | null;
@@ -544,6 +545,37 @@ export interface PachkaReportRow {
   drr: number | null;
   campaigns: number;
   active_campaigns: number;
+}
+
+export interface PachkaLimitIssueRow extends PachkaReportRow {
+  active_campaign_labels?: string | null;
+  spend_limit_configured_count: number;
+  budget_rule_configured_count: number;
+  missing_spend_limit: boolean;
+  missing_budget_rule: boolean;
+  issue_count: number;
+  spend_limit: number | null;
+  spend_spent_today: number | null;
+  budget_limit: number | null;
+  budget_spent_today: number | null;
+}
+
+export interface PachkaMarkdownArtifact {
+  message: string;
+  markdown: string;
+  file: {
+    name: string;
+    type: string;
+    size: number;
+  };
+}
+
+export interface PachkaLimitIssueTotals {
+  candidate_rows: number;
+  checked_rows: number;
+  failed_rows: number;
+  missing_spend_limit_rows: number;
+  missing_budget_rule_rows: number;
 }
 
 export interface PachkaReportResponse {
@@ -570,6 +602,11 @@ export interface PachkaReportResponse {
   top_drr: PachkaReportRow[];
   stock_no_spend: PachkaReportRow[];
   mpvibe_only_stock: PachkaReportRow[];
+  limit_issues?: {
+    rows: PachkaLimitIssueRow[];
+    warnings: string[];
+    totals: PachkaLimitIssueTotals;
+  };
   message: string;
   markdown: string;
   file: {
@@ -577,6 +614,11 @@ export interface PachkaReportResponse {
     type: string;
     size: number;
   };
+  limit_report?: (PachkaMarkdownArtifact & {
+    rows: PachkaLimitIssueRow[];
+    warnings: string[];
+    totals: PachkaLimitIssueTotals;
+  }) | null;
   config: {
     enabled: boolean;
     token_configured: boolean;
@@ -602,7 +644,14 @@ export interface PachkaReportSendResponse {
     file_type: string;
     size: number;
   } | null;
+  limit_file?: {
+    key: string;
+    name: string;
+    file_type: string;
+    size: number;
+  } | null;
   pachka: unknown;
+  limit_pachka?: unknown;
 }
 
 export interface CatalogArticleCampaignTypeMetrics {
@@ -733,6 +782,60 @@ export interface CatalogProductDetailsResponse {
   errors: Array<{ product: string; source: string; error: string }>;
 }
 
+export interface CatalogAutoExclusionRule {
+  active: boolean | null;
+  fixed: boolean | null;
+  days: number | null;
+  boost: number | null;
+  efficiency: number | null;
+  popularity: number | null;
+  popularity_above: number | null;
+  ctr: number | null;
+  ctr_view: number | null;
+  cpc: number | null;
+  cpc_view: number | null;
+  queries_to_exclude: string[];
+  queries_not_to_exclude: string[];
+}
+
+export interface CatalogAutoExclusionCampaign {
+  id: number;
+  name: string | null;
+  label: string;
+  payment_type: "cpm" | "cpc" | null;
+  status_code: string | null;
+  status_label: string | null;
+  display_status: "active" | "paused" | "freeze" | "muted";
+  place_count_setting: number | null;
+  rule_exists: boolean;
+  configured: boolean;
+  auto_rule: CatalogAutoExclusionRule | null;
+  rule_error?: string | null;
+}
+
+export interface CatalogAutoExclusionRow {
+  product_ref: string;
+  campaigns: CatalogAutoExclusionCampaign[];
+  checkable_campaigns_count: number;
+  configured_count: number;
+  missing_count: number;
+  cpc_skipped_count: number;
+  error?: string | null;
+}
+
+export interface CatalogAutoExclusionsResponse {
+  ok: boolean;
+  generated_at: string;
+  range: DateRange;
+  rows: CatalogAutoExclusionRow[];
+  requested_products: string[];
+  loaded_products_count: number;
+  processed_products_count?: number;
+  remaining_products_count?: number;
+  complete?: boolean;
+  next_cursor?: string | null;
+}
+
 export interface AiChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -822,7 +925,9 @@ export interface CatalogIssuesIssue {
   kind: "budget" | "limit" | "schedule_setup";
   title: string;
   hours: number;
+  max_incident_hours?: number;
   incidents: number;
+  days?: CatalogIssuesIssueDay[];
   orders_ads: number;
   total_orders: number | null;
   drr_overall: number | null;
@@ -830,6 +935,15 @@ export interface CatalogIssuesIssue {
   campaign_ids: number[];
   campaign_labels: string[];
   campaigns: CatalogIssuesIssueCampaign[];
+}
+
+export interface CatalogIssuesIssueDay {
+  day: string;
+  label: string;
+  hours: number;
+  max_incident_hours?: number;
+  incidents: number;
+  estimated_gap: number | null;
 }
 
 export interface CatalogIssuesIssueCampaign {
@@ -841,6 +955,7 @@ export interface CatalogIssuesIssueCampaign {
   status_label: string | null;
   display_status: "active" | "paused" | "freeze" | "muted";
   hours: number;
+  max_incident_hours?: number;
   incidents: number;
   orders_ads: number;
   drr: number | null;

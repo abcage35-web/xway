@@ -291,6 +291,36 @@ body.is-resizing-drr-column {
   max-width: 142px;
 }
 
+.drr-col-limit-issue {
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
+}
+
+.drr-col-limit-activity-issue {
+  width: 300px;
+  min-width: 300px;
+  max-width: 300px;
+}
+
+.drr-col-auto-exclusion-campaign {
+  width: 270px;
+  min-width: 270px;
+  max-width: 270px;
+}
+
+.drr-col-auto-exclusion-rule {
+  width: 230px;
+  min-width: 230px;
+  max-width: 230px;
+}
+
+.drr-col-limit-amount {
+  width: 186px;
+  min-width: 186px;
+  max-width: 186px;
+}
+
 .drr-col-status {
   width: 126px;
   min-width: 126px;
@@ -798,6 +828,75 @@ body.is-resizing-drr-column {
   color: #ff6a7e;
 }
 
+.drr-status-chip.is-warning {
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.13);
+  color: #fbbf24;
+}
+
+.drr-limit-issue-stack {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.drr-limit-activity-cell {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.drr-limit-activity-cell > span,
+.drr-limit-activity-cell > small {
+  display: block;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drr-limit-activity-cell > span {
+  color: var(--color-ink);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.drr-limit-summary {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.drr-limit-summary strong {
+  overflow: hidden;
+  color: var(--color-good);
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drr-limit-summary strong.is-error {
+  color: #ff8fa0;
+}
+
+.drr-limit-summary span {
+  display: block;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 html[data-theme="dark"] .drr-status-chip.is-on {
   border-color: rgba(88, 192, 138, 0.3);
   background: rgba(30, 76, 55, 0.42);
@@ -807,6 +906,12 @@ html[data-theme="dark"] .drr-status-chip.is-error {
   border-color: rgba(255, 106, 126, 0.36);
   background: rgba(76, 29, 44, 0.72);
   color: #ff9aaa;
+}
+
+html[data-theme="dark"] .drr-status-chip.is-warning {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(84, 59, 18, 0.62);
+  color: #ffd166;
 }
 
 @media (max-width: 920px) {

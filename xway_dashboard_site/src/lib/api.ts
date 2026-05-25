@@ -1,8 +1,8 @@
-import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, MpvibeStocksResponse, PachkaReportResponse, PachkaReportSendResponse, ProductsResponse, WbCardsResponse } from "./types";
+import type { AiChatMessage, AiChatResponse, CatalogArticle, CatalogAutoExclusionsResponse, CatalogCampaignState, CatalogChartResponse, CatalogIssuesResponse, CatalogProductDetailRow, CatalogProductDetailsResponse, CatalogResponse, ClusterDetailResponse, MpvibeStocksResponse, PachkaReportResponse, PachkaReportSendResponse, ProductsResponse, WbCardsResponse } from "./types";
 import { readPersistentApiCache, writePersistentApiCache } from "./persistent-api-cache";
 
 export const DEFAULT_ARTICLES = ["44392513", "60149847"];
-const API_RESPONSE_CACHE_VERSION = "v5";
+const API_RESPONSE_CACHE_VERSION = "v6";
 
 function buildBaseUrl(request?: Request) {
   if (request) {
@@ -522,8 +522,11 @@ async function requestCachedJson<T>(
 
   const response = await requestJson<T>(url.toString(), signal, requestOptions);
   if (cacheOptions.shouldWrite?.(response) ?? true) {
-    await writePersistentApiCache(cacheKey, response);
-    await cacheOptions.afterWrite?.(response);
+    void writePersistentApiCache(cacheKey, response)
+      .then(() => cacheOptions.afterWrite?.(response))
+      .catch(() => {
+        // Persistent cache is an optimization only. Rendering should not wait on it.
+      });
   }
   return response;
 }
@@ -835,6 +838,44 @@ export async function fetchCatalogProductDetails(options: {
   return response;
 }
 
+export async function fetchCatalogAutoExclusions(options: {
+  productRefs: string[];
+  start?: string | null;
+  end?: string | null;
+  forceRefresh?: boolean;
+  cursor?: string | null;
+  limitProducts?: number | null;
+  deadlineMs?: number | null;
+  signal?: AbortSignal;
+}) {
+  const url = new URL("/api/catalog-auto-exclusions", window.location.origin);
+  if (options.productRefs.length) {
+    url.searchParams.set("products", options.productRefs.join(","));
+  }
+  appendRange(url.searchParams, options.start, options.end);
+  if (options.cursor) {
+    url.searchParams.set("cursor", options.cursor);
+  }
+  if (options.limitProducts) {
+    url.searchParams.set("limit_products", String(options.limitProducts));
+  }
+  if (options.deadlineMs) {
+    url.searchParams.set("deadline_ms", String(options.deadlineMs));
+  }
+  if (options.forceRefresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return requestCachedJson<CatalogAutoExclusionsResponse>(
+    url,
+    options.signal,
+    { retry503: true, maxAttempts: 3, retryDelayMs: 900 },
+    {
+      namespace: "catalog-auto-exclusions",
+      bypassRead: options.forceRefresh,
+    },
+  );
+}
+
 export async function saveCatalogArticleSnapshots(options: {
   start?: string | null;
   end?: string | null;
@@ -878,6 +919,7 @@ export async function fetchCatalogIssues(options: {
   cursor?: string | null;
   limitProducts?: number | null;
   deadlineMs?: number | null;
+  scope?: "limit_activity" | null;
   signal?: AbortSignal;
 }) {
   const url = new URL("/api/catalog-issues", window.location.origin);
@@ -893,6 +935,9 @@ export async function fetchCatalogIssues(options: {
   }
   if (options.deadlineMs) {
     url.searchParams.set("deadline_ms", String(options.deadlineMs));
+  }
+  if (options.scope) {
+    url.searchParams.set("scope", options.scope);
   }
   return requestCachedJson<CatalogIssuesResponse>(
     url,

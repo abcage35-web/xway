@@ -118,7 +118,45 @@ function catalogCampaignStatusLabel(statusCode) {
   }[normalized] || normalized;
 }
 
-function extractCatalogCampaignStatusCode(rawValue) {
+function splitCatalogPauseReasonTokens(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap(splitCatalogPauseReasonTokens);
+  }
+  if (value && typeof value === "object") {
+    return [
+      ...splitCatalogPauseReasonTokens(value.pause_reasons || []),
+      ...splitCatalogPauseReasonTokens(value.paused_limiter),
+      ...splitCatalogPauseReasonTokens(value.reason),
+      ...splitCatalogPauseReasonTokens(value.status),
+    ];
+  }
+  return String(value || "")
+    .split(/[;,\s/]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function hasCatalogCampaignFreezeSignal(source, statusCode) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return false;
+  }
+  if (source.is_freeze || source.is_frozen || source.frozen || source.freeze) {
+    return true;
+  }
+  const rawStatusText = [source.status_xway, source.status, source.freeze_status].map((value) => String(value || "").toLowerCase()).join(" ");
+  if (/заморож|freeze|frozen/.test(rawStatusText)) {
+    return true;
+  }
+  if (statusCode !== "PAUSED") {
+    return false;
+  }
+  const pausePayload = source.pause_reasons || {};
+  const pauseTokens = splitCatalogPauseReasonTokens(pausePayload);
+  const pausedUser = pausePayload?.paused_user ?? source.paused_user ?? null;
+  return Boolean(pausedUser) || pauseTokens.some((token) => ["user", "manual", "freeze", "frozen"].includes(token) || /замороз/.test(token));
+}
+
+function extractCatalogCampaignStatusCode(rawValue, sourceValue = null) {
   let value = rawValue;
   if (value && typeof value === "object" && !Array.isArray(value)) {
     value = value.status;
@@ -127,16 +165,19 @@ function extractCatalogCampaignStatusCode(rawValue) {
     return null;
   }
   const normalized = String(value).trim().toUpperCase();
+  let statusCode = normalized || null;
   if (["ACTIVE", "АКТИВНА", "АКТИВЕН", "АКТИВНАЯ", "АКТИВНЫЙ"].includes(normalized)) {
-    return "ACTIVE";
+    statusCode = "ACTIVE";
+  } else if (["PAUSED", "PAUSE", "ПАУЗА", "ПРИОСТАНОВЛЕНА", "ПРИОСТАНОВЛЕН", "ОСТАНОВЛЕНА", "ОСТАНОВЛЕН"].includes(normalized)) {
+    statusCode = "PAUSED";
+  } else if (["FROZEN", "FREEZE", "ЗАМОРОЖЕНА", "ЗАМОРОЖЕН", "ЗАМОРОЗКА"].includes(normalized)) {
+    statusCode = "FROZEN";
   }
-  if (["PAUSED", "PAUSE", "ПАУЗА", "ПРИОСТАНОВЛЕНА", "ПРИОСТАНОВЛЕН", "ОСТАНОВЛЕНА", "ОСТАНОВЛЕН"].includes(normalized)) {
-    return "PAUSED";
-  }
-  if (["FROZEN", "FREEZE", "ЗАМОРОЖЕНА", "ЗАМОРОЖЕН", "ЗАМОРОЗКА"].includes(normalized)) {
+  const statusSource = sourceValue && typeof sourceValue === "object" && !Array.isArray(sourceValue) ? sourceValue : rawValue;
+  if (hasCatalogCampaignFreezeSignal(statusSource, statusCode)) {
     return "FROZEN";
   }
-  return normalized || null;
+  return statusCode;
 }
 
 function numberOrNull(value) {
@@ -631,10 +672,6 @@ function normalizeCatalogCampaignLimitSummary(rawValue, campaigns) {
     }
     budgetRuleActive = budgetRuleActive || Boolean(budgetRule.active ?? source.budget_rule_active);
     spendLimitActive = spendLimitActive || Boolean(spendLimit?.active ?? source.spend_limit_active);
-    if ((spendLimit?.limit === null || spendLimit?.limit === undefined) && budgetLimit !== null && budgetLimit > 0) {
-      spendLimits.push(budgetLimit);
-      spendLimitActive = spendLimitActive || Boolean(budgetRule.active ?? source.budget_rule_active);
-    }
   }
 
   return {
@@ -652,10 +689,10 @@ export function normalizeCatalogCampaignStates(raw, extraSources = []) {
   const rows = [];
   for (const key of CATALOG_CAMPAIGN_FIELD_ORDER) {
     const campaigns = catalogCampaignRowsForKey(payload, key, extraSources);
-    const statusSource = campaigns.find((campaign) => extractCatalogCampaignStatusCode(campaign?.status_xway ?? campaign?.status));
+    const statusSource = campaigns.find((campaign) => extractCatalogCampaignStatusCode(campaign?.status_xway ?? campaign?.status, campaign));
     const normalizedCode =
       extractCatalogCampaignStatusCode(payload[key]) ||
-      extractCatalogCampaignStatusCode(statusSource?.status_xway ?? statusSource?.status);
+      extractCatalogCampaignStatusCode(statusSource?.status_xway ?? statusSource?.status, statusSource);
     if (!normalizedCode) {
       continue;
     }
@@ -875,13 +912,14 @@ async function collectCatalogCampaignDetailSources(shopId, products, statMap, cl
 
 async function collectShopCatalog(shop, client, includeExtended, productIds = null, includeAux = true) {
   const shopId = Number(shop.id);
+  const shouldLoadShopDetails = includeExtended || includeAux;
   const [listingResult, shopDetailResult] = await Promise.allSettled([
     client.shopListing(shopId, client.range.current_start, client.range.current_end),
-    client.shopDetails(shopId),
+    shouldLoadShopDetails ? client.shopDetails(shopId) : Promise.resolve({}),
   ]);
 
   const listingError = listingResult.status === "rejected" ? String(listingResult.reason?.message || listingResult.reason || "Unknown error") : null;
-  const shopDetailError = shopDetailResult.status === "rejected" ? String(shopDetailResult.reason?.message || shopDetailResult.reason || "Unknown error") : null;
+  const shopDetailError = shouldLoadShopDetails && shopDetailResult.status === "rejected" ? String(shopDetailResult.reason?.message || shopDetailResult.reason || "Unknown error") : null;
   const listing = listingResult.status === "fulfilled" ? listingResult.value : { list_wo: {}, list_stat: {} };
   const shopDetail = shopDetailResult.status === "fulfilled" ? shopDetailResult.value : {};
   const listWo = listing.list_wo || {};
@@ -1240,14 +1278,13 @@ export async function collectCatalog(env, { start = null, end = null, mode = "co
 
 export async function collectCatalogProductDetails(
   env,
-  { productRefs = [], start = null, end = null, forceRefresh = false, includeCampaignDetails = true, includeBestTime = true } = {},
+  { productRefs = [], start = null, end = null, forceRefresh = false, includeCampaignDetails = true, includeBestTime = true, concurrency = CATALOG_PRODUCT_AUX_CONCURRENCY } = {},
 ) {
   const client = new XwayApiClient(env, { start, end, forceRefresh });
   const refs = catalogProductRefsFromInput(productRefs);
-  const rows = [];
   const errors = [];
 
-  for (const { productRef, shopId, productId } of refs) {
+  const rows = await mapWithConcurrency(refs, concurrency, async ({ productRef, shopId, productId }) => {
     const [stataResult, bestTimeResult] = await Promise.allSettled([
       includeCampaignDetails ? client.productStata(shopId, productId) : Promise.resolve(null),
       includeBestTime ? client.productOrdersHeatMap(shopId, productId) : Promise.resolve(null),
@@ -1282,14 +1319,14 @@ export async function collectCatalogProductDetails(
       }
     }
 
-    rows.push({
+    return {
       product_ref: productRef,
       campaign_states: campaignStates,
       campaign_type_totals: campaignTypeTotals,
       best_order_time: bestOrderTime,
       errors: rowErrors,
-    });
-  }
+    };
+  });
 
   return {
     ok: true,
