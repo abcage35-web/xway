@@ -968,6 +968,13 @@ function isLimitCheckCampaignState(state: CatalogCampaignState) {
   return status === "ACTIVE" || status === "PAUSED";
 }
 
+function isAutoExclusionCheckCampaignState(state: CatalogCampaignState) {
+  if (!isLimitCheckCampaignState(state)) {
+    return false;
+  }
+  return String(state.key || "").toLowerCase() !== "cpc";
+}
+
 function chunkItems<T>(items: T[], size: number) {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
@@ -1816,7 +1823,13 @@ export function DrrAnalyticsPage() {
         .map((row) => row.ref),
     [baseRows],
   );
-  const autoExclusionRefs = limitDetailRefs;
+  const autoExclusionRefs = useMemo(
+    () =>
+      baseRows
+        .filter((row) => row.source === "xway" && row.campaignStates.some(isAutoExclusionCheckCampaignState))
+        .map((row) => row.ref),
+    [baseRows],
+  );
 
   const topDrrRows = useMemo<DrrAnalyticsRow[]>(() => {
     return [...rows]
@@ -3836,7 +3849,7 @@ export function DrrAnalyticsPage() {
             {autoExclusionsLoading ? (
               <div className="mb-4 rounded-2xl border border-sky-300/40 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-100">
                 <div>
-                  Проверяю автоисключение: {formatNumber(autoExclusionsProgress.loaded)} / {formatNumber(autoExclusionsProgress.total)} товаров с РК ACTIVE или PAUSED
+                  Проверяю автоисключение: {formatNumber(autoExclusionsProgress.loaded)} / {formatNumber(autoExclusionsProgress.total)} товаров с CPM РК ACTIVE или PAUSED
                 </div>
                 <div className="mt-1 text-xs font-semibold text-sky-100/80">
                   Уже выведено: без настройки {formatNumber(autoExclusionIssueRows.length)} · настроено {formatNumber(autoExclusionConfiguredRows.length)} · CPC пропущено {formatNumber(autoExclusionSkippedCpcCount)}

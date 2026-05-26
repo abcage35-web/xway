@@ -5,10 +5,10 @@ const CATALOG_CAMPAIGN_FIELD_ORDER = ["unified", "manual_search", "manual_recom"
 const CATALOG_SCHEDULE_WEEKDAY_KEYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const CATALOG_SCHEDULE_TOTAL_SLOTS = 168;
 const CATALOG_CAMPAIGN_FIELD_META = {
-  unified: { label: "Единая ставка", short_label: "Ед. CPM" },
-  manual_search: { label: "Поиск", short_label: "CPM Поиск" },
-  manual_recom: { label: "Рекомендации", short_label: "CPM Реком" },
-  cpc: { label: "Оплата за клики", short_label: "CPC" },
+  unified: { label: "Единая ставка", short_label: "Единая ставка" },
+  manual_search: { label: "Ручная ставка: поиск", short_label: "Ручная ставка: поиск" },
+  manual_recom: { label: "Ручная ставка: рекомендации", short_label: "Ручная ставка: рекомендации" },
+  cpc: { label: "Оплата за клики", short_label: "Оплата за клики" },
 };
 const SHOP_DETAIL_SAFE_FIELDS = [
   "id",
@@ -90,9 +90,9 @@ const CATALOG_CHART_CAMPAIGN_TYPE_CONCURRENCY = 2;
 const CATALOG_CHART_DEFAULT_DEADLINE_MS = 22000;
 const CATALOG_CHART_MIN_PROCESSED_BEFORE_DEADLINE = 1;
 const CATALOG_CHART_CAMPAIGN_TYPE_META = {
-  "cpm-manual": { label: "CPM · Ручная", color: "#2ea36f", order: 1 },
-  "cpm-unified": { label: "CPM · Единая", color: "#4b7bff", order: 2 },
-  cpc: { label: "CPC", color: "#8b64f6", order: 3 },
+  "cpm-manual": { label: "Ручная ставка", color: "#2ea36f", order: 1 },
+  "cpm-unified": { label: "Единая ставка", color: "#4b7bff", order: 2 },
+  cpc: { label: "Оплата за клики", color: "#8b64f6", order: 3 },
 };
 
 function snapshotFields(payload, fields) {

@@ -35,10 +35,10 @@ const productsCache = new Map();
 
 const CATALOG_CAMPAIGN_FIELD_ORDER = ["unified", "manual_search", "manual_recom", "cpc"];
 const CATALOG_CAMPAIGN_FIELD_META = {
-  unified: { label: "Единая ставка", short_label: "Ед. CPM" },
-  manual_search: { label: "Поиск", short_label: "CPM Поиск" },
-  manual_recom: { label: "Рекомендации", short_label: "CPM Реком" },
-  cpc: { label: "Оплата за клики", short_label: "CPC" },
+  unified: { label: "Единая ставка", short_label: "Единая ставка" },
+  manual_search: { label: "Ручная ставка: поиск", short_label: "Ручная ставка: поиск" },
+  manual_recom: { label: "Ручная ставка: рекомендации", short_label: "Ручная ставка: рекомендации" },
+  cpc: { label: "Оплата за клики", short_label: "Оплата за клики" },
 };
 
 function getCached(key) {

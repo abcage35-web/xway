@@ -82,15 +82,15 @@ CATALOG_CAMPAIGN_FIELD_ORDER: Tuple[str, ...] = (
     "cpc",
 )
 CATALOG_CAMPAIGN_FIELD_META: Dict[str, Dict[str, str]] = {
-    "unified": {"label": "Единая ставка", "short_label": "Ед. CPM"},
-    "manual_search": {"label": "Поиск", "short_label": "CPM Поиск"},
-    "manual_recom": {"label": "Рекомендации", "short_label": "CPM Реком"},
-    "cpc": {"label": "Оплата за клики", "short_label": "CPC"},
+    "unified": {"label": "Единая ставка", "short_label": "Единая ставка"},
+    "manual_search": {"label": "Ручная ставка: поиск", "short_label": "Ручная ставка: поиск"},
+    "manual_recom": {"label": "Ручная ставка: рекомендации", "short_label": "Ручная ставка: рекомендации"},
+    "cpc": {"label": "Оплата за клики", "short_label": "Оплата за клики"},
 }
 CATALOG_CHART_CAMPAIGN_TYPE_META: Dict[str, Dict[str, Any]] = {
-    "cpm-manual": {"label": "CPM · Ручная", "color": "#2ea36f", "order": 1},
-    "cpm-unified": {"label": "CPM · Единая", "color": "#4b7bff", "order": 2},
-    "cpc": {"label": "CPC", "color": "#8b64f6", "order": 3},
+    "cpm-manual": {"label": "Ручная ставка", "color": "#2ea36f", "order": 1},
+    "cpm-unified": {"label": "Единая ставка", "color": "#4b7bff", "order": 2},
+    "cpc": {"label": "Оплата за клики", "color": "#8b64f6", "order": 3},
 }
 SHOP_DETAIL_SAFE_FIELDS: Tuple[str, ...] = (
     "id",
