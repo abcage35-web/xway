@@ -1,10 +1,11 @@
 import { asFloat, resolveRange } from "../utils.js";
 
-const DEFAULT_CHART_CHUNK_SIZE = 12;
+const DEFAULT_CHART_CHUNK_SIZE = 25;
 const MAX_GROUP_ROWS_DEFAULT = 5000;
 const DEFAULT_RETRY_ROUNDS = 3;
 const DEFAULT_RETRY_DELAY_MS = 350;
 const DEFAULT_CHART_DEADLINE_MS = 18000;
+const DEFAULT_AD_METRICS_DEADLINE_MS = 55000;
 const GROUP_DIMENSIONS = new Set(["day", "category", "article", "shop", "campaign_type"]);
 
 async function readJsonRequest(request) {
@@ -99,6 +100,17 @@ function clampInteger(value, fallback, min, max) {
     return fallback;
   }
   return Math.max(min, Math.min(numeric, max));
+}
+
+function deadlineReached(deadlineAt) {
+  return deadlineAt !== null && Date.now() >= deadlineAt;
+}
+
+function remainingDeadlineMs(deadlineAt, fallback) {
+  if (deadlineAt === null) {
+    return fallback;
+  }
+  return Math.max(1000, Math.min(fallback, deadlineAt - Date.now() - 250));
 }
 
 function catalogArticles(catalog) {
@@ -247,15 +259,25 @@ function emptyMeta(productRef) {
   };
 }
 
-async function collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh, { chunkSize = DEFAULT_CHART_CHUNK_SIZE, retryDelayMs = 0 } = {}) {
+async function collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh, { chunkSize = DEFAULT_CHART_CHUNK_SIZE, retryDelayMs = 0, deadlineAt = null } = {}) {
   const chunks = chunk(productRefs, chunkSize);
   const payloads = [];
   const errors = [];
+  let hitDeadline = false;
 
   for (const [index, refs] of chunks.entries()) {
+    if (deadlineReached(deadlineAt)) {
+      hitDeadline = true;
+      errors.push({
+        products: chunks.slice(index).flat(),
+        error: "AI ad metrics deadline reached before loading remaining products.",
+      });
+      break;
+    }
     if (index > 0 && retryDelayMs > 0) {
       await sleep(retryDelayMs);
     }
+    const requestDeadlineMs = remainingDeadlineMs(deadlineAt, DEFAULT_CHART_DEADLINE_MS);
     try {
       payloads.push(
         await fetchSelfJson(context, "/api/catalog-chart", {
@@ -265,7 +287,7 @@ async function collectChartChunks(context, productRefs, range, includeCampaignTy
           include_campaign_types: includeCampaignTypes ? "1" : "",
           force_refresh: forceRefresh ? "1" : "",
           limit_products: chunkSize,
-          deadline_ms: DEFAULT_CHART_DEADLINE_MS,
+          deadline_ms: requestDeadlineMs,
         }),
       );
     } catch (error) {
@@ -276,7 +298,7 @@ async function collectChartChunks(context, productRefs, range, includeCampaignTy
     }
   }
 
-  return { payloads, errors, chunk_count: chunks.length, requested_count: productRefs.length, chunk_size: chunkSize };
+  return { payloads, errors, chunk_count: chunks.length, requested_count: productRefs.length, chunk_size: chunkSize, deadline_reached: hitDeadline };
 }
 
 function loadedProductRefs(payloads) {
@@ -305,12 +327,15 @@ async function collectChartWithRetries(context, productRefs, range, includeCampa
   const retryFailed = options.retryFailed !== false;
   const maxRetryRounds = retryFailed ? clampInteger(options.maxRetryRounds, DEFAULT_RETRY_ROUNDS, 0, 5) : 0;
   const retryDelayMs = clampInteger(options.retryDelayMs, DEFAULT_RETRY_DELAY_MS, 0, 1500);
+  const deadlineAt = options.deadlineAt ?? null;
   const initial = await collectChartChunks(context, productRefs, range, includeCampaignTypes, forceRefresh, {
     chunkSize: initialChunkSize,
     retryDelayMs: 0,
+    deadlineAt,
   });
   const payloads = [...initial.payloads];
   const errors = [...initial.errors];
+  let hitDeadline = initial.deadline_reached;
   const attempts = [
     {
       round: 0,
@@ -321,19 +346,26 @@ async function collectChartWithRetries(context, productRefs, range, includeCampa
       remaining_count: missingProductRefs(productRefs, payloads).length,
       transport_error_count: initial.errors.length,
       source_error_count: initial.payloads.reduce((sum, payload) => sum + (payload.errors || []).length, 0),
+      deadline_reached: initial.deadline_reached,
     },
   ];
 
   let remaining = missingProductRefs(productRefs, payloads);
-  for (let round = 1; round <= maxRetryRounds && remaining.length; round += 1) {
+  for (let round = 1; round <= maxRetryRounds && remaining.length && !deadlineReached(deadlineAt); round += 1) {
     await sleep(retryDelayMs);
+    if (deadlineReached(deadlineAt)) {
+      hitDeadline = true;
+      break;
+    }
     const chunkSize = retryChunkSize(initialChunkSize, round);
     const retry = await collectChartChunks(context, remaining, range, includeCampaignTypes, forceRefresh, {
       chunkSize,
       retryDelayMs,
+      deadlineAt,
     });
     payloads.push(...retry.payloads);
     errors.push(...retry.errors);
+    hitDeadline = hitDeadline || retry.deadline_reached;
     remaining = missingProductRefs(productRefs, payloads);
     attempts.push({
       round,
@@ -344,7 +376,11 @@ async function collectChartWithRetries(context, productRefs, range, includeCampa
       remaining_count: remaining.length,
       transport_error_count: retry.errors.length,
       source_error_count: retry.payloads.reduce((sum, payload) => sum + (payload.errors || []).length, 0),
+      deadline_reached: retry.deadline_reached,
     });
+  }
+  if (remaining.length && deadlineReached(deadlineAt)) {
+    hitDeadline = true;
   }
 
   return {
@@ -357,6 +393,7 @@ async function collectChartWithRetries(context, productRefs, range, includeCampa
     max_retry_rounds: maxRetryRounds,
     retry_delay_ms: retryDelayMs,
     remaining_product_refs: remaining,
+    deadline_reached: hitDeadline,
   };
 }
 
@@ -440,17 +477,21 @@ function aggregateRows({ chartPayloads, metaByRef, groupBy, rowLimit, includeCam
 }
 
 export async function collectAiAdMetrics(context) {
+  const startedAt = Date.now();
   const requestBody = await readJsonRequest(context.request);
   const range = resolveRange(requestBody.start, requestBody.end, new Date(), 30);
   const forceRefresh = Boolean(requestBody.refresh);
   const groupBy = normalizeGroupBy(requestBody.group_by || requestBody.slices);
-  const includeCampaignTypes = requestBody.include_campaign_types !== false || groupBy.includes("campaign_type");
+  const includeCampaignTypes = requestBody.include_campaign_types === true || groupBy.includes("campaign_type");
+  const deadlineMs = clampInteger(requestBody.deadline_ms, DEFAULT_AD_METRICS_DEADLINE_MS, 5000, 115000);
+  const deadlineAt = startedAt + deadlineMs;
   const rowLimit = Math.max(1, Math.min(Number.parseInt(String(requestBody.row_limit || MAX_GROUP_ROWS_DEFAULT), 10) || MAX_GROUP_ROWS_DEFAULT, 20000));
   const retryOptions = {
     retryFailed: requestBody.retry_failed !== false,
     maxRetryRounds: requestBody.max_retry_rounds,
     retryDelayMs: requestBody.retry_delay_ms,
     chunkSize: requestBody.chunk_size,
+    deadlineAt,
   };
   const filters = {
     categories: toList(requestBody.categories, requestBody.category),
@@ -481,6 +522,7 @@ export async function collectAiAdMetrics(context) {
         group_by: groupBy,
         include_campaign_types: includeCampaignTypes,
         retry_failed: retryOptions.retryFailed,
+        deadline_ms: deadlineMs,
       },
       selection: {
         total_catalog_articles: allArticles.length,
@@ -494,6 +536,11 @@ export async function collectAiAdMetrics(context) {
       totals: finalizeMetrics(createMetricBucket()),
       campaign_type_totals: {},
       errors: [],
+      deadline: {
+        requested_ms: deadlineMs,
+        elapsed_ms: Date.now() - startedAt,
+        reached: false,
+      },
     };
   }
 
@@ -522,6 +569,7 @@ export async function collectAiAdMetrics(context) {
         max_retry_rounds: chart.max_retry_rounds,
         retry_delay_ms: Math.min((chart.retry_delay_ms || DEFAULT_RETRY_DELAY_MS) * 2, 1500),
         chunk_size: 1,
+        deadline_ms: deadlineMs,
         row_limit: rowLimit,
       }
     : null;
@@ -539,6 +587,7 @@ export async function collectAiAdMetrics(context) {
       max_retry_rounds: chart.max_retry_rounds,
       retry_delay_ms: chart.retry_delay_ms,
       chunk_size: chart.initial_chunk_size,
+      deadline_ms: deadlineMs,
     },
     selection: {
       total_catalog_articles: allArticles.length,
@@ -556,6 +605,12 @@ export async function collectAiAdMetrics(context) {
       complete: remainingProductRefs.length === 0,
       remaining_product_refs: remainingProductRefs,
       recommended_next_request: recommendedNextRequest,
+      deadline_reached: chart.deadline_reached,
+    },
+    deadline: {
+      requested_ms: deadlineMs,
+      elapsed_ms: Date.now() - startedAt,
+      reached: chart.deadline_reached,
     },
     rows: aggregated.rows,
     row_count: aggregated.row_count,

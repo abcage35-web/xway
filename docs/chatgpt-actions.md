@@ -23,7 +23,7 @@ Set these in Cloudflare Pages `Settings -> Variables and Secrets`.
 Required:
 
 ```text
-XWAY_AI_API_KEY=<long random secret>
+XWAY_TOKEN=<long random secret>
 ```
 
 Required only for the in-site `/ai` chat:
@@ -93,7 +93,7 @@ XWAY_SHARED_CACHE_DB=<Cloudflare D1 binding>
 XWAY_CACHE_NAMESPACE=xway-production
 ```
 
-D1 is the preferred shared cache for dashboard/API data that should be visible to all users after one user has loaded it. It stores reusable source responses and cacheable catalog API responses. Setup details are in `docs/d1-shared-cache.md`.
+D1 is the preferred shared cache for dashboard/API data that should be visible to all users after one user has loaded it. It stores reusable source responses and cacheable catalog API responses. Setup details are in `docs/Общий-кэш-Cloudflare-D1-XWAY.md`.
 
 ## Custom GPT setup
 
@@ -105,7 +105,7 @@ Use this Action schema URL:
 https://xway-bt4.pages.dev/api/ai/openapi.json
 ```
 
-Configure authentication as Bearer token and use the same value as `XWAY_AI_API_KEY`.
+Configure authentication as Bearer token and use the same value as `XWAY_TOKEN`.
 
 Recommended GPT instruction:
 

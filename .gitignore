@@ -5,6 +5,8 @@ __pycache__/
 *.pyd
 
 xway_storage_state.json
+xway_dashboard_site/.dev.vars
+xway-analyst-token-instruction.md
 
 xway_dashboard_site/node_modules/
 xway_dashboard_site/dist/

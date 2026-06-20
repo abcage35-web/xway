@@ -80,7 +80,7 @@ function splitTokens(value) {
 
 function addToken(entries, token, role, name = "") {
   const normalizedRole = normalizeRole(role);
-  const normalizedToken = asString(token);
+  const normalizedToken = bearerTokenFromHeader(token) || asString(token);
   if (!normalizedToken || !normalizedRole) {
     return;
   }
@@ -93,6 +93,14 @@ function addToken(entries, token, role, name = "") {
 
 function addRoleTokens(entries, value, role, namePrefix) {
   splitTokens(value).forEach((token, index) => addToken(entries, token, role, `${namePrefix}${index ? `-${index + 1}` : ""}`));
+}
+
+function addProjectToken(entries, value) {
+  splitTokens(value).forEach((token, index) => {
+    const name = `xway-token${index ? `-${index + 1}` : ""}`;
+    addToken(entries, token, ACCESS_ROLES.ANALYST, name);
+    addToken(entries, token, ACCESS_ROLES.OPERATOR, name);
+  });
 }
 
 function addJsonTokenConfig(entries, rawConfig) {
@@ -146,6 +154,10 @@ function addJsonTokenConfig(entries, rawConfig) {
 
 export function configuredAccessTokens(env) {
   const entries = [];
+  addProjectToken(entries, env.XWAY_TOKEN);
+  if (entries.length) {
+    return entries;
+  }
   addRoleTokens(entries, env.XWAY_VIEWER_TOKEN || env.XWAY_VIEWER_TOKENS, ACCESS_ROLES.VIEWER, "viewer");
   addRoleTokens(entries, env.XWAY_ANALYST_TOKEN || env.XWAY_ANALYST_TOKENS, ACCESS_ROLES.ANALYST, "analyst");
   addRoleTokens(entries, env.XWAY_OPERATOR_TOKEN || env.XWAY_OPERATOR_TOKENS, ACCESS_ROLES.OPERATOR, "operator");
@@ -168,6 +180,7 @@ export function accessRoleSummary(env) {
   return {
     roles,
     permissions: ROLE_PERMISSIONS,
+    xway_token_configured: Boolean(asString(env.XWAY_TOKEN)),
     legacy_ai_api_key_as_analyst: Boolean(asString(env.XWAY_AI_API_KEY)),
   };
 }
@@ -209,7 +222,7 @@ export function requireAccessPermission(context, permission, { errorPrefix = "XW
     return {
       ok: false,
       principal: null,
-      response: errorResponse(500, "XWAY role access is not configured. Set XWAY_ANALYST_TOKEN, XWAY_ACCESS_TOKENS_JSON, or XWAY_AI_API_KEY."),
+      response: errorResponse(500, "XWAY role access is not configured. Set XWAY_TOKEN."),
     };
   }
 

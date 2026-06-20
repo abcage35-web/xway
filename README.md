@@ -31,7 +31,7 @@
 - `API_ORIGIN` = необязательно, URL резервного backend, например `https://api.example.com`
 - `XWAY_STORAGE_STATE_JSON` или `XWAY_STORAGE_STATE_BASE64` = storage state с cookies для прямых запросов в XWAY API из Cloudflare Functions
 - либо более простой вариант: `XWAY_COOKIE_HEADER` и `XWAY_CSRF_TOKEN`
-- `XWAY_AI_API_KEY` = Bearer token для общего ChatGPT GPT Action
+- `XWAY_TOKEN` = единый Bearer token для защищенных XWAY API, ChatGPT GPT Action и внутренних интеграций
 - `OPENAI_API_KEY` = опционально, ключ для встроенного чата `/ai`
 - `OPENAI_MODEL` = опционально, модель для `/api/ai/chat`
 - `MPVIBE_COOKIE_HEADER` или `MPVIBE_AUTHORIZATION` = опционально, чтобы AI endpoint подтягивал MPVibe

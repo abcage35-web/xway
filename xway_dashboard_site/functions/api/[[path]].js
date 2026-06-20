@@ -27,6 +27,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 const SHARED_API_CACHE_VERSION = "v2";
 const SHARED_API_CACHEABLE_ROUTES = new Set([
+  "/api/catalog",
   "/api/catalog-chart",
   "/api/catalog-product-details",
   "/api/catalog-auto-exclusions",
@@ -88,6 +89,19 @@ function isForceRefreshRequest(url) {
   return url.searchParams.get("refresh") === "1" || url.searchParams.get("force_refresh") === "1";
 }
 
+function isSharedApiCacheableRequest(pathname, requestUrl) {
+  if (!SHARED_API_CACHEABLE_ROUTES.has(pathname)) {
+    return false;
+  }
+  if (pathname !== "/api/catalog") {
+    return true;
+  }
+
+  const mode = String(requestUrl.searchParams.get("mode") || "compact").toLowerCase();
+  const auxDisabled = requestUrl.searchParams.get("aux") === "0" || requestUrl.searchParams.get("include_aux") === "0";
+  return mode === "compact" && auxDisabled;
+}
+
 function normalizeCsvParam(url, name) {
   const value = url.searchParams.get(name);
   if (!value) {
@@ -100,7 +114,18 @@ function normalizeApiCacheKey(url) {
   const normalized = new URL(url.toString());
   normalized.searchParams.delete("refresh");
   normalized.searchParams.delete("force_refresh");
+  if (normalized.pathname === "/api/catalog" && String(normalized.searchParams.get("mode") || "compact").toLowerCase() === "compact") {
+    normalized.searchParams.delete("mode");
+  }
+  if (normalized.pathname === "/api/catalog" && normalized.searchParams.get("include_aux") === "0") {
+    normalized.searchParams.delete("include_aux");
+    normalized.searchParams.set("aux", "0");
+  }
+  if (normalized.pathname === "/api/products" && String(normalized.searchParams.get("campaign_mode") || "").toLowerCase() === "summary") {
+    normalized.searchParams.delete("campaign_mode");
+  }
   normalizeCsvParam(normalized, "articles");
+  normalizeCsvParam(normalized, "heavy_campaign_ids");
   normalizeCsvParam(normalized, "products");
   normalizeCsvParam(normalized, "shops");
 
@@ -118,15 +143,34 @@ function sharedApiCacheNamespace(env, pathname) {
   return `api-response:${originNamespace}:${pathname}`;
 }
 
-async function readSharedApiResponse(context, pathname, requestUrl) {
-  if (!["GET", "HEAD"].includes(context.request.method) || !SHARED_API_CACHEABLE_ROUTES.has(pathname) || isForceRefreshRequest(requestUrl)) {
+async function readSharedApiResponse(context, pathname, requestUrl, { allowForceRefresh = false } = {}) {
+  if (!["GET", "HEAD"].includes(context.request.method) || !isSharedApiCacheableRequest(pathname, requestUrl) || (!allowForceRefresh && isForceRefreshRequest(requestUrl))) {
     return null;
   }
   return readSharedCache(context.env, sharedApiCacheNamespace(context.env, pathname), normalizeApiCacheKey(requestUrl));
 }
 
+async function sharedApiJsonResponse(context, pathname, payload, cacheStatus, extraHeaders = {}) {
+  const hydratedPayload = pathname === "/api/catalog" ? await applyCatalogArticleSnapshots(context.env, payload) : payload;
+  let response = withHeader(jsonResponse(hydratedPayload), "x-xway-shared-cache", cacheStatus);
+  for (const [key, value] of Object.entries(extraHeaders)) {
+    if (value !== null && value !== undefined && value !== "") {
+      response = withHeader(response, key, String(value));
+    }
+  }
+  return withSourceHeader(response, "native");
+}
+
+async function readSharedApiFallbackResponse(context, pathname, requestUrl, extraHeaders = {}) {
+  const cachedPayload = await readSharedApiResponse(context, pathname, requestUrl, { allowForceRefresh: true });
+  if (cachedPayload === null || cachedPayload === undefined) {
+    return null;
+  }
+  return sharedApiJsonResponse(context, pathname, cachedPayload, "stale", extraHeaders);
+}
+
 function writeSharedApiResponse(context, pathname, requestUrl, response) {
-  if (!["GET", "HEAD"].includes(context.request.method) || !SHARED_API_CACHEABLE_ROUTES.has(pathname) || !response.ok || !hasSharedD1Cache(context.env)) {
+  if (!["GET", "HEAD"].includes(context.request.method) || !isSharedApiCacheableRequest(pathname, requestUrl) || !response.ok || !hasSharedD1Cache(context.env)) {
     return;
   }
 
@@ -489,17 +533,30 @@ export async function onRequest(context) {
 
     const cachedPayload = await readSharedApiResponse(context, pathname, requestUrl);
     if (cachedPayload !== null && cachedPayload !== undefined) {
-      const hydratedPayload = pathname === "/api/catalog" ? await applyCatalogArticleSnapshots(context.env, cachedPayload) : cachedPayload;
-      return withSourceHeader(withHeader(jsonResponse(hydratedPayload), "x-xway-shared-cache", "hit"), "native");
+      return sharedApiJsonResponse(context, pathname, cachedPayload, "hit");
     }
 
     if (pathname === "/api/health" || pathname === "/api/catalog-article-snapshots" || pathname === "/api/wb-cards" || pathname === "/api/mpvibe-stocks" || pathname === "/api/pachka-report" || pathname === "/api/pachka-report/send" || hasNativeStorageState(context.env)) {
       try {
         const nativeResponse = await handleNativeRequest(context, pathname);
+        if (!nativeResponse.ok) {
+          const fallbackResponse = await readSharedApiFallbackResponse(context, pathname, requestUrl, {
+            "x-xway-native-status": nativeResponse.status,
+          });
+          if (fallbackResponse) {
+            return fallbackResponse;
+          }
+        }
         writeSharedApiResponse(context, pathname, requestUrl, nativeResponse);
-        const cacheStatus = SHARED_API_CACHEABLE_ROUTES.has(pathname) && hasSharedD1Cache(context.env) ? "miss" : "skip";
+        const cacheStatus = isSharedApiCacheableRequest(pathname, requestUrl) && hasSharedD1Cache(context.env) ? "miss" : "skip";
         return withSourceHeader(withHeader(nativeResponse, "x-xway-shared-cache", cacheStatus), "native");
       } catch (error) {
+        const fallbackResponse = await readSharedApiFallbackResponse(context, pathname, requestUrl, {
+          "x-xway-native-error": "1",
+        });
+        if (fallbackResponse) {
+          return fallbackResponse;
+        }
         if (!apiOrigin || pathname === "/api/health" || pathname === "/api/mpvibe-stocks" || pathname === "/api/pachka-report" || pathname === "/api/pachka-report/send") {
           return errorResponse(500, error instanceof Error ? error.message : "Native handler failed.");
         }

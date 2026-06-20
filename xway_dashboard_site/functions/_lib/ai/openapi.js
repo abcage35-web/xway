@@ -5,7 +5,7 @@ export function buildAiOpenApiSpec(requestUrl) {
     info: {
       title: "XWAY AI Analytics API",
       version: "0.1.0",
-      description: "Structured XWAY, MPVibe and WB data for a shared ChatGPT analyst. Role tokens: viewer can read reports, analyst can read reports and run analytics, operator can send Pachka reports. Use XWAY_ANALYST_TOKEN or the legacy XWAY_AI_API_KEY for secured analytics methods.",
+      description: "Structured XWAY, MPVibe and WB data for a shared ChatGPT analyst. Use the single XWAY_TOKEN value as Bearer for secured analytics methods. Legacy role tokens are accepted only when XWAY_TOKEN is not configured.",
     },
     servers: [{ url: origin }],
     paths: {
@@ -204,7 +204,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         bearerAuth: {
           type: "http",
           scheme: "bearer",
-          description: "Use a role token as Bearer. For analytics, configure XWAY_ANALYST_TOKEN or use the legacy XWAY_AI_API_KEY.",
+          description: "Use XWAY_TOKEN as Bearer. Legacy XWAY_ANALYST_TOKEN and XWAY_AI_API_KEY values are accepted only when XWAY_TOKEN is not configured.",
         },
       },
       schemas: {
@@ -289,8 +289,8 @@ export function buildAiOpenApiSpec(requestUrl) {
             },
             include_campaign_types: {
               type: "boolean",
-              default: true,
-              description: "Include advertising slices by campaign type: manual CPM, unified CPM and CPC where XWAY can split them.",
+              default: false,
+              description: "Include advertising slices by campaign type: manual CPM, unified CPM and CPC where XWAY can split them. This is enabled automatically when group_by includes campaign_type.",
             },
             retry_failed: {
               type: "boolean",
@@ -307,9 +307,14 @@ export function buildAiOpenApiSpec(requestUrl) {
               default: 350,
               description: "Delay between retry chunks. Increase on repeated source limit errors, but keep in mind the ChatGPT Action timeout.",
             },
+            deadline_ms: {
+              type: "integer",
+              default: 55000,
+              description: "Overall endpoint time budget. If the deadline is reached, the response returns partial metrics plus remaining_product_refs instead of timing out.",
+            },
             chunk_size: {
               type: "integer",
-              default: 12,
+              default: 25,
               description: "Initial number of product refs per catalog-chart subrequest. Smaller values reduce source-limit errors but increase request time.",
             },
             row_limit: {
@@ -440,6 +445,7 @@ export function buildAiOpenApiSpec(requestUrl) {
             campaign_type_totals: { type: "object" },
             campaign_type_meta: { type: "object" },
             retry: { type: "object" },
+            deadline: { type: "object" },
             errors: { type: "array", items: { type: "object" } },
           },
         },

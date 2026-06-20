@@ -24,6 +24,7 @@ const CAMPAIGN_DAILY_EXACT_CONCURRENCY = 1;
 const XWAY_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const XWAY_REQUEST_MAX_ATTEMPTS = 3;
 const XWAY_REQUEST_RETRY_DELAY_MS = 900;
+const DEFAULT_XWAY_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36";
 
 const cacheStore = {
   shopList: new Map(),
@@ -71,6 +72,53 @@ function sourceCacheKey(namespace, key) {
 
 function sourceD1Namespace(namespace) {
   return `${SOURCE_CACHE_PREFIX}:${SOURCE_CACHE_VERSION}:${namespace}`;
+}
+
+function sourceCacheTtlMsForKey(key) {
+  const text = String(key || "");
+  if (/:shops$/.test(text)) {
+    return SHOP_LIST_CACHE_TTL_MS;
+  }
+  if (text.includes(":shop-details:")) {
+    return SHOP_DETAILS_CACHE_TTL_MS;
+  }
+  if (text.includes(":product-info:")) {
+    return PRODUCT_INFO_CACHE_TTL_MS;
+  }
+  if (text.includes(":product-dynamics:")) {
+    return PRODUCT_DYNAMICS_CACHE_TTL_MS;
+  }
+  if (text.includes(":product-stocks-rule:")) {
+    return PRODUCT_STOCKS_RULE_CACHE_TTL_MS;
+  }
+  if (text.includes(":product-stata:")) {
+    return PRODUCT_STATA_CACHE_TTL_MS;
+  }
+  if (text.includes(":product-stats:")) {
+    return PRODUCT_DAILY_STATS_CACHE_TTL_MS;
+  }
+  if (text.includes(":campaign-daily-exact:")) {
+    return CAMPAIGN_DAILY_EXACT_CACHE_TTL_MS;
+  }
+  if (text.includes(":product-orders-heat-map:")) {
+    return PRODUCT_ORDERS_HEATMAP_CACHE_TTL_MS;
+  }
+  if (text.includes(":campaign-schedule:")) {
+    return CAMPAIGN_SCHEDULE_CACHE_TTL_MS;
+  }
+  if (text.includes(":campaign-bid-history:")) {
+    return CAMPAIGN_BID_HISTORY_CACHE_TTL_MS;
+  }
+  if (text.includes(":campaign-budget-history:")) {
+    return CAMPAIGN_BUDGET_HISTORY_CACHE_TTL_MS;
+  }
+  if (text.includes(":campaign-status-mp-history:") || text.includes(":campaign-status-pause-history:")) {
+    return CAMPAIGN_STATUS_HISTORY_CACHE_TTL_MS;
+  }
+  if (text.includes(":campaign-auto-exclude-rule:")) {
+    return CAMPAIGN_AUTO_EXCLUDE_RULE_CACHE_TTL_MS;
+  }
+  return null;
 }
 
 function unwrapSourceCachePayload(payload) {
@@ -403,11 +451,16 @@ export class XwayApiClient {
   }
 
   buildHeaders({ referer = null, csrf = false, extraHeaders = {} } = {}) {
+    const userAgent = String(this.env.XWAY_USER_AGENT || DEFAULT_XWAY_USER_AGENT).trim();
     const headers = new Headers({
       accept: "application/json, text/plain, */*",
+      "accept-language": "ru-RU,ru;q=0.9,en;q=0.8",
       cookie: this.cookieHeader,
       ...extraHeaders,
     });
+    if (userAgent) {
+      headers.set("user-agent", userAgent);
+    }
     if (referer) {
       headers.set("referer", referer);
     }
@@ -463,7 +516,8 @@ export class XwayApiClient {
 
   async writeSourceCache(map, key, value) {
     setCached(map, key, value);
-    await writeSharedCache(this.env, sourceD1Namespace(this.cacheNamespace), key, value);
+    const ttlMs = sourceCacheTtlMsForKey(key);
+    await writeSharedCache(this.env, sourceD1Namespace(this.cacheNamespace), key, value, { ttlMs });
 
     const cache = sourceCacheBinding(this.env);
     if (!cache) {
@@ -477,6 +531,7 @@ export class XwayApiClient {
           created_at: new Date().toISOString(),
           value,
         }),
+        ttlMs ? { expirationTtl: Math.max(60, Math.ceil(ttlMs / 1000)) } : undefined,
       );
     } catch {
       // Source cache is an optimization only. A KV write failure must not fail the data load.

@@ -7,9 +7,9 @@ XWAY_STORAGE_STATE_JSON='{"cookies":[]}'
 # XWAY_CSRF_TOKEN=""
 # XWAY_SESSIONID=""
 
-# Shared ChatGPT / GPT Actions integration.
-# Required for /api/ai/recommendation-data and /api/ai/context.
-XWAY_AI_API_KEY="replace-with-a-long-random-secret"
+# Shared project token for protected XWAY APIs, GPT Actions and worker-to-worker calls.
+# Use this same value as Bearer in ChatGPT Actions and service integrations.
+XWAY_TOKEN="replace-with-a-long-random-secret"
 
 # Optional MPVibe API auth for the AI recommendation data layer.
 # Use a service account/session where possible, not a personal browser cookie.
