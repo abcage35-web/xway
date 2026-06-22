@@ -25,7 +25,7 @@
   // - XWAY_STORAGE_STATE_JSON or XWAY_STORAGE_STATE_BASE64: auth state for native XWAY API calls
   // - XWAY_TOKEN: single Bearer token for protected XWAY APIs, GPT Actions, and internal integrations
   // - XWAY_VIEWER_TOKEN(S), XWAY_ANALYST_TOKEN(S), XWAY_OPERATOR_TOKEN(S), XWAY_ACCESS_TOKENS_JSON, XWAY_AI_API_KEY:
-  //   legacy optional role-token aliases used only when XWAY_TOKEN is not configured
+  //   legacy optional role-token aliases accepted for already configured integrations
   // - OPENAI_API_KEY: optional, required for the in-site /ai chat
   // - OPENAI_MODEL: optional model override for /api/ai/chat
   // - MPVIBE_REFRESH_COOKIE_HEADER, MPVIBE_COOKIE_HEADER, or MPVIBE_AUTHORIZATION: optional MPVibe data source for AI analytics

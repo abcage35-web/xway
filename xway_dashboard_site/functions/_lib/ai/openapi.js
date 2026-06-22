@@ -5,7 +5,7 @@ export function buildAiOpenApiSpec(requestUrl) {
     info: {
       title: "XWAY AI Analytics API",
       version: "0.1.0",
-      description: "Structured XWAY, MPVibe and WB data for a shared ChatGPT analyst. Use the single XWAY_TOKEN value as Bearer for secured analytics methods. Legacy role tokens are accepted only when XWAY_TOKEN is not configured.",
+      description: "Structured XWAY, MPVibe and WB data for a shared ChatGPT analyst. Use XWAY_TOKEN as the primary Bearer token for secured analytics methods. Legacy role tokens are also accepted so existing GPT Actions do not break during token migration.",
     },
     servers: [{ url: origin }],
     paths: {
@@ -204,7 +204,7 @@ export function buildAiOpenApiSpec(requestUrl) {
         bearerAuth: {
           type: "http",
           scheme: "bearer",
-          description: "Use XWAY_TOKEN as Bearer. Legacy XWAY_ANALYST_TOKEN and XWAY_AI_API_KEY values are accepted only when XWAY_TOKEN is not configured.",
+          description: "Use XWAY_TOKEN as Bearer. Legacy XWAY_ANALYST_TOKEN and XWAY_AI_API_KEY values are also accepted for existing GPT Actions during token migration.",
         },
       },
       schemas: {

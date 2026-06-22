@@ -155,9 +155,6 @@ function addJsonTokenConfig(entries, rawConfig) {
 export function configuredAccessTokens(env) {
   const entries = [];
   addProjectToken(entries, env.XWAY_TOKEN);
-  if (entries.length) {
-    return entries;
-  }
   addRoleTokens(entries, env.XWAY_VIEWER_TOKEN || env.XWAY_VIEWER_TOKENS, ACCESS_ROLES.VIEWER, "viewer");
   addRoleTokens(entries, env.XWAY_ANALYST_TOKEN || env.XWAY_ANALYST_TOKENS, ACCESS_ROLES.ANALYST, "analyst");
   addRoleTokens(entries, env.XWAY_OPERATOR_TOKEN || env.XWAY_OPERATOR_TOKENS, ACCESS_ROLES.OPERATOR, "operator");
